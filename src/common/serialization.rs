@@ -21,7 +21,7 @@
 
 use std::io::{self, Read, Write};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::{mem, cmp};
 
@@ -259,6 +259,28 @@ impl<K: BinaryRead + Hash + Eq, V: BinaryRead> BinaryRead for HashMap<K, V> {
             let key = K::bin_read(f)?;
             let value = V::bin_read(f)?;
             if let Some(_) = res.insert(key, value) { // duplicate keys means corrupted data
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+        }
+        Ok(res)
+    }
+}
+
+impl<T: BinaryWrite> BinaryWrite for HashSet<T> {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        self.len().bin_write(f)?; // write a length prefix
+        for v in self.iter() {
+            v.bin_write(f)?; // then dump all the content
+        }
+        Ok(())
+    }
+}
+impl<T: BinaryRead + Hash + Eq> BinaryRead for HashSet<T> {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Self> {
+        let len = usize::bin_read(f)?; // read the length prefix
+        let mut res = HashSet::with_capacity(cmp::min(len, 1024 * 1024 / mem::size_of::<T>())); // allocate some space (not all, in case of corrupted data)
+        for _ in 0..len {
+            if !res.insert(T::bin_read(f)?) {
                 return Err(io::ErrorKind::InvalidData.into());
             }
         }

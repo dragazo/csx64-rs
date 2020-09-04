@@ -2,6 +2,7 @@
 //! 
 //! The important types are `Expr`, which represents an expression tree, and `SymbolTable`, which is the special collection type used for evaluation.
 
+use std::hash::Hash;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
@@ -17,7 +18,7 @@ use crate::common::serialization::*;
 /// 
 /// For safety, in nearly all contexts it is considered illegal to mix integral and floating-point values.
 /// An important exception is the ternary conditional, which is allowed due to the fact that it can short circuit and is compile-time only.
-#[derive(Debug, Clone, Copy, FromPrimitive)]
+#[derive(Debug, Clone, Copy, FromPrimitive, PartialOrd, Ord, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum OP {
     /// A special operation that can be used as a placeholder when building expression trees.

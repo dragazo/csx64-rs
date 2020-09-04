@@ -13,8 +13,9 @@
 //! CSX64 shared object files, object files, and executables are not compatible across different implementations.
 //! However, they are compatible across different platforms using the same implementation.
 
-#[macro_use]
-extern crate num_derive;
+#[macro_use] extern crate num_derive;
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate bitflags;
 
 pub mod exec;
 pub mod asm;
