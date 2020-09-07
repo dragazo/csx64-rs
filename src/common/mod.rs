@@ -1,6 +1,10 @@
 //! Everything that is used by both `asm` and `exec`.
 
+use std::io::{self, Read, Write};
+
 pub mod serialization;
+
+use serialization::*;
 
 /// The supported op codes for the execution engine.
 /// 
@@ -84,4 +88,39 @@ pub enum OPCode
     TRANS,
 
     DEBUG = 255,
+}
+
+pub struct Executable {
+    text_seglen: u64,
+    rodata_seglen: u64,
+    data_seglen: u64,
+    bss_seglen: u64,
+    content: Vec<u8>,
+}
+const EXE_PREFIX: &[u8] = "csx64-exe\0".as_bytes();
+impl BinaryWrite for Executable {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        EXE_PREFIX.bin_write(f)?;
+
+        self.text_seglen.bin_write(f)?;
+        self.rodata_seglen.bin_write(f)?;
+        self.data_seglen.bin_write(f)?;
+        self.bss_seglen.bin_write(f)?;
+        self.content.bin_write(f)
+    }
+}
+impl BinaryRead for Executable {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Executable> {
+        if Vec::<u8>::bin_read(f)? != EXE_PREFIX {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+
+        let text_seglen = BinaryRead::bin_read(f)?;
+        let rodata_seglen = BinaryRead::bin_read(f)?;
+        let data_seglen = BinaryRead::bin_read(f)?;
+        let bss_seglen = BinaryRead::bin_read(f)?;
+        let content = BinaryRead::bin_read(f)?;
+
+        Ok(Executable { text_seglen, rodata_seglen, data_seglen, bss_seglen, content })
+    }
 }

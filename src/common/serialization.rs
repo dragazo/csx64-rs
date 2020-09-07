@@ -75,7 +75,7 @@ macro_rules! int_impl {
         })+
     }
 }
-int_impl!(u64, u32, u16, i64, i32, i16, i8);
+int_impl!(u64, u32, u16, i64, i32, i16, i8, f64, f32);
 
 macro_rules! extended_int_impl {
     ($($type:ty => $extended:ty),+) => {
@@ -285,26 +285,5 @@ impl<T: BinaryRead + Hash + Eq> BinaryRead for HashSet<T> {
             }
         }
         Ok(res)
-    }
-}
-
-impl<T: BinaryWrite> BinaryWrite for Option<T> {
-    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        match self {
-            None => 0u8.bin_write(f),
-            Some(val) => {
-                1u8.bin_write(f)?;
-                val.bin_write(f)
-            }
-        }
-    }
-}
-impl<T: BinaryRead> BinaryRead for Option<T> {
-    fn bin_read<F: Read>(f: &mut F) -> io::Result<Option<T>> {
-        match u8::bin_read(f)? {
-            0 => Ok(None),
-            1 => Ok(Some(T::bin_read(f)?)),
-            _ => Err(io::ErrorKind::InvalidData.into()),
-        }
     }
 }

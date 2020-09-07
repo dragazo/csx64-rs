@@ -6,12 +6,19 @@ use std::io::{self, Read, Write};
 pub mod binary_set;
 pub mod expr;
 mod constants;
+mod asm_args;
 
 use binary_set::BinarySet;
 use expr::{Expr, SymbolTable};
 use constants::*;
+use asm_args::*;
 
 use crate::common::serialization::*;
+
+#[derive(Debug)]
+enum AssembleError {
+
+}
 
 #[derive(Clone)]
 struct Hole {
@@ -57,7 +64,7 @@ pub struct ObjectFile {
     text: Vec<u8>,
     rodata: Vec<u8>,
     data: Vec<u8>,
-    bss_len: u64,
+    bss_len: usize,
 
     binary_literals: BinarySet,
 }
@@ -132,3 +139,5 @@ impl BinaryRead for ObjectFile {
         })
     }
 }
+
+
