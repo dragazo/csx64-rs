@@ -20,6 +20,39 @@ pub(super) const STRING_LITERAL_MACRO: &str = "$STR";
 pub(super) const BINARY_LITERAL_MACRO: &str = "$BIN";
 pub(super) const TIMES_ITER_ID_MACRO: &str = "$I";
 
+// these must be ordered to parse correctly (hence array)
+pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
+    ("+>>", OP::SHR),
+    ("+<=", OP::ULessE),
+    ("+>=", OP::UGreatE),
+
+    ("+/", OP::UDiv),
+    ("+%", OP::UMod),
+    ("+<", OP::ULess),
+    ("+>", OP::UGreat),
+    ("<<", OP::SHL),
+    (">>", OP::SHR),
+    ("==", OP::Eq),
+    ("&&", OP::LogAnd),
+    ("||", OP::LogOr),
+    ("<=", OP::SLessE),
+    (">=", OP::SGreatE),
+    ("!=", OP::Neq),
+
+    ("*", OP::Mul),
+    ("/", OP::SDiv),
+    ("%", OP::SMod),
+    ("+", OP::Add),
+    ("-", OP::Sub),
+    ("<", OP::SLess),
+    (">", OP::SGreat),
+    ("&", OP::BitAnd),
+    ("^", OP::BitXor),
+    ("|", OP::BitOr),
+    ("?", OP::Condition),
+    (":", OP::Pair),
+];
+
 lazy_static! {
     pub(super) static ref PRECEDENCE: HashMap<OP, i32> = {
         let mut m = HashMap::new();

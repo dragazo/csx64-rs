@@ -15,9 +15,22 @@ use asm_args::*;
 
 use crate::common::serialization::*;
 
-#[derive(Debug)]
-enum AssembleError {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsmErrorKind {
+    ExpectedString,
+    IncompleteString,
+    IncompleteEscape,
+    InvalidEscape,
 
+    ExprParse,
+}
+
+#[derive(Debug)]
+struct AsmError {
+    kind: AsmErrorKind,
+    line_num: usize,
+    line: String,
+    pos: usize,
 }
 
 #[derive(Clone)]
