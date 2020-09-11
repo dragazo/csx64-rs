@@ -16,21 +16,30 @@ use asm_args::*;
 use crate::common::serialization::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AsmErrorKind {
+pub enum AsmErrorKind {
     ExpectedString,
+    UnexpectedString,
     IncompleteString,
     IncompleteEscape,
     InvalidEscape,
 
-    ExprParse,
+    ExpectedExprTerm,
+    ExpectedOpenParen,
+    MissingCloseParen,
+    UnexpectedOpenParen,
+    UnexpectedCloseParen,
+    ParenInteriorNotExpr,
+
+    IllegalInCurrentSegment,
+    TimesIterOutisideOfTimes,
 }
 
 #[derive(Debug)]
-struct AsmError {
-    kind: AsmErrorKind,
-    line_num: usize,
-    line: String,
-    pos: usize,
+pub struct AsmError {
+    pub kind: AsmErrorKind,
+    pub line_num: usize,
+    pub line: String,
+    pub pos: usize,
 }
 
 #[derive(Clone)]

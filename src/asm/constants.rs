@@ -18,7 +18,7 @@ pub(super) const CURRENT_LINE_MACRO: &str = "$";
 pub(super) const START_OF_SEG_MACRO: &str = "$$";
 pub(super) const STRING_LITERAL_MACRO: &str = "$STR";
 pub(super) const BINARY_LITERAL_MACRO: &str = "$BIN";
-pub(super) const TIMES_ITER_ID_MACRO: &str = "$I";
+pub(super) const TIMES_ITER_MACRO: &str = "$I";
 
 // these must be ordered to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[

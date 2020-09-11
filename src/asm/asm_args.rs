@@ -1,3 +1,6 @@
+use std::iter::Peekable;
+use std::str::CharIndices;
+
 use super::*;
 use super::expr::{ExprData, OP};
 
@@ -12,9 +15,24 @@ macro_rules! err {
     };
 }
 
+// advances the cursor iterator to the specified character index.
+// end_pos is the exclusive upper bound index of cursor.
+fn advance_cursor(cursor: &mut Peekable<CharIndices>, to: usize, end_pos: usize) {
+    loop {
+        match cursor.peek().copied() {
+            None => return assert_eq!(to, end_pos),
+            Some((p, _)) => {
+                if p < to { cursor.next(); }
+                else if p == to { return }
+                else { panic!() }
+            }
+        }
+    }
+}
+
 pub(super) struct TimesInfo {
-    total_count: usize,
-    current: usize,
+    pub(super) total_count: usize,
+    pub(super) current: usize,
 }
 
 pub(super) struct AssembleArgs {
@@ -48,21 +66,34 @@ impl AssembleArgs {
         }
     }
 
-    // attempts to read a binary op from start of string - on success returns OP and parsed operator (in bytes)
-    fn extract_binary_op(&self, src: &str) -> Option<(OP, usize)> {
-        for (repr, op) in BINARY_OP_STR.iter() {
-            if src.starts_with(repr) {
-                return Some((*op, repr.len()));
+    // attempts to read a binary op from the string, allowing leading whitespace.
+    // if a binary op is present, returns the op and the character index just after it, otherwise returns None.
+    fn extract_binary_op(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Option<(OP, usize)> {
+        let mut pos = raw_line[raw_start..raw_stop].char_indices();
+
+        loop {
+            match pos.next() {
+                None => return None,
+                Some((p, c)) => {
+                    if c.is_whitespace() { continue; }
+
+                    let val = &raw_line[raw_start + p..];
+                    for (repr, op) in BINARY_OP_STR.iter() {
+                        if val.starts_with(repr) {
+                            return Some((*op, raw_start + p + repr.len()));
+                        }
+                    }
+                    return None;
+                }
             }
         }
-        None
     }
 
+    // attempts to read a delimited string literal from the string, allowing leading whitespace.
+    // if a string is present, returns Ok with the binary string contents and the character index just after its ending quote, otherwise returns Err.
     pub(super) fn extract_string(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Vec<u8>, usize), AsmError> {
-        let src = &raw_line[raw_start..raw_stop];
-
         // find the next starting quote char
-        let mut pos = src.char_indices();
+        let mut pos = raw_line[raw_start..raw_stop].char_indices();
         let (quote_pos, quote_char) = loop {
             match pos.next() {
                 None => return err!(self, kind: ExpectedString, pos: raw_stop),
@@ -86,10 +117,7 @@ impl AssembleArgs {
                 None => return err!(self, kind: IncompleteString, pos: raw_start + quote_pos),
                 Some((p, ch)) => {
                     if ch == quote_char {
-                        return Ok((res, match pos.next() {
-                            None => raw_stop,
-                            Some((a, _)) => raw_start + a,
-                        }));
+                        return Ok((res, raw_start + p + 1));
                     }
                     else if ch == '\\' {
                         match pos.next() {
@@ -129,146 +157,169 @@ impl AssembleArgs {
             }
         }
     }
+/*
+    // attempts to parse a function call syntax, returning the function name and a list of (trimmed) arguments.
+    fn parse_function_call(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(&str, Vec<Expr>), AsmError> {
+        let paren_pos = match raw_line[raw_start..raw_stop].find('(') {
+            None => return err!(self, kind: ExpectedOpenParen, pos: raw_stop),
+            Some(p) => raw_start + p,
+        };
+        debug_assert_eq!(raw_line.chars().rev().next().unwrap(), ')'); // should end in a closing quote
 
-    /*
+        let func = &raw_line[raw_start..paren_pos];
+        let mut args = vec![];
+        
+        let mut paren_depth = 0;
+        let mut pos = paren_pos + 1;
+        let mut chars = raw_line[pos..raw_stop-1].char_indices(); // iterate through the rest of the 
+        loop {
+            match chars.next() {
+                None => {
+                    if paren_depth != 0 {
+                        return err!(self, 
+                    }
+                    args.push(raw_line[pos..raw_stop-1].trim()); // if we run out of chars, push the tail onto args and quit
+                    break;
+                }
+                Some((p, c)) => {
+
+                }
+            }
+        }
+    }
+
+    // attempts to extract an expression from the string, allowing leading whitespace.
+    // if a well-formed expression is found, returns Ok with it and the character index just after it, otherwise returns Err.
     pub(super) fn extract_expr(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Expr, usize), AsmError> {
-        let mut pos = raw_start;
-        let mut src = &raw_line[raw_start..raw_stop];
-
-        let mut unary_stack: Vec<char> = Vec::with_capacity(8);
+        let mut parsing_pos = raw_start;
+        let mut unary_stack: Vec<OP> = Vec::with_capacity(8);
 
         loop {
-            let mut chars = src.char_indices().peekable();
+            let mut chars = raw_line[parsing_pos..raw_stop].char_indices().peekable();
 
             // consume all unary ops up to a token and push onto unary stack
-            'unary: loop {
-                match chars.peek() {
-                    // if there's not a next character we have a missing token
-                    None => return err!(self, kind: ExprParse, pos: raw_stop, "expected expr token"),
-                    Some((_, x)) if x.is_whitespace() || *x == '+' => (),                // whitespace and unary plus do nothing
-                    Some((_, x)) if ['-', '~', '!'].contains(x) => unary_stack.push(*x), // push unary ops onto stack
-                    Some(_) => break 'unary, // otherwise is a token, which also means end of term
+            debug_assert!(unary_stack.is_empty());
+            let (term_start, numeric) = loop {
+                match chars.peek().copied() {
+                    None => return err!(self, kind: ExpectedExprTerm, pos: raw_stop),
+                    Some((_, x)) if x.is_whitespace() || x == '+' => (), // whitespace and unary plus do nothing
+                    Some((_, '-')) => unary_stack.push(OP::Neg),         // push unary ops onto the stack
+                    Some((_, '~')) => unary_stack.push(OP::BitNot),
+                    Some((_, '!')) => unary_stack.push(OP::LogNot),
+                    Some((p, c)) => break (parsing_pos + p, c.is_digit(10)), // otherwise is a token, which also means end of term
                 }
                 chars.next(); // if we get here, we consumed it
-            }
+            };
 
-            let first_token_char = chars.peek().unwrap().1;
-            let numeric = first_token_char.is_digit(10);
-
-            let mut depth: usize = 0;           // parens depth - initially 0
-            let mut quote: Option<char> = None; // current quote char - initially none
-
-            // move end to next logical separator (white space, open paren, or binary op - but only at depth 0)
-            let mut end = chars.clone();
-            if first_token_char == '(' { // if starting with parens, go to depth 1 and skip the char
-                depth += 1;
-                end.next();
-            }
-            let end = 'separator: loop {
-                let end_content = end.peek().cloned();
+            // move to next logical separator (white space, open paren, or binary op - but only at depth 0)
+            // bin_op holds op and aft, token_stop holds one past end of token
+            let mut paren_depth = 0usize;
+            let (term_stop, bin_op) = loop {
+                let end_content = chars.peek().cloned();
                 match end_content {
                     // if there's not a next character we're either done (depth 0), or failed
                     None => {
-                        if depth == 0 && quote.is_none() {
-                            break 'separator (None, raw_stop);
-                        }
-                        else if depth != 0 {
-                            return err!(self, kind: ExprParse, pos: raw_stop, "missing close paren");
-                        }
-                        else {
-                            return err!(self, kind: ExprParse, pos: raw_stop, "missing close quote");
-                        }
+                        if paren_depth == 0 { break (raw_stop, None); }
+                        else { return err!(self, kind: MissingCloseParen, pos: raw_stop); }
                     }
-                    Some((p, ch)) => match quote {
-                        None => {
-                            // account for important characters
-                            if ch == '(' && depth != 0 {
-                                depth += 1; 
+                    // otherwise account for important characters
+                    Some((p, ch)) => match ch {
+                        '(' => {
+                            if numeric {
+                                return err!(self, kind: UnexpectedOpenParen, pos: p);
                             }
-                            else if ch == ')' {
-                                if depth > 0 { depth -= 1; }             // if depth > 0 drop down a level
-                                else { break 'separator (None, p + 1); } // otherwise this marks the logical separator
+                            paren_depth += 1;
+                        }
+                        ')' => match paren_depth {
+                            0 => return err!(self, kind: UnexpectedCloseParen, pos: p),
+                            1 => match self.extract_binary_op(raw_line, p + 1, raw_stop) { // this would drop down to level 0, so end of term
+                                Some((op, aft)) => break (parsing_pos + p + 1, Some((op, aft))),
+                                None => break (parsing_pos + p + 1, None),
                             }
-                            else if numeric && (ch == 'e' || ch == 'E') && match end.clone().next() { Some((_, x)) if x == '+' || x == '-' => true, _ => false } {
-                                end.next(); // make sure an exponent sign won't be parsed as binary + or - by skipping it
+                            _ => paren_depth -= 1,
+                        }
+                        '"' | '\'' => {
+                            if numeric {
+                                return err!(self, kind: UnexpectedString, pos: p);
                             }
-                            else if ['"', '\'', '`'].contains(&ch) {
-                                quote = Some(ch); // enter quote mode
-                            }
-                            else if depth == 0 {
-                                if ch.is_whitespace() || ch == '(' { break 'separator (None, p); }
-                                match self.extract_binary_op(&src[p..]) {
-                                    Some((op, len)) => {
-                                        end.nth(len - 1); // skip end ahead len places
-                                        break 'separator (Some(op), p);
-                                    }
-                                    None => (),
-                                }
+
+                            let (_, aft) = self.extract_string(raw_line, p, raw_stop)?;  // if we run into a string, refer to the string extractor to get aft
+                            advance_cursor(&mut chars, aft - 1, raw_stop); // jump to just before aft position (the end quote)
+                            debug_assert_ne!(chars.peek().unwrap().0, p);
+                            debug_assert_eq!(chars.peek().unwrap().1, ch); // sanity check: should not be same position, but should be same char
+                        }
+                        'e' | 'E' if numeric => {
+                            if let Some((_, x)) = chars.clone().nth(1) {  // look at next char
+                                if x == '+' || x == '-' { chars.next(); } // make sure an exponent sign won't be parsed as binary + or - by skipping it
                             }
                         }
-                        Some(quote_ch) => {
-                            if ch == quote_ch { quote = None; } // if we have a matching quote, end quote mode
+                        _ if paren_depth == 0 => {
+                            if let Some((op, aft)) = self.extract_binary_op(raw_line, p, raw_stop) {
+                                break (parsing_pos + p, Some((op, aft))); // if we find a binary op, we're done
+                            }
+                            else if ch.is_whitespace() {
+                                break (parsing_pos + p, None); // otherwise if we're on whitespace we're done (but no binary op)
+                            }
                         }
                     }
                 }
-                end.next(); // if we get here, we consumed it
+                chars.next(); // if we get here, we consumed the char
             };
+            drop(chars); // we're done with this now and it's not guaranteed to be in correct position - drop it so it can't accidentally be used again
 
-            let token_pos = chars.peek().unwrap().0;
-            let token = &src[token_pos..end.1]; // grab the token we just found
-            if token.is_empty() {
-                return err!(self, kind: ExprParse, pos: token_pos, "empty token encountered");
+            // grab the term we just found
+            let term = &raw_line[term_start..term_stop];
+            debug_assert_eq!(term, term.trim());
+            if term.is_empty() {
+                return err!(self, kind: ExpectedExprTerm, pos: term_start);
             }
-            let token_first_char = token.chars().next().unwrap();
 
-            let mut expr_tree: Option<Expr> =
-                if token_first_char == '(' { // if it's a sub-expression
-                    match self.extract_expr(raw_line, pos + token_pos + 1, pos + end.1 - 1)? {
-                        (expr, aft) => {
-                            if aft != pos + end.1 {
-                                return err!(self, kind: ExprParse, pos: aft, "interior of sub-expression was more than one expression");
-                            }
-                            Some(expr)
-                        }
+            let mut term_expr = match term.chars().next().unwrap() {
+                '(' => { // if it's a sub-expression (paren grouped expr)
+                    debug_assert_eq!(term.chars().rev().next().unwrap(), ')'); // last char of term should be a closing paren
+                    let (expr, aft) = self.extract_expr(raw_line, term_start + 1, term_stop - 1)?; // parse interior as an expr
+                    if !raw_line[aft..term_stop-1].trim_start().is_empty() {
+                        return err!(self, kind: ParenInteriorNotExpr, pos: term_start); // we should be able to consume the whole interior
                     }
+                    expr
                 }
-                else if token_first_char == '$' { // if it's a user-level assembler token
-                    let token_upper = token.to_uppercase();
-
-                    if token_upper == CURRENT_LINE_MACRO {
-                        if self.current_seg.is_empty() {
-                            return err!(self, kind: ExprParse, pos: token_pos, "attempt to use {} macro outside of any segment", token_upper);
-                        }
-
-                        Some(ExprData::Uneval {
-                            op: OP::Add,
-                            left: Some(Box::new(ExprData::Ident(SEG_OFFSETS.get(&self.current_seg).unwrap().to_string()).into())),
-                            right: Some(Box::new((self.line_pos_in_seg as u64).into())),
-                        }.into())
+                '$' => match term.to_uppercase().as_str() { // if it's a macro token (parse as case insensitive)
+                    CURRENT_LINE_MACRO => match SEG_OFFSETS.get(&self.current_seg) {
+                        None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
+                        Some(ident) => (OP::Add, ExprData::Ident(ident.to_string()), self.line_pos_in_seg as u64).into(),
                     }
-                    else if token_upper == START_OF_SEG_MACRO {
-                        if self.current_seg.is_empty() {
-                            return err!(self, kind: ExprParse, pos: token_pos, "attempt to use {} macro outside of any segment", token_upper);
-                        }
-
-                        match self.times {
-                            None => return err!(self, kinf: ExprParse, pos: token_pos, "attempt to use {} macro outside of a TIMES directive", token_upper);
-                            Some(info) {
-                                Some((info.current as u64).into())
-                            }
-                        }
+                    START_OF_SEG_MACRO => match SEG_ORIGINS.get(&self.current_seg) {
+                        None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
+                        Some(ident) => ExprData::Ident(ident.to_string()).into(),
                     }
-                    else if token_upper == STRING_LITERAL_MACRO || token_upper == BINARY_LITERAL_MACRO {
-                        // get the index of the next paren
+                    TIMES_ITER_MACRO => match self.times {
+                        None => return err!(self, kinf: TimesIterOutisideOfTimes, pos: term_start),
+                        Some(info) => (info.current as u64).into(),
+                    }
+                    term_upper @ STRING_LITERAL_MACRO | BINARY_LITERAL_MACRO => {
                         
                     }
                 }
-                else {
-
-                };
+            };
         }
     }
     */
+}
+
+#[test]
+fn test_advance_cursor() {
+    let mut cursor = "hello world".char_indices().peekable();
+    assert_eq!(cursor.peek().unwrap().0, 0);
+    advance_cursor(&mut cursor, 5, 11);
+    assert_eq!(cursor.peek().unwrap().0, 5);
+    advance_cursor(&mut cursor, 5, 11);
+    assert_eq!(cursor.peek().unwrap().0, 5);
+    advance_cursor(&mut cursor, 10, 11);
+    assert_eq!(cursor.peek().unwrap().0, 10);
+    advance_cursor(&mut cursor, 11, 11);
+    assert_eq!(cursor.peek(), None);
+    advance_cursor(&mut cursor, 11, 11);
+    assert_eq!(cursor.peek(), None);
 }
 
 #[cfg(test)]
@@ -311,6 +362,30 @@ fn create_context() -> AssembleArgs {
 
         op: Default::default(),
         args: Default::default(),
+    }
+}
+
+#[test]
+fn test_extr_bin_op() {
+    let c = create_context();
+
+    match c.extract_binary_op("+", 0, 1) {
+        Some((op ,aft)) => {
+            assert_eq!(op, OP::Add);
+            assert_eq!(aft, 1);
+        }
+        None => panic!(),
+    }
+    match c.extract_binary_op("    +  ", 2, 7) {
+        Some((op, aft)) => {
+            assert_eq!(op, OP::Add);
+            assert_eq!(aft, 5);
+        }
+        None => panic!(),
+    }
+    match c.extract_binary_op("    a  ", 2, 7) {
+        Some(_) => panic!(),
+        None => (),
     }
 }
 
