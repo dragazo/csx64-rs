@@ -6,6 +6,8 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
+use std::ops::Deref;
+use std::fmt::{self, Debug};
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -92,7 +94,7 @@ fn test_invalid_op_decode() {
 /// 
 /// The assembler doesn't know or care about signed/unsigned literals, so all integers are stored as raw `u64`.
 /// They are contextually treated as signed/unsigned based on operators that are applied to them.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Integral(u64),
     Floating(f64),
@@ -232,7 +234,7 @@ impl<T> From<(OP, T)> for ExprData where Expr: From<T> {
 /// Attempting to evaluate an ill-formed expression will panic.
 #[derive(Clone)]
 pub struct Expr {
-    data: RefCell<ExprData>,
+    pub(super) data: RefCell<ExprData>,
 }
 impl BinaryWrite for Expr {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
@@ -265,11 +267,6 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 /// # use csx64::asm::expr::*;
 /// let mut symbols = SymbolTable::new();
 /// symbols.define("foo".into(), 2.into()).unwrap();
-/// 
-/// let expr: Expr = (OP::Add, 2, ExprData::Ident("foo".into())).into();
-/// println!("before: {:?}", expr);
-/// assert!(matches!(expr.eval(&symbols).unwrap(), Value::Integral(4)));
-/// println!("after:  {:?}", expr);
 /// ```
 /// 
 /// Note that in the above example `expr` was technically modified despite `eval()` being an immutable method.
@@ -334,7 +331,7 @@ pub enum EvalError {
 
 // ----------------------------------------------------------------------------------------------
 
-fn all_legal(res: &[&Result<Value, EvalError>]) -> Result<(), EvalError> {
+fn all_legal(res: &[&Result<ValueRef, EvalError>]) -> Result<(), EvalError> {
     for &x in res.iter() {
         if let Err(EvalError::Illegal(reason)) = x {
             return Err(EvalError::Illegal(*reason));
@@ -344,8 +341,8 @@ fn all_legal(res: &[&Result<Value, EvalError>]) -> Result<(), EvalError> {
 }
 #[test]
 fn test_all_legal() {
-    assert!(all_legal(&[&Ok(34.into()), &Ok(3.42.into())]).is_ok());
-    assert!(all_legal(&[&Ok(Value::Integral(54)), &Err(EvalError::UndefinedSymbol("heloo".to_string()))]).is_ok());
+    assert!(all_legal(&[&Ok(Expr::from(34).value_ref()), &Ok(Expr::from(3.42).value_ref())]).is_ok());
+    assert!(all_legal(&[&Ok(Expr::from(54).value_ref()), &Err(EvalError::UndefinedSymbol("heloo".to_string()))]).is_ok());
     assert!(all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".to_string())), &Err(EvalError::UndefinedSymbol("heloo".to_string()))]).is_ok());
     match all_legal(&[&Err(EvalError::Illegal(IllegalReason::UnsignedFloat)), &Err(EvalError::UndefinedSymbol("heloo".to_string()))]) {
         Err(EvalError::Illegal(IllegalReason::UnsignedFloat)) => (),
@@ -355,31 +352,13 @@ fn test_all_legal() {
         Err(EvalError::Illegal(IllegalReason::MixIntFloat)) => (),
         _ => panic!("wrong"),
     }
-    match all_legal(&[&Ok(Value::Integral(463)), &Err(EvalError::Illegal(IllegalReason::BitwiseFloat))]) {
+    match all_legal(&[&Ok(Expr::from(463).value_ref()), &Err(EvalError::Illegal(IllegalReason::BitwiseFloat))]) {
         Err(EvalError::Illegal(IllegalReason::BitwiseFloat)) => (),
         _ => panic!("wrong"),
     }
     match all_legal(&[&Err(EvalError::Illegal(IllegalReason::InvalidArg("message"))), &Err(EvalError::Illegal(IllegalReason::TruthyFloat))]) {
         Err(EvalError::Illegal(IllegalReason::InvalidArg(msg))) => assert_eq!(msg, "message"),
         _ => panic!("wrong"),
-    }
-}
-
-impl Value {
-    /// Returns self is `Integral(v)` returns `Some(v)`, otherwise `None`.
-    pub fn int(self) -> Option<u64> {
-        match self {
-            Value::Integral(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// Returns self is `Floating(v)` returns `Some(v)`, otherwise `None`.
-    pub fn float(self) -> Option<f64> {
-        match self {
-            Value::Floating(v) => Some(v),
-            _ => None,
-        }
     }
 }
 
@@ -441,19 +420,56 @@ fn test_symbol_table() {
     assert_eq!(s.define("foo".to_string(), ExprData::Ident("bar".to_string()).into()).unwrap_err(), "foo");
 }
 
+pub(super) struct ValueRef<'a>(std::cell::RefMut<'a, ExprData>);
+impl<'a> Deref for ValueRef<'a> {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        match &*self.0 {
+            ExprData::Value(val) => val,
+            _ => panic!(), // it is this module's responsibility to ensure this never happens
+        }
+    }
+}
+impl<'a> ValueRef<'a> {
+    fn get_mut(&mut self) -> &mut Value {
+        match &mut *self.0 {
+            ExprData::Value(val) => val,
+            _ => panic!(),
+        }
+    }
+    fn take(mut self) -> Value {
+        std::mem::replace(self.get_mut(), Value::Integral(0))
+    }
+
+    pub(super) fn int(&self) -> Option<&u64> {
+        match self.deref() {
+            Value::Integral(v) => Some(v),
+            _ => None
+        }
+    }
+    pub(super) fn float(&self) -> Option<&f64> {
+        match self.deref() {
+            Value::Floating(v) => Some(v),
+            _ => None
+        }
+    }
+}
+impl<'a> Debug for ValueRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self.deref())
+    }
+}
+
 impl Expr {
-    fn eval_recursive<'a>(mut root: std::cell::RefMut<'a, ExprData>, symbols: &'a SymbolTable) -> Result<Value, EvalError> {
+    fn eval_recursive<'a>(mut root: std::cell::RefMut<'a, ExprData>, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
         // decide how to approach evaluation
-        let res = match &*root {
-            ExprData::Value(val) => Ok(*val),                            // if it's a value, just return it
+        let res: Value = match &*root {
+            ExprData::Value(_) => return Ok(ValueRef(root)), // if we're a value node, we already have the value - skip caching
             ExprData::Ident(ident) => match symbols.symbols.get(ident) { // if it's an identifier, look it up
-                None => Err(EvalError::UndefinedSymbol(ident.to_string())),
-                Some(entry) => {
-                    // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
-                    match entry.data.try_borrow_mut() {
-                        Err(_) => Err(EvalError::Illegal(IllegalReason::CyclicDependency)),
-                        Ok(expr) => Self::eval_recursive(expr, symbols),
-                    }
+                None => return Err(EvalError::UndefinedSymbol(ident.to_string())),
+                Some(entry) => match entry.data.try_borrow_mut() { // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
+                    Err(_) => return Err(EvalError::Illegal(IllegalReason::CyclicDependency)),
+                    Ok(expr) => return Self::eval_recursive(expr, symbols),
                 }
             }
             ExprData::Uneval { op, left, right } => { // if it's an unevaluated expression, evaluate it
@@ -463,20 +479,20 @@ impl Expr {
                     let left = left.as_ref().unwrap().eval(symbols);
                     let right = right.as_ref().unwrap().eval(symbols);
                     all_legal(&[&left, &right])?; // if either was illegal, handle that first
-                    match left? {
-                        Value::Integral(a) => match right? {
-                            Value::Integral(b) => ii(a, b),
+                    match &*left? {
+                        Value::Integral(a) => match &*right? {
+                            Value::Integral(b) => ii(*a, *b),
                             Value::Floating(_) => Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
                         }
-                        Value::Floating(a) => match right? {
+                        Value::Floating(a) => match &*right? {
                             Value::Integral(_) => Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
-                            Value::Floating(b) => ff(a, b),
+                            Value::Floating(b) => ff(*a, *b),
                         }
                     }
                 }
                 macro_rules! binary_op {
                     ($ii:expr, $ff:expr) => {
-                        binary_op(&left, &right, symbols, $ii, $ff)
+                        binary_op(&left, &right, symbols, $ii, $ff)?
                     }
                 }
         
@@ -485,17 +501,17 @@ impl Expr {
                 {
                     let left = left.as_ref().unwrap().eval(symbols);
                     assert!(right.is_none()); // there should be no right operand
-                    match left? {
-                        Value::Integral(a) => i(a),
-                        Value::Floating(a) => f(a),
+                    match &*left? {
+                        Value::Integral(a) => i(*a),
+                        Value::Floating(a) => f(*a),
                     }
                 }
                 macro_rules! unary_op {
                     ($i:expr, $f:expr) => {
-                        unary_op(&left, &right, symbols, $i, $f)
+                        unary_op(&left, &right, symbols, $i, $f)?
                     }
                 }
-        
+
                 match op {
                     OP::Invalid => panic!("invalid op encountered in expr"),
                     OP::Mul => binary_op!(
@@ -665,31 +681,47 @@ impl Expr {
                     ),
                     OP::Condition => {
                         let cond = left.as_ref().unwrap().eval(symbols);
-                        let (r1, r2) = match &*right.as_ref().unwrap().data.borrow() {
-                            ExprData::Uneval { op: OP::Pair, left, right } => (left.as_ref().unwrap().eval(symbols), right.as_ref().unwrap().eval(symbols)),
+                        let val = match &*right.as_ref().unwrap().data.borrow() {
+                            ExprData::Uneval { op: OP::Pair, left, right } => {
+                                let r1 = left.as_ref().unwrap().eval(symbols);
+                                let r2 = right.as_ref().unwrap().eval(symbols);
+                                all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
+
+                                let cond = match &*cond? {
+                                    Value::Integral(v) => *v != 0,
+                                    Value::Floating(_) => return Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
+                                };
+                                if cond { r1 } else { r2 } ?.take()
+                            }
                             _ => panic!("encountered ill-formed ternary conditional in expr"),
                         };
-                        all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
-                        match cond? {
-                            Value::Integral(cond) => if cond != 0 { r1 } else { r2 },
-                            Value::Floating(_) => Err(EvalError::Illegal(IllegalReason::TruthyFloat)),
-                        }
+                        
+                        *root = ExprData::Value(val);
+                        return Ok(ValueRef(root)); // we now have a value - just pass that back directly
                     }
                     OP::Pair => panic!("encountered ill-formed ternary conditional in expr"),
                 }
             }
         };
-        // if we successfully evaluated it, collapse to just a value node
-        if let Ok(val) = res {
-            *root = ExprData::Value(val);
-        }
-        res
+
+        // we successfully evaluated it - collapse to just a value node
+        *root = ExprData::Value(res);
+        Ok(ValueRef(root))
     }
     /// Attempts to evaluate the expression given a symbol table to use.
     /// Due to reasons discussed in the doc entry for `SymbolTable`, once an `Expr` has been evaluated with a given symbol table
     /// it should never be evaluated with any other symbol table.
-    pub fn eval<'a>(&'a self, symbols: &'a SymbolTable) -> Result<Value, EvalError> {
+    pub(super) fn eval<'a>(&'a self, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
         Self::eval_recursive(self.data.borrow_mut(), symbols)
+    }
+
+    #[cfg(test)]
+    fn value_ref(&self) -> ValueRef {
+        let handle = self.data.borrow_mut();
+        match &*handle {
+            ExprData::Value(_) => ValueRef(handle),
+            _ => panic!(),
+        }
     }
 }
 #[test]
@@ -765,20 +797,20 @@ fn test_uneval_eval() {
     // this is not exhaustive by any means.
     // more thorough testing will be done indirectly by testing the assembler.
 
-    assert_eq!(make_expr!(OP::Mul, (4i64) as u64, (6i64) as u64).eval(&s).unwrap().int().unwrap(), (24i64) as u64);
-    assert_eq!(make_expr!(OP::Mul, (-4i64) as u64, (6i64) as u64).eval(&s).unwrap().int().unwrap(), (-24i64) as u64);
-    assert_eq!(make_expr!(OP::Mul, (4i64) as u64, (-6i64) as u64).eval(&s).unwrap().int().unwrap(), (-24i64) as u64);
-    assert_eq!(make_expr!(OP::Mul, (-4i64) as u64, (-6i64) as u64).eval(&s).unwrap().int().unwrap(), (24i64) as u64);
+    assert_eq!(*make_expr!(OP::Mul, (4i64) as u64, (6i64) as u64).eval(&s).unwrap().int().unwrap(), (24i64) as u64);
+    assert_eq!(*make_expr!(OP::Mul, (-4i64) as u64, (6i64) as u64).eval(&s).unwrap().int().unwrap(), (-24i64) as u64);
+    assert_eq!(*make_expr!(OP::Mul, (4i64) as u64, (-6i64) as u64).eval(&s).unwrap().int().unwrap(), (-24i64) as u64);
+    assert_eq!(*make_expr!(OP::Mul, (-4i64) as u64, (-6i64) as u64).eval(&s).unwrap().int().unwrap(), (24i64) as u64);
 
-    assert_eq!(make_expr!(OP::SDiv, (57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (5i64) as u64);
-    assert_eq!(make_expr!(OP::SDiv, (-57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (-5i64) as u64);
-    assert_eq!(make_expr!(OP::SDiv, (57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (-5i64) as u64);
-    assert_eq!(make_expr!(OP::SDiv, (-57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (5i64) as u64);
+    assert_eq!(*make_expr!(OP::SDiv, (57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (5i64) as u64);
+    assert_eq!(*make_expr!(OP::SDiv, (-57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (-5i64) as u64);
+    assert_eq!(*make_expr!(OP::SDiv, (57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (-5i64) as u64);
+    assert_eq!(*make_expr!(OP::SDiv, (-57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (5i64) as u64);
     assert!(matches!(make_expr!(OP::SDiv, (-57i64) as u64, (0i64) as u64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
 
-    assert_eq!(make_expr!(OP::SMod, (57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (7i64) as u64);
-    assert_eq!(make_expr!(OP::SMod, (-57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (-7i64) as u64);
-    assert_eq!(make_expr!(OP::SMod, (57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (7i64) as u64);
-    assert_eq!(make_expr!(OP::SMod, (-57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (-7i64) as u64);
+    assert_eq!(*make_expr!(OP::SMod, (57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (7i64) as u64);
+    assert_eq!(*make_expr!(OP::SMod, (-57i64) as u64, (10i64) as u64).eval(&s).unwrap().int().unwrap(), (-7i64) as u64);
+    assert_eq!(*make_expr!(OP::SMod, (57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (7i64) as u64);
+    assert_eq!(*make_expr!(OP::SMod, (-57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (-7i64) as u64);
     assert!(matches!(make_expr!(OP::SMod, (-57i64) as u64, (0i64) as u64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
 }
