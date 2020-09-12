@@ -98,6 +98,7 @@ fn test_invalid_op_decode() {
 pub enum Value {
     Integral(u64),
     Floating(f64),
+    Binary(Vec<u8>),
 }
 impl BinaryWrite for Value {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
@@ -110,14 +111,19 @@ impl BinaryWrite for Value {
                 1u8.bin_write(f)?;
                 v.to_bits().bin_write(f)
             }
+            Value::Binary(v) => {
+                2u8.bin_write(f)?;
+                v.bin_write(f)
+            }
         }
     }
 }
 impl BinaryRead for Value {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<Value> {
         match u8::bin_read(f)? {
-            0 => Ok(Value::Integral(u64::bin_read(f)?)),
-            1 => Ok(Value::Floating(f64::bin_read(f)?)),
+            0 => Ok(Value::Integral(BinaryRead::bin_read(f)?)),
+            1 => Ok(Value::Floating(BinaryRead::bin_read(f)?)),
+            2 => Ok(Value::Binary(BinaryRead::bin_read(f)?)),
             _ => Err(io::ErrorKind::InvalidData.into()),
         }
     }
@@ -130,6 +136,11 @@ impl From<u64> for Value {
 impl From<f64> for Value {
     fn from(val: f64) -> Self {
         Value::Floating(val)
+    }
+}
+impl From<Vec<u8>> for Value {
+    fn from(val: Vec<u8>) -> Self {
+        Value::Binary(val)
     }
 }
 
@@ -159,8 +170,12 @@ impl BinaryWrite for ExprData {
                 0xfeu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Ident(ident) => {
+            ExprData::Value(Value::Binary(value)) => {
                 0xfdu8.bin_write(f)?;
+                value.bin_write(f)
+            }
+            ExprData::Ident(ident) => {
+                0xfcu8.bin_write(f)?;
                 ident.bin_write(f)
             }
             ExprData::Uneval { op, left, right } => {
@@ -182,17 +197,16 @@ impl BinaryWrite for ExprData {
 impl BinaryRead for ExprData {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<ExprData> {
         match u8::bin_read(f)? {
-            0xff => Ok(ExprData::Value(Value::Integral(u64::bin_read(f)?))),
-            0xfe => Ok(ExprData::Value(Value::Floating(f64::bin_read(f)?))),
-            0xfd => Ok(ExprData::Ident(String::bin_read(f)?)),
-            x => {
-                if let Some(op) = OP::from_u8(x & 0x7f) {
+            0xff => Ok(ExprData::Value(Value::Integral(BinaryRead::bin_read(f)?))),
+            0xfe => Ok(ExprData::Value(Value::Floating(BinaryRead::bin_read(f)?))),
+            0xfd => Ok(ExprData::Value(Value::Binary(BinaryRead::bin_read(f)?))),
+            0xfc => Ok(ExprData::Ident(String::bin_read(f)?)),
+            x => match OP::from_u8(x & 0x7f) {
+                None => Err(io::ErrorKind::InvalidData.into()),
+                Some(op) => {
                     let left = Some(BinaryRead::bin_read(f)?);
                     let right = if x >= 0x80 { Some(BinaryRead::bin_read(f)?) } else { None };
                     Ok(ExprData::Uneval { op, left, right })
-                }
-                else {
-                    Err(io::ErrorKind::InvalidData.into())
                 }
             }
         }
@@ -303,12 +317,14 @@ impl std::fmt::Debug for SymbolTable {
 /// The specific reason why an illegal operation failed.
 #[derive(Debug, Clone, Copy)]
 pub enum IllegalReason {
-    MixIntFloat,
+    MixedTypes,
     DivideByZero,
     UnsignedFloat,
     BitwiseFloat,
     TruthyFloat,
+    TruthyString,
     CyclicDependency,
+    InvalidStringOp,
     /// A sort of wild-card to catch any invalid-arg-related problem that isn't covered by another category.
     /// The stored string explains even more specifically what went wrong.
     /// These are typically issued by function-like operators.
@@ -348,8 +364,8 @@ fn test_all_legal() {
         Err(EvalError::Illegal(IllegalReason::UnsignedFloat)) => (),
         _ => panic!("wrong"),
     }
-    match all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".to_string())), &Err(EvalError::Illegal(IllegalReason::MixIntFloat))]) {
-        Err(EvalError::Illegal(IllegalReason::MixIntFloat)) => (),
+    match all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".to_string())), &Err(EvalError::Illegal(IllegalReason::MixedTypes))]) {
+        Err(EvalError::Illegal(IllegalReason::MixedTypes)) => (),
         _ => panic!("wrong"),
     }
     match all_legal(&[&Ok(Expr::from(463).value_ref()), &Err(EvalError::Illegal(IllegalReason::BitwiseFloat))]) {
@@ -453,6 +469,12 @@ impl<'a> ValueRef<'a> {
             _ => None
         }
     }
+    pub(super) fn binary(&self) -> Option<&[u8]> {
+        match self.deref() {
+            Value::Binary(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 impl<'a> Debug for ValueRef<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -469,216 +491,263 @@ impl Expr {
                 None => return Err(EvalError::UndefinedSymbol(ident.to_string())),
                 Some(entry) => match entry.data.try_borrow_mut() { // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
                     Err(_) => return Err(EvalError::Illegal(IllegalReason::CyclicDependency)),
-                    Ok(expr) => return Self::eval_recursive(expr, symbols),
+                    Ok(expr) => Self::eval_recursive(expr, symbols)?.deref().clone(), // we can't return a reference to someone else - breaks efficient take() logic - so cache a copy
                 }
             }
             ExprData::Uneval { op, left, right } => { // if it's an unevaluated expression, evaluate it
-                fn binary_op<'a, II, FF>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, ii: II, ff: FF) -> Result<Value, EvalError>
-                where II: FnOnce(u64, u64) -> Result<Value, EvalError>, FF: FnOnce(f64, f64) -> Result<Value, EvalError>
+                fn binary_op<'a, II, FF, SS>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, ii: II, ff: FF, ss: SS) -> Result<Value, EvalError>
+                where II: FnOnce(u64, u64) -> Result<Value, EvalError>, FF: FnOnce(f64, f64) -> Result<Value, EvalError>, SS: FnOnce(Vec<u8>, Vec<u8>) -> Result<Value, EvalError>
                 {
                     let left = left.as_ref().unwrap().eval(symbols);
                     let right = right.as_ref().unwrap().eval(symbols);
                     all_legal(&[&left, &right])?; // if either was illegal, handle that first
-                    match &*left? {
-                        Value::Integral(a) => match &*right? {
-                            Value::Integral(b) => ii(*a, *b),
-                            Value::Floating(_) => Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
+                    let (left, right) = (left?, right?);
+                    match left.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
+                        Value::Integral(a) => match right.take() {
+                            Value::Integral(b) => ii(a, b),
+                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
-                        Value::Floating(a) => match &*right? {
-                            Value::Integral(_) => Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
-                            Value::Floating(b) => ff(*a, *b),
+                        Value::Floating(a) => match right.take() {
+                            Value::Floating(b) => ff(a, b),
+                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
+                        }
+                        Value::Binary(a) => match right.take() {
+                            Value::Binary(b) => ss(a, b),
+                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
                     }
                 }
                 macro_rules! binary_op {
-                    ($ii:expr, $ff:expr) => {
-                        binary_op(&left, &right, symbols, $ii, $ff)?
+                    ($ii:expr; $ff:expr; $ss:expr;) => {
+                        binary_op(&left, &right, symbols, $ii, $ff, $ss)?
                     }
                 }
         
-                fn unary_op<'a, I, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, i: I, f: F) -> Result<Value, EvalError>
-                where I: FnOnce(u64) -> Result<Value, EvalError>, F: FnOnce(f64) -> Result<Value, EvalError>
+                fn unary_op<'a, I, F, S>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, i: I, f: F, s: S) -> Result<Value, EvalError>
+                where I: FnOnce(u64) -> Result<Value, EvalError>, F: FnOnce(f64) -> Result<Value, EvalError>, S: FnOnce(Vec<u8>) -> Result<Value, EvalError>
                 {
                     let left = left.as_ref().unwrap().eval(symbols);
                     assert!(right.is_none()); // there should be no right operand
-                    match &*left? {
-                        Value::Integral(a) => i(*a),
-                        Value::Floating(a) => f(*a),
+                    match left?.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
+                        Value::Integral(a) => i(a),
+                        Value::Floating(a) => f(a),
+                        Value::Binary(a) => s(a),
                     }
                 }
                 macro_rules! unary_op {
-                    ($i:expr, $f:expr) => {
-                        unary_op(&left, &right, symbols, $i, $f)?
+                    ($i:expr; $f:expr; $s:expr;) => {
+                        unary_op(&left, &right, symbols, $i, $f, $s)?
                     }
                 }
 
                 match op {
                     OP::Invalid => panic!("invalid op encountered in expr"),
-                    OP::Mul => binary_op!(
-                        |a, b| Ok(Value::Integral(a.wrapping_mul(b))),
-                        |a, b| Ok(Value::Floating(a * b))
-                    ),
-                    OP::SDiv => binary_op!(
-                        |a, b| if b != 0 { Ok(Value::Integral((a as i64 / b as i64) as u64)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) },
-                        |a, b| Ok(Value::Floating(a / b))
-                    ),
-                    OP::SMod => binary_op!(
-                        |a, b| if b != 0 { Ok(Value::Integral((a as i64 % b as i64) as u64)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) },
-                        |a, b| Ok(Value::Floating(a % b))
-                    ),
-                    OP::UDiv => binary_op!(
-                        |a, b| if b != 0 { Ok(Value::Integral(a / b)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) },
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::UMod => binary_op!(
-                        |a, b| if b != 0 { Ok(Value::Integral(a % b)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) },
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::Add => binary_op!(
-                        |a, b| Ok(Value::Integral(a.wrapping_add(b))),
-                        |a, b| Ok(Value::Floating(a + b))
-                    ),
-                    OP::Sub => binary_op!(
-                        |a, b| Ok(Value::Integral(a.wrapping_sub(b))),
-                        |a, b| Ok(Value::Floating(a - b))
-                    ),
-                    OP::SHL => binary_op!(
-                        |a, b| Ok(Value::Integral(if b < 64 { a << b } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::SHR => binary_op!(
-                        |a, b| Ok(Value::Integral(if b < 64 { a >> b } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::SAR => binary_op!(
-                        |a, b| Ok(Value::Integral(if b < 64 { (a as i64 >> b) as u64 } else if a as i64 >= 0 { 0 } else { u64::MAX })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::SLess => binary_op!(
-                        |a, b| Ok(Value::Integral(if (a as i64) < (b as i64) { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a < b { 1 } else { 0 }))
-                    ),
-                    OP::SLessE => binary_op!(
-                        |a, b| Ok(Value::Integral(if (a as i64) <= (b as i64) { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a <= b { 1 } else { 0 }))
-                    ),
-                    OP::SGreat => binary_op!(
-                        |a, b| Ok(Value::Integral(if (a as i64) > (b as i64) { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a > b { 1 } else { 0 }))
-                    ),
-                    OP::SGreatE => binary_op!(
-                        |a, b| Ok(Value::Integral(if (a as i64) >= (b as i64) { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a >= b { 1 } else { 0 }))
-                    ),
-                    OP::ULess => binary_op!(
-                        |a, b| Ok(Value::Integral(if a < b { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::ULessE => binary_op!(
-                        |a, b| Ok(Value::Integral(if a <= b { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::UGreat => binary_op!(
-                        |a, b| Ok(Value::Integral(if a > b { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::UGreatE => binary_op!(
-                        |a, b| Ok(Value::Integral(if a >= b { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat))
-                    ),
-                    OP::Eq => binary_op!(
-                        |a, b| Ok(Value::Integral(if a == b { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a == b { 1 } else { 0 }))
-                    ),
-                    OP::Neq => binary_op!(
-                        |a, b| Ok(Value::Integral(if a != b { 1 } else { 0 })),
-                        |a, b| Ok(Value::Integral(if a != b { 1 } else { 0 }))
-                    ),
-                    OP::BitAnd => binary_op!(
-                        |a, b| Ok(Value::Integral(a & b)),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::BitXor => binary_op!(
-                        |a, b| Ok(Value::Integral(a ^ b)),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::BitOr => binary_op!(
-                        |a, b| Ok(Value::Integral(a | b)),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::LogAnd => binary_op!(
-                        |a, b| Ok(Value::Integral(if a != 0 && b != 0 { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::TruthyFloat))
-                    ),
-                    OP::LogOr => binary_op!(
-                        |a, b| Ok(Value::Integral(if a != 0 || b != 0 { 1 } else { 0 })),
-                        |_, _| Err(EvalError::Illegal(IllegalReason::TruthyFloat))
-                    ),
-                    OP::Neg => unary_op!(
-                        |a| Ok(Value::Integral((-(a as i64)) as u64)),
-                        |a| Ok(Value::Floating(-a))
-                    ),
-                    OP::BitNot => unary_op!(
-                        |a| Ok(Value::Integral(!a)),
-                        |_| Err(EvalError::Illegal(IllegalReason::BitwiseFloat))
-                    ),
-                    OP::LogNot => unary_op!(
-                        |a| Ok(Value::Integral(if a != 0 { 1 } else { 0 })),
-                        |_| Err(EvalError::Illegal(IllegalReason::TruthyFloat))
-                    ),
-                    OP::Int => unary_op!(
-                        |a| Ok(Value::Integral(a)), // int -> int is pass-through
-                        |a| Ok(Value::Integral(a as i64 as u64))
-                    ),
-                    OP::Float => unary_op!(
-                        |a| Ok(Value::Floating(a as i64 as f64)),
-                        |a| Ok(Value::Floating(a)) // float -> float is pass-through
-                    ),
-                    OP::Floor => unary_op!(
-                        |a| Ok(Value::Integral(a)), // rounding int is pass-through
-                        |a| Ok(Value::Floating(a.floor()))
-                    ),
-                    OP::Ceil => unary_op!(
-                        |a| Ok(Value::Integral(a)), // rounding int is pass-through
-                        |a| Ok(Value::Floating(a.ceil()))
-                    ),
-                    OP::Round => unary_op!(
-                        |a| Ok(Value::Integral(a)), // rounding int is pass-through
-                        |a| Ok(Value::Floating(a.round()))
-                    ),
-                    OP::Trunc => unary_op!(
-                        |a| Ok(Value::Integral(a)), // rounding int is pass-through
-                        |a| Ok(Value::Floating(a.trunc()))
-                    ),
-                    OP::Repr64 => unary_op!(
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use REPR64 on int"))),
-                        |a| Ok(Value::Integral(a.to_bits()))
-                    ),
-                    OP::Repr32 => unary_op!(
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use REPR32 on int"))),
-                        |a| Ok(Value::Integral((a as f32).to_bits() as u64))
-                    ),
-                    OP::Float64 => unary_op!(
-                        |a| Ok(Value::Floating(f64::from_bits(a))),
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT64 on float")))
-                    ),
-                    OP::Float32 => unary_op!(
-                        |a| if a >> 32 == 0 { Ok(Value::Floating(f32::from_bits(a as u32) as f64)) } else { Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT32 on a 64-bit value"))) },
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT32 on float")))
-                    ),
-                    OP::Prec64 => unary_op!(
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use PREC64 on int"))),
-                        |a| Ok(Value::Floating(a)) // since we store internally as f64 this is pass-through
-                    ),
-                    OP::Prec32 => unary_op!(
-                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use PREC32 on int"))),
+                    OP::Mul => binary_op! {
+                        |a, b| Ok(Value::Integral(a.wrapping_mul(b)));
+                        |a, b| Ok(Value::Floating(a * b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SDiv => binary_op! {
+                        |a, b| if b != 0 { Ok(Value::Integral((a as i64 / b as i64) as u64)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
+                        |a, b| Ok(Value::Floating(a / b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SMod => binary_op! {
+                        |a, b| if b != 0 { Ok(Value::Integral((a as i64 % b as i64) as u64)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
+                        |a, b| Ok(Value::Floating(a % b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::UDiv => binary_op! {
+                        |a, b| if b != 0 { Ok(Value::Integral(a / b)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::UMod => binary_op! {
+                        |a, b| if b != 0 { Ok(Value::Integral(a % b)) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Add => binary_op! {
+                        |a, b| Ok(Value::Integral(a.wrapping_add(b)));
+                        |a, b| Ok(Value::Floating(a + b));
+                        |mut a, mut b| { a.append(&mut b); Ok(Value::Binary(a)) };
+                    },
+                    OP::Sub => binary_op! {
+                        |a, b| Ok(Value::Integral(a.wrapping_sub(b)));
+                        |a, b| Ok(Value::Floating(a - b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SHL => binary_op! {
+                        |a, b| Ok(Value::Integral(if b < 64 { a << b } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SHR => binary_op! {
+                        |a, b| Ok(Value::Integral(if b < 64 { a >> b } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SAR => binary_op! {
+                        |a, b| Ok(Value::Integral(if b < 64 { (a as i64 >> b) as u64 } else if a as i64 >= 0 { 0 } else { u64::MAX }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::SLess => binary_op! {
+                        |a, b| Ok(Value::Integral(if (a as i64) < (b as i64) { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a < b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a < b { 1 } else { 0 }));
+                    },
+                    OP::SLessE => binary_op! {
+                        |a, b| Ok(Value::Integral(if (a as i64) <= (b as i64) { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a <= b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a <= b { 1 } else { 0 }));
+                    },
+                    OP::SGreat => binary_op! {
+                        |a, b| Ok(Value::Integral(if (a as i64) > (b as i64) { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a > b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a > b { 1 } else { 0 }));
+                    },
+                    OP::SGreatE => binary_op! {
+                        |a, b| Ok(Value::Integral(if (a as i64) >= (b as i64) { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a >= b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a >= b { 1 } else { 0 }));
+                    },
+                    OP::ULess => binary_op! {
+                        |a, b| Ok(Value::Integral(if a < b { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::ULessE => binary_op! {
+                        |a, b| Ok(Value::Integral(if a <= b { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::UGreat => binary_op! {
+                        |a, b| Ok(Value::Integral(if a > b { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::UGreatE => binary_op! {
+                        |a, b| Ok(Value::Integral(if a >= b { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::UnsignedFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Eq => binary_op! {
+                        |a, b| Ok(Value::Integral(if a == b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a == b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a == b { 1 } else { 0 }));
+                    },
+                    OP::Neq => binary_op! {
+                        |a, b| Ok(Value::Integral(if a != b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a != b { 1 } else { 0 }));
+                        |a, b| Ok(Value::Integral(if a != b { 1 } else { 0 }));
+                    },
+                    OP::BitAnd => binary_op! {
+                        |a, b| Ok(Value::Integral(a & b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::BitXor => binary_op! {
+                        |a, b| Ok(Value::Integral(a ^ b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::BitOr => binary_op! {
+                        |a, b| Ok(Value::Integral(a | b));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::LogAnd => binary_op! {
+                        |a, b| Ok(Value::Integral(if a != 0 && b != 0 { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::TruthyFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::LogOr => binary_op! {
+                        |a, b| Ok(Value::Integral(if a != 0 || b != 0 { 1 } else { 0 }));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::TruthyFloat));
+                        |_, _| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Neg => unary_op! {
+                        |a| Ok(Value::Integral((-(a as i64)) as u64));
+                        |a| Ok(Value::Floating(-a));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::BitNot => unary_op! {
+                        |a| Ok(Value::Integral(!a));
+                        |_| Err(EvalError::Illegal(IllegalReason::BitwiseFloat));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::LogNot => unary_op! {
+                        |a| Ok(Value::Integral(if a != 0 { 1 } else { 0 }));
+                        |_| Err(EvalError::Illegal(IllegalReason::TruthyFloat));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Int => unary_op! {
+                        |a| Ok(Value::Integral(a)); // int -> int is pass-through
+                        |a| Ok(Value::Integral(a as i64 as u64));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Float => unary_op! {
+                        |a| Ok(Value::Floating(a as i64 as f64));
+                        |a| Ok(Value::Floating(a)); // float -> float is pass-through
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Floor => unary_op! {
+                        |a| Ok(Value::Integral(a)); // rounding int is pass-through
+                        |a| Ok(Value::Floating(a.floor()));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Ceil => unary_op! {
+                        |a| Ok(Value::Integral(a)); // rounding int is pass-through
+                        |a| Ok(Value::Floating(a.ceil()));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Round => unary_op! {
+                        |a| Ok(Value::Integral(a)); // rounding int is pass-through
+                        |a| Ok(Value::Floating(a.round()));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Trunc => unary_op! {
+                        |a| Ok(Value::Integral(a)); // rounding int is pass-through
+                        |a| Ok(Value::Floating(a.trunc()));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Repr64 => unary_op! {
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use REPR64 on int")));
+                        |a| Ok(Value::Integral(a.to_bits()));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Repr32 => unary_op! {
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use REPR32 on int")));
+                        |a| Ok(Value::Integral((a as f32).to_bits() as u64));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Float64 => unary_op! {
+                        |a| Ok(Value::Floating(f64::from_bits(a)));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT64 on float")));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Float32 => unary_op! {
+                        |a| if a >> 32 == 0 { Ok(Value::Floating(f32::from_bits(a as u32) as f64)) }
+                            else { Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT32 on a 64-bit value"))) };
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use FLOAT32 on float")));
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Prec64 => unary_op! {
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use PREC64 on int")));
+                        |a| Ok(Value::Floating(a)); // since we store internally as f64 this is pass-through
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
+                    OP::Prec32 => unary_op! {
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidArg("attempt to use PREC32 on int")));
                         |a| {
                             let bits = a.to_bits();
                             let mut res = bits & 0xffffffffe0000000;         // initially, just chop off the extra precision bits
                             if bits & 0x10000000 != 0 { res += 0x20000000; } // apply rounding if needed
                             Ok(Value::Floating(f64::from_bits(res)))
-                        }
-                    ),
+                        };
+                        |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
+                    },
                     OP::Condition => {
                         let cond = left.as_ref().unwrap().eval(symbols);
                         let val = match &*right.as_ref().unwrap().data.borrow() {
@@ -687,17 +756,19 @@ impl Expr {
                                 let r2 = right.as_ref().unwrap().eval(symbols);
                                 all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
 
-                                let cond = match &*cond? {
-                                    Value::Integral(v) => *v != 0,
-                                    Value::Floating(_) => return Err(EvalError::Illegal(IllegalReason::MixIntFloat)),
+                                let (cond, r1, r2) = (cond?, r1?, r2?);
+                                let cond = match cond.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
+                                    Value::Integral(v) => v != 0,
+                                    Value::Floating(_) => return Err(EvalError::Illegal(IllegalReason::TruthyFloat)),
+                                    Value::Binary(_) => return Err(EvalError::Illegal(IllegalReason::TruthyString)),
                                 };
-                                if cond { r1 } else { r2 } ?.take()
+                                if cond { r1 } else { r2 } .take()
                             }
                             _ => panic!("encountered ill-formed ternary conditional in expr"),
                         };
                         
                         *root = ExprData::Value(val);
-                        return Ok(ValueRef(root)); // we now have a value - just pass that back directly
+                        return Ok(ValueRef(root)); // we now have a (cached) value - just pass that back directly
                     }
                     OP::Pair => panic!("encountered ill-formed ternary conditional in expr"),
                 }
@@ -786,8 +857,8 @@ fn test_uneval_missing_unary_2() {
     let _ = Expr::from(ExprData::Uneval { op: OP::Neg, left: None, right: Some(Box::new(Expr::from(3))) }).eval(&Default::default());
 }
 #[test]
-fn test_uneval_eval() {
-    let s = SymbolTable::default();
+fn test_expr_eval() {
+    let mut s = SymbolTable::default();
     macro_rules! make_expr {
         ($op:expr, $left:expr, $right:expr) => {
             Expr::from(($op, ExprData::from($left), ExprData::from($right)))
@@ -813,4 +884,18 @@ fn test_uneval_eval() {
     assert_eq!(*make_expr!(OP::SMod, (57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (7i64) as u64);
     assert_eq!(*make_expr!(OP::SMod, (-57i64) as u64, (-10i64) as u64).eval(&s).unwrap().int().unwrap(), (-7i64) as u64);
     assert!(matches!(make_expr!(OP::SMod, (-57i64) as u64, (0i64) as u64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
+
+    // make sure that the new take() logic is safe when used on Ident (make sure it takes a copy, not the actual symbol value)
+    s.define("foo".to_string(), 654.into()).unwrap();
+    assert_eq!(*Expr::from(ExprData::Ident("foo".to_string())).eval(&s).unwrap().int().unwrap(), 654);
+    assert_eq!(*Expr::from(ExprData::Ident("foo".to_string())).eval(&s).unwrap().int().unwrap(), 654); // do it twice - second time is the potential failure
+    assert_eq!(*make_expr!(OP::Add, ExprData::Ident("foo".to_string()), 10).eval(&s).unwrap().int().unwrap(), 664);
+    assert_eq!(*make_expr!(OP::Add, ExprData::Ident("foo".to_string()), 10).eval(&s).unwrap().int().unwrap(), 664); // do it twice - second time is the potential failure
+
+    s.define("msg".to_string(), "owo wats dis".as_bytes().to_owned().into()).unwrap();
+    s.define("msg2".to_string(), "rawr xd".as_bytes().to_owned().into()).unwrap();
+    assert_eq!(Expr::from(ExprData::Ident("msg".to_string())).eval(&s).unwrap().binary().unwrap(), "owo wats dis".as_bytes());
+    assert_eq!(Expr::from(ExprData::Ident("msg".to_string())).eval(&s).unwrap().binary().unwrap(), "owo wats dis".as_bytes()); // do it twice - second time is the potential failure
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".to_string()), ExprData::Ident("msg2".to_string())).eval(&s).unwrap().binary().unwrap(), "owo wats disrawr xd".as_bytes());
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".to_string()), ExprData::Ident("msg2".to_string())).eval(&s).unwrap().binary().unwrap(), "owo wats disrawr xd".as_bytes()); // do it twice - second time is the potential failure
 }
