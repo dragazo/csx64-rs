@@ -4,10 +4,11 @@
 
 use std::hash::Hash;
 use std::collections::HashMap;
-use std::cell::RefCell;
+use std::cell::{self, RefCell};
 use std::io::{self, Read, Write};
 use std::ops::Deref;
 use std::fmt::{self, Debug};
+use std::mem;
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -243,8 +244,8 @@ impl BinaryRead for ExprData {
         }
     }
 }
-impl std::fmt::Debug for ExprData {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Debug for ExprData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ExprData::Value(val) => write!(f, "{:?}", val),
             ExprData::Uneval { op, left, right } => write!(f, "{:?}({:?}, {:?})", op, left, right),
@@ -469,27 +470,54 @@ fn test_symbol_table() {
     assert_eq!(s.define("foo".into(), ExprData::Ident("bar".into()).into()).unwrap_err(), "foo");
 }
 
-pub(super) struct ValueRef<'a>(std::cell::RefMut<'a, ExprData>);
+enum Ownership<'a> {
+    Mine, // denotes that i own the value (i.e. from ExprData::Value)
+    Theirs { my_handle: cell::RefMut<'a, ExprData> }, // denotes that i don't own the value (e.g. from ExprData::Ident)
+}
+pub(super) struct ValueRef<'a> {
+    handle: cell::RefMut<'a, ExprData>, // handle that holds the value we refer to
+    ownership: Ownership<'a>, // our type of ownership of the value
+}
 impl<'a> Deref for ValueRef<'a> {
     type Target = Value;
     fn deref(&self) -> &Value {
-        match &*self.0 {
+        match &*self.handle {
             ExprData::Value(val) => val,
-            _ => panic!(), // it is this module's responsibility to ensure this never happens
+            _ => unreachable!(),
         }
     }
 }
 impl<'a> ValueRef<'a> {
-    fn get_mut(&mut self) -> &mut Value {
-        match &mut *self.0 {
+    /// Returns a mutable reference to my value - if I don't own it, clones theirs into mine and returns a reference to that.
+    fn to_mut(&mut self) -> &mut Value {
+        // transition to owning state - if we weren't owning before, assign a cloned value to our handle and repoint to ourselves
+        if let Ownership::Theirs { mut my_handle } = mem::replace(&mut self.ownership, Ownership::Mine) {
+            *my_handle = ExprData::Value((*self).deref().clone());
+            self.handle = my_handle;
+        }
+        match &mut *self.handle {
             ExprData::Value(val) => val,
-            _ => panic!(),
+            _ => unreachable!(),
         }
     }
-    fn take(mut self) -> Value {
-        std::mem::replace(self.get_mut(), Value::Signed(0))
+    /// Either takes my value or clones theirs.
+    fn take_or_clone(mut self) -> Value {
+        mem::replace(self.to_mut(), Value::Logical(false)) // take the value and leave some valid replacement that's non-allocating
     }
 
+    fn mine(handle: cell::RefMut<'a, ExprData>) -> Self {
+        Self { ownership: Ownership::Mine, handle }
+    }
+    fn theirs(my_handle: cell::RefMut<'a, ExprData>, their_handle: cell::RefMut<'a, ExprData>) -> Self {
+        Self { ownership: Ownership::Theirs { my_handle }, handle: their_handle }
+    }
+
+    pub(super) fn logical(&self) -> Option<&bool> {
+        match self.deref() {
+            Value::Logical(v) => Some(v),
+            _ => None,
+        }
+    }
     pub(super) fn signed(&self) -> Option<&i64> {
         match self.deref() {
             Value::Signed(v) => Some(v),
@@ -522,15 +550,15 @@ impl<'a> Debug for ValueRef<'a> {
 }
 
 impl Expr {
-    fn eval_recursive<'a>(mut root: std::cell::RefMut<'a, ExprData>, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
+    fn eval_recursive<'a>(mut root: cell::RefMut<'a, ExprData>, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
         // decide how to approach evaluation
         let res: Value = match &*root {
-            ExprData::Value(_) => return Ok(ValueRef(root)), // if we're a value node, we already have the value - skip caching
+            ExprData::Value(_) => return Ok(ValueRef::mine(root)), // if we're a value node, we already have the value - skip caching
             ExprData::Ident(ident) => match symbols.symbols.get(ident) { // if it's an identifier, look it up
                 None => return Err(EvalError::UndefinedSymbol(ident.clone())),
                 Some(entry) => match entry.data.try_borrow_mut() { // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
                     Err(_) => return Err(EvalError::Illegal(IllegalReason::CyclicDependency)),
-                    Ok(expr) => Self::eval_recursive(expr, symbols)?.deref().clone(), // we can't return a reference to someone else - breaks efficient take() logic - so cache a copy
+                    Ok(expr) => return Ok(ValueRef::theirs(root, Self::eval_recursive(expr, symbols)?.handle)),
                 }
             }
             ExprData::Uneval { op, left, right } => { // if it's an unevaluated expression, evaluate it
@@ -542,24 +570,24 @@ impl Expr {
                     let right = right.as_ref().unwrap().eval(symbols);
                     all_legal(&[&left, &right])?; // if either was illegal, handle that first
                     let (left, right) = (left?, right?);
-                    match left.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
-                        Value::Logical(a) => match right.take() {
+                    match left.take_or_clone() {
+                        Value::Logical(a) => match right.take_or_clone() {
                             Value::Logical(b) => ll(a, b),
                             _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
-                        Value::Signed(a) => match right.take() {
+                        Value::Signed(a) => match right.take_or_clone() {
                             Value::Signed(b) => ss(a, b),
                             _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
-                        Value::Unsigned(a) => match right.take() {
+                        Value::Unsigned(a) => match right.take_or_clone() {
                             Value::Unsigned(b) => uu(a, b),
                             _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
-                        Value::Floating(a) => match right.take() {
+                        Value::Floating(a) => match right.take_or_clone() {
                             Value::Floating(b) => ff(a, b),
                             _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
-                        Value::Binary(a) => match right.take() {
+                        Value::Binary(a) => match right.take_or_clone() {
                             Value::Binary(b) => bb(a, b),
                             _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
                         }
@@ -577,7 +605,7 @@ impl Expr {
                 {
                     let left = left.as_ref().unwrap().eval(symbols);
                     assert!(right.is_none()); // there should be no right operand
-                    match left?.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
+                    match left?.take_or_clone() {
                         Value::Logical(a) => l(a),
                         Value::Signed(a) => s(a),
                         Value::Unsigned(a) => u(a),
@@ -814,20 +842,20 @@ impl Expr {
                                 all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
 
                                 let (cond, r1, r2) = (cond?, r1?, r2?);
-                                let cond = match cond.take() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
+                                let cond = match cond.take_or_clone() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
                                     Value::Logical(v) => v,
                                     Value::Signed(_) => return Err(EvalError::Illegal(IllegalReason::LogicalInt)),
                                     Value::Unsigned(_) => return Err(EvalError::Illegal(IllegalReason::LogicalInt)),
                                     Value::Floating(_) => return Err(EvalError::Illegal(IllegalReason::LogicalFloat)),
                                     Value::Binary(_) => return Err(EvalError::Illegal(IllegalReason::LogicalString)),
                                 };
-                                if cond { r1 } else { r2 } .take()
+                                if cond { r1 } else { r2 } .take_or_clone()
                             }
                             _ => panic!("encountered ill-formed ternary conditional in expr"),
                         };
                         
                         *root = ExprData::Value(val);
-                        return Ok(ValueRef(root)); // we now have a (cached) value - just pass that back directly
+                        return Ok(ValueRef::mine(root)); // we now have a (cached) value - just pass that back directly
                     }
                     OP::Pair => panic!("encountered ill-formed ternary conditional in expr"),
                 }
@@ -836,7 +864,7 @@ impl Expr {
 
         // we successfully evaluated it - collapse to just a value node
         *root = ExprData::Value(res);
-        Ok(ValueRef(root))
+        Ok(ValueRef::mine(root))
     }
     /// Attempts to evaluate the expression given a symbol table to use.
     /// Due to reasons discussed in the doc entry for `SymbolTable`, once an `Expr` has been evaluated with a given symbol table
@@ -849,8 +877,8 @@ impl Expr {
     fn value_ref(&self) -> ValueRef {
         let handle = self.data.borrow_mut();
         match &*handle {
-            ExprData::Value(_) => ValueRef(handle),
-            _ => panic!(),
+            ExprData::Value(_) => ValueRef::mine(handle),
+            _ => unreachable!(),
         }
     }
 }
