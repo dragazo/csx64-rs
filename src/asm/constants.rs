@@ -20,35 +20,25 @@ pub(super) const STRING_LITERAL_MACRO: &str = "$STR";
 pub(super) const BINARY_LITERAL_MACRO: &str = "$BIN";
 pub(super) const TIMES_ITER_MACRO: &str = "$I";
 
-// these must be ordered to parse correctly (hence array)
+// these must be ordered in descending order of length to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
-    ("+>>", OP::SHR),
-    ("+<=", OP::ULessE),
-    ("+>=", OP::UGreatE),
-
-    ("+/", OP::UDiv),
-    ("+%", OP::UMod),
-    ("+<", OP::ULess),
-    ("+>", OP::UGreat),
     ("<<", OP::SHL),
     (">>", OP::SHR),
-    ("==", OP::Eq),
-    ("&&", OP::LogAnd),
-    ("||", OP::LogOr),
-    ("<=", OP::SLessE),
-    (">=", OP::SGreatE),
+    ("==", OP::Equ),
     ("!=", OP::Neq),
+    ("<=", OP::LessE),
+    (">=", OP::GreatE),
 
     ("*", OP::Mul),
-    ("/", OP::SDiv),
-    ("%", OP::SMod),
+    ("/", OP::Div),
+    ("%", OP::Mod),
     ("+", OP::Add),
     ("-", OP::Sub),
-    ("<", OP::SLess),
-    (">", OP::SGreat),
-    ("&", OP::BitAnd),
-    ("^", OP::BitXor),
-    ("|", OP::BitOr),
+    ("<", OP::Less),
+    (">", OP::Great),
+    ("&", OP::And),
+    ("^", OP::Xor),
+    ("|", OP::Or),
     ("?", OP::Condition),
     (":", OP::Pair),
 ];
@@ -59,42 +49,29 @@ lazy_static! {
         
         m.insert(OP::Mul, 5);
 
-        m.insert(OP::SDiv, 5);
-        m.insert(OP::SMod, 5);
-
-        m.insert(OP::UDiv, 5);
-        m.insert(OP::UMod, 5);
+        m.insert(OP::Div, 5);
+        m.insert(OP::Mod, 5);
 
         m.insert(OP::Add, 6);
         m.insert(OP::Sub, 6);
 
         m.insert(OP::SHL, 7);
         m.insert(OP::SHR, 7);
-        m.insert(OP::SAR, 7);
 
-        m.insert(OP::SLess, 9);
-        m.insert(OP::SLessE, 9);
-        m.insert(OP::SGreat, 9);
-        m.insert(OP::SGreatE, 9);
+        m.insert(OP::Less, 9);
+        m.insert(OP::LessE, 9);
+        m.insert(OP::Great, 9);
+        m.insert(OP::GreatE, 9);
 
-        m.insert(OP::ULess, 9);
-        m.insert(OP::ULessE, 9);
-        m.insert(OP::UGreat, 9);
-        m.insert(OP::UGreatE, 9);
-
-        m.insert(OP::Eq, 10);
+        m.insert(OP::Equ, 10);
         m.insert(OP::Neq, 10);
 
-        m.insert(OP::BitAnd, 11);
-        m.insert(OP::BitXor, 12);
-        m.insert(OP::BitOr, 13);
-
-        m.insert(OP::LogAnd, 14);
-        m.insert(OP::LogOr, 15);
+        m.insert(OP::And, 11);
+        m.insert(OP::Xor, 12);
+        m.insert(OP::Or, 13);
 
         m.insert(OP::Pair, 100);
         m.insert(OP::Condition, 100);
-
 
         m
     };
@@ -104,22 +81,23 @@ lazy_static! {
     pub(super) static ref FUNCTION_OPERATOR_TO_OP: HashMap<&'static str, OP> = {
         let mut m = HashMap::new();
 
-        m.insert("$INT", OP::Int);
-        m.insert("$FLOAT", OP::Float);
+        // m.insert("$INT", OP::Int);
+        // m.insert("$UINT", OP::UInt);
+        // m.insert("$FLOAT", OP::Float);
 
-        m.insert("$FLOOR", OP::Floor);
-        m.insert("$CEIL", OP::Ceil);
-        m.insert("$ROUND", OP::Round);
-        m.insert("$TRUNC", OP::Trunc);
+        // m.insert("$FLOOR", OP::Floor);
+        // m.insert("$CEIL", OP::Ceil);
+        // m.insert("$ROUND", OP::Round);
+        // m.insert("$TRUNC", OP::Trunc);
 
-        m.insert("$REPR64", OP::Repr64);
-        m.insert("$REPR32", OP::Repr32);
+        // m.insert("$REPR64", OP::Repr64);
+        // m.insert("$REPR32", OP::Repr32);
 
-        m.insert("$FLOAT64", OP::Float64);
-        m.insert("$FLOAT32", OP::Float32);
+        // m.insert("$FLOAT64", OP::Float64);
+        // m.insert("$FLOAT32", OP::Float32);
 
-        m.insert("$PREC64", OP::Prec64);
-        m.insert("$PREC32", OP::Prec32);
+        // m.insert("$PREC64", OP::Prec64);
+        // m.insert("$PREC32", OP::Prec32);
 
         m
     };
