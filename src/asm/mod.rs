@@ -29,9 +29,22 @@ pub enum AsmErrorKind {
     UnexpectedOpenParen,
     UnexpectedCloseParen,
     ParenInteriorNotExpr,
+    ExpectedCommaBeforeToken,
+    UnrecognizedMacroInvocation,
+    IncorrectArgCount,
+
+    IllFormedNumericLiteral,
+    
+    LocalSymbolBeforeNonlocal,
+    InvalidSymbolName,
+
+    ExpectedBinaryValue,
+    EmptyBinaryValue,
 
     IllegalInCurrentSegment,
     TimesIterOutisideOfTimes,
+
+    FailedCriticalExpression,
 }
 
 #[derive(Debug)]
@@ -88,7 +101,7 @@ pub struct ObjectFile {
     data: Vec<u8>,
     bss_len: usize,
 
-    binary_literals: BinarySet,
+    binary_set: BinarySet,
 }
 impl BinaryWrite for ObjectFile {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
@@ -111,7 +124,7 @@ impl BinaryWrite for ObjectFile {
         self.data.bin_write(f)?;
         self.bss_len.bin_write(f)?;
 
-        self.binary_literals.bin_write(f)
+        self.binary_set.bin_write(f)
     }
 }
 impl BinaryRead for ObjectFile {
@@ -135,7 +148,7 @@ impl BinaryRead for ObjectFile {
         let data = BinaryRead::bin_read(f)?;
         let bss_len = BinaryRead::bin_read(f)?;
 
-        let binary_literals = BinaryRead::bin_read(f)?;
+        let binary_set = BinaryRead::bin_read(f)?;
 
         Ok(ObjectFile {
             global_symbols,
@@ -157,7 +170,7 @@ impl BinaryRead for ObjectFile {
             data,
             bss_len,
 
-            binary_literals,
+            binary_set,
         })
     }
 }

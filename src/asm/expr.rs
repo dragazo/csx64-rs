@@ -9,6 +9,7 @@ use std::io::{self, Read, Write};
 use std::ops::Deref;
 use std::fmt::{self, Debug};
 use std::mem;
+use std::borrow::Cow;
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -164,6 +165,83 @@ impl From<f64> for Value {
 impl From<Vec<u8>> for Value {
     fn from(val: Vec<u8>) -> Self {
         Value::Binary(val)
+    }
+}
+
+impl Value {
+    fn logical(self) -> Option<bool> {
+        match self {
+            Value::Logical(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn signed(self) -> Option<i64> {
+        match self {
+            Value::Signed(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn unsigned(self) -> Option<u64> {
+        match self {
+            Value::Unsigned(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn floating(self) -> Option<f64> {
+        match self {
+            Value::Floating(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn binary(self) -> Option<Vec<u8>> {
+        match self {
+            Value::Binary(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+pub trait ValueVariants<'a> {
+    fn logical(self) -> Option<Cow<'a, bool>>;
+    fn signed(self) -> Option<Cow<'a, i64>>;
+    fn unsigned(self) -> Option<Cow<'a, u64>>;
+    fn floating(self) -> Option<Cow<'a, f64>>;
+    fn binary(self) -> Option<Cow<'a, [u8]>>;
+}
+impl<'a> ValueVariants<'a> for Cow<'a, Value> {
+    fn logical(self) -> Option<Cow<'a, bool>> {
+        match self {
+            Cow::Owned(Value::Logical(v)) => Some(Cow::Owned(v)),
+            Cow::Borrowed(Value::Logical(v)) => Some(Cow::Borrowed(v)),
+            _ => None,
+        }
+    }
+    fn signed(self) -> Option<Cow<'a, i64>> {
+        match self {
+            Cow::Owned(Value::Signed(v)) => Some(Cow::Owned(v)),
+            Cow::Borrowed(Value::Signed(v)) => Some(Cow::Borrowed(v)),
+            _ => None,
+        }
+    }
+    fn unsigned(self) -> Option<Cow<'a, u64>> {
+        match self {
+            Cow::Owned(Value::Unsigned(v)) => Some(Cow::Owned(v)),
+            Cow::Borrowed(Value::Unsigned(v)) => Some(Cow::Borrowed(v)),
+            _ => None,
+        }
+    }
+    fn floating(self) -> Option<Cow<'a, f64>> {
+        match self {
+            Cow::Owned(Value::Floating(v)) => Some(Cow::Owned(v)),
+            Cow::Borrowed(Value::Floating(v)) => Some(Cow::Borrowed(v)),
+            _ => None,
+        }
+    }
+    fn binary(self) -> Option<Cow<'a, [u8]>> {
+        match self {
+            Cow::Owned(Value::Binary(v)) => Some(Cow::Owned(v)),
+            Cow::Borrowed(Value::Binary(v)) => Some(Cow::Borrowed(v)),
+            _ => None,
+        }
     }
 }
 
@@ -488,11 +566,18 @@ impl<'a> Deref for ValueRef<'a> {
     }
 }
 impl<'a> ValueRef<'a> {
+    fn mine(handle: cell::RefMut<'a, ExprData>) -> Self {
+        Self { ownership: Ownership::Mine, handle }
+    }
+    fn theirs(my_handle: cell::RefMut<'a, ExprData>, their_handle: cell::RefMut<'a, ExprData>) -> Self {
+        Self { ownership: Ownership::Theirs { my_handle }, handle: their_handle }
+    }
+
     /// Returns a mutable reference to my value - if I don't own it, clones theirs into mine and returns a reference to that.
     fn to_mut(&mut self) -> &mut Value {
         // transition to owning state - if we weren't owning before, assign a cloned value to our handle and repoint to ourselves
         if let Ownership::Theirs { mut my_handle } = mem::replace(&mut self.ownership, Ownership::Mine) {
-            *my_handle = ExprData::Value((*self).deref().clone());
+            *my_handle = ExprData::Value((**self).clone());
             self.handle = my_handle;
         }
         match &mut *self.handle {
@@ -501,45 +586,14 @@ impl<'a> ValueRef<'a> {
         }
     }
     /// Either takes my value or clones theirs.
-    fn take_or_clone(mut self) -> Value {
+    pub(super) fn take_or_clone(&mut self) -> Value {
         mem::replace(self.to_mut(), Value::Logical(false)) // take the value and leave some valid replacement that's non-allocating
     }
-
-    fn mine(handle: cell::RefMut<'a, ExprData>) -> Self {
-        Self { ownership: Ownership::Mine, handle }
-    }
-    fn theirs(my_handle: cell::RefMut<'a, ExprData>, their_handle: cell::RefMut<'a, ExprData>) -> Self {
-        Self { ownership: Ownership::Theirs { my_handle }, handle: their_handle }
-    }
-
-    pub(super) fn logical(&self) -> Option<&bool> {
-        match self.deref() {
-            Value::Logical(v) => Some(v),
-            _ => None,
-        }
-    }
-    pub(super) fn signed(&self) -> Option<&i64> {
-        match self.deref() {
-            Value::Signed(v) => Some(v),
-            _ => None
-        }
-    }
-    pub(super) fn unsigned(&self) -> Option<&u64> {
-        match self.deref() {
-            Value::Unsigned(v) => Some(v),
-            _ => None
-        }
-    }
-    pub(super) fn float(&self) -> Option<&f64> {
-        match self.deref() {
-            Value::Floating(v) => Some(v),
-            _ => None
-        }
-    }
-    pub(super) fn binary(&self) -> Option<&[u8]> {
-        match self.deref() {
-            Value::Binary(v) => Some(v),
-            _ => None,
+    /// Either takes my value or borrows theirs
+    pub(super) fn take_or_borrow(&mut self) -> Cow<Value> {
+        match self.ownership {
+            Ownership::Mine => Cow::Owned(self.take_or_clone()),
+            Ownership::Theirs { my_handle: _ } => Cow::Borrowed(&**self),
         }
     }
 }
@@ -569,7 +623,7 @@ impl Expr {
                     let left = left.as_ref().unwrap().eval(symbols);
                     let right = right.as_ref().unwrap().eval(symbols);
                     all_legal(&[&left, &right])?; // if either was illegal, handle that first
-                    let (left, right) = (left?, right?);
+                    let (mut left, mut right) = (left?, right?);
                     match left.take_or_clone() {
                         Value::Logical(a) => match right.take_or_clone() {
                             Value::Logical(b) => ll(a, b),
@@ -841,7 +895,7 @@ impl Expr {
                                 let r2 = right.as_ref().unwrap().eval(symbols);
                                 all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
 
-                                let (cond, r1, r2) = (cond?, r1?, r2?);
+                                let (mut cond, r1, r2) = (cond?, r1?, r2?);
                                 let cond = match cond.take_or_clone() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
                                     Value::Logical(v) => v,
                                     Value::Signed(_) => return Err(EvalError::Illegal(IllegalReason::LogicalInt)),
@@ -955,34 +1009,34 @@ fn test_expr_eval() {
     // this is not exhaustive by any means.
     // more thorough testing will be done indirectly by testing the assembler.
 
-    assert_eq!(*make_expr!(OP::Mul, 4i64, 6i64).eval(&s).unwrap().signed().unwrap(), 24i64);
-    assert_eq!(*make_expr!(OP::Mul, -4i64, 6i64).eval(&s).unwrap().signed().unwrap(), -24i64);
-    assert_eq!(*make_expr!(OP::Mul, 4i64, -6i64).eval(&s).unwrap().signed().unwrap(), -24i64);
-    assert_eq!(*make_expr!(OP::Mul, -4i64, -6i64).eval(&s).unwrap().signed().unwrap(), 24i64);
+    assert_eq!(make_expr!(OP::Mul, 4i64, 6i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 24i64);
+    assert_eq!(make_expr!(OP::Mul, -4i64, 6i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -24i64);
+    assert_eq!(make_expr!(OP::Mul, 4i64, -6i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -24i64);
+    assert_eq!(make_expr!(OP::Mul, -4i64, -6i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 24i64);
 
-    assert_eq!(*make_expr!(OP::Div, 57i64, 10i64).eval(&s).unwrap().signed().unwrap(), 5i64);
-    assert_eq!(*make_expr!(OP::Div, -57i64, 10i64).eval(&s).unwrap().signed().unwrap(), -5i64);
-    assert_eq!(*make_expr!(OP::Div, 57i64, -10i64).eval(&s).unwrap().signed().unwrap(), -5i64);
-    assert_eq!(*make_expr!(OP::Div, -57i64, -10i64).eval(&s).unwrap().signed().unwrap(), 5i64);
+    assert_eq!(make_expr!(OP::Div, 57i64, 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 5i64);
+    assert_eq!(make_expr!(OP::Div, -57i64, 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -5i64);
+    assert_eq!(make_expr!(OP::Div, 57i64, -10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -5i64);
+    assert_eq!(make_expr!(OP::Div, -57i64, -10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 5i64);
     assert!(matches!(make_expr!(OP::Div, -57i64, 0i64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
 
-    assert_eq!(*make_expr!(OP::Mod, 57i64, 10i64).eval(&s).unwrap().signed().unwrap(), 7i64);
-    assert_eq!(*make_expr!(OP::Mod, -57i64, 10i64).eval(&s).unwrap().signed().unwrap(), -7i64);
-    assert_eq!(*make_expr!(OP::Mod, 57i64, -10i64).eval(&s).unwrap().signed().unwrap(), 7i64);
-    assert_eq!(*make_expr!(OP::Mod, -57i64, -10i64).eval(&s).unwrap().signed().unwrap(), -7i64);
+    assert_eq!(make_expr!(OP::Mod, 57i64, 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 7i64);
+    assert_eq!(make_expr!(OP::Mod, -57i64, 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -7i64);
+    assert_eq!(make_expr!(OP::Mod, 57i64, -10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 7i64);
+    assert_eq!(make_expr!(OP::Mod, -57i64, -10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), -7i64);
     assert!(matches!(make_expr!(OP::Mod, -57i64, 0i64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
 
     // make sure that the new take() logic is safe when used on Ident (make sure it takes a copy, not the actual symbol value)
     s.define("foo".into(), 654i64.into()).unwrap();
-    assert_eq!(*Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().signed().unwrap(), 654);
-    assert_eq!(*Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().signed().unwrap(), 654); // do it twice - second time is the potential failure
-    assert_eq!(*make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().signed().unwrap(), 664);
-    assert_eq!(*make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().signed().unwrap(), 664); // do it twice - second time is the potential failure
+    assert_eq!(Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().take_or_clone().signed().unwrap(), 654);
+    assert_eq!(Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().take_or_clone().signed().unwrap(), 654); // do it twice - second time is the potential failure
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 664);
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 664); // do it twice - second time is the potential failure
 
     s.define("msg".into(), "owo wats dis".as_bytes().to_owned().into()).unwrap();
     s.define("msg2".into(), "rawr xd".as_bytes().to_owned().into()).unwrap();
-    assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().binary().unwrap(), "owo wats dis".as_bytes());
-    assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().binary().unwrap(), "owo wats dis".as_bytes()); // do it twice - second time is the potential failure
-    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".into()), ExprData::Ident("msg2".into())).eval(&s).unwrap().binary().unwrap(), "owo wats disrawr xd".as_bytes());
-    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".into()), ExprData::Ident("msg2".into())).eval(&s).unwrap().binary().unwrap(), "owo wats disrawr xd".as_bytes()); // do it twice - second time is the potential failure
+    assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats dis".as_bytes());
+    assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats dis".as_bytes()); // do it twice - second time is the potential failure
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".into()), ExprData::Ident("msg2".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats disrawr xd".as_bytes());
+    assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".into()), ExprData::Ident("msg2".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats disrawr xd".as_bytes()); // do it twice - second time is the potential failure
 }

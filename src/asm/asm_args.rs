@@ -1,8 +1,10 @@
 use std::iter::Peekable;
 use std::str::CharIndices;
+use std::collections::VecDeque;
+use std::borrow::Cow;
 
 use super::*;
-use super::expr::{ExprData, OP};
+use super::expr::{ExprData, OP, Value, ValueVariants};
 
 macro_rules! err {
     ($self:expr, kind:$kind:ident, pos:$pos:expr) => {
@@ -29,6 +31,59 @@ fn advance_cursor(cursor: &mut Peekable<CharIndices>, to: usize, end_pos: usize)
         }
     }
 }
+#[test]
+fn test_advance_cursor() {
+    let mut cursor = "hello world".char_indices().peekable();
+    assert_eq!(cursor.peek().unwrap().0, 0);
+    advance_cursor(&mut cursor, 5, 11);
+    assert_eq!(cursor.peek().unwrap().0, 5);
+    advance_cursor(&mut cursor, 5, 11);
+    assert_eq!(cursor.peek().unwrap().0, 5);
+    advance_cursor(&mut cursor, 10, 11);
+    assert_eq!(cursor.peek().unwrap().0, 10);
+    advance_cursor(&mut cursor, 11, 11);
+    assert_eq!(cursor.peek(), None);
+    advance_cursor(&mut cursor, 11, 11);
+    assert_eq!(cursor.peek(), None);
+}
+
+#[must_use]
+fn is_valid_symbol_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        None => return false, // empty symbol name not allowed
+        Some(c) => match c {
+            '_' | '.' | 'a'..='z' | 'A'..='Z' => (), // first char
+            _ => return false,
+        }
+    }
+    for c in chars {
+        match c {
+            '_' | '.' | 'a'..='z' | 'A'..='Z' | '0'..='9' => (), // other chars
+            _ => return false,
+        }
+    }
+    true
+}
+#[test]
+fn test_valid_symname() {
+    assert!(is_valid_symbol_name("foo"));
+    assert!(is_valid_symbol_name("Foo"));
+    assert!(is_valid_symbol_name(".foo"));
+    assert!(is_valid_symbol_name("_foo"));
+    assert!(is_valid_symbol_name("._foo"));
+    assert!(is_valid_symbol_name(".7_foo"));
+    assert!(is_valid_symbol_name(".foo_bAR7"));
+    assert!(is_valid_symbol_name(".Boo_Bar_7"));
+    assert!(!is_valid_symbol_name("12"));
+    assert!(!is_valid_symbol_name("12.4"));
+    assert!(!is_valid_symbol_name("7up"));
+    assert!(is_valid_symbol_name("_7up"));
+    assert!(!is_valid_symbol_name(" _7up"));
+    assert!(!is_valid_symbol_name("_7up "));
+    assert!(!is_valid_symbol_name("_7u p"));
+    assert!(!is_valid_symbol_name("$foo"));
+}
 
 pub(super) struct TimesInfo {
     pub(super) total_count: usize,
@@ -45,7 +100,7 @@ pub(super) struct AssembleArgs {
     pub(super) line_num: usize,
     pub(super) line_pos_in_seg: usize,
 
-    pub(super) last_nonlocal_label: String,
+    pub(super) last_nonlocal_label: Option<String>,
     pub(super) label_def: String,
 
     pub(super) times: Option<TimesInfo>,
@@ -63,6 +118,20 @@ impl AssembleArgs {
             AsmSegment::BSS => self.line_pos_in_seg = self.file.bss_len,
 
             _ => (), // default does nothing - nothing to update
+        }
+    }
+
+    // attempt to mutate a symbol name from the line, transforming local symbols names to their full name.
+    fn mutate_name(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<String, AsmError> {
+        let name = &raw_line[raw_start..raw_stop];
+        if name.starts_with('.') {
+            match &self.last_nonlocal_label {
+                None => return err!(self, kind: LocalSymbolBeforeNonlocal, pos: raw_start),
+                Some(nonlocal) => Ok(format!("{}.{}", nonlocal, name)),
+            }
+        }
+        else {
+            Ok(name.into())
         }
     }
 
@@ -157,32 +226,27 @@ impl AssembleArgs {
             }
         }
     }
-/*
-    // attempts to parse a function call syntax, returning the function name and a list of (trimmed) arguments.
-    fn parse_function_call(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(&str, Vec<Expr>), AsmError> {
-        let paren_pos = match raw_line[raw_start..raw_stop].find('(') {
-            None => return err!(self, kind: ExpectedOpenParen, pos: raw_stop),
-            Some(p) => raw_start + p,
-        };
-        debug_assert_eq!(raw_line.chars().rev().next().unwrap(), ')'); // should end in a closing quote
 
-        let func = &raw_line[raw_start..paren_pos];
+    // attempts to parse a sequence of 1+ comma-separated expressions.
+    fn parse_comma_sep_exprs(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<Vec<Expr>, AsmError> {
         let mut args = vec![];
         
-        let mut paren_depth = 0;
-        let mut pos = paren_pos + 1;
-        let mut chars = raw_line[pos..raw_stop-1].char_indices(); // iterate through the rest of the 
+        let mut pos = raw_start;
         loop {
-            match chars.next() {
-                None => {
-                    if paren_depth != 0 {
-                        return err!(self, 
-                    }
-                    args.push(raw_line[pos..raw_stop-1].trim()); // if we run out of chars, push the tail onto args and quit
-                    break;
-                }
-                Some((p, c)) => {
+            // extract an expr and add it to args
+            let (expr, aft) = self.extract_expr(raw_line, pos, raw_stop)?;
+            args.push(expr);
 
+            // check if we have another arg after this one (comma)
+            let mut tail = raw_line[aft..raw_stop].char_indices();
+            loop {
+                match tail.next() {
+                    None => return Ok(args), // nothing after expr means we're done
+                    Some((p, c)) => {
+                        if c.is_whitespace() { continue; } // skip whitespace
+                        else if c == ',' { pos = aft + p + 1; break; } // if we have a comma, we expect another arg
+                        else { return err!(self, kind: ExpectedCommaBeforeToken, pos: aft + p); }
+                    }
                 }
             }
         }
@@ -190,9 +254,13 @@ impl AssembleArgs {
 
     // attempts to extract an expression from the string, allowing leading whitespace.
     // if a well-formed expression is found, returns Ok with it and the character index just after it, otherwise returns Err.
-    pub(super) fn extract_expr(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Expr, usize), AsmError> {
+    pub(super) fn extract_expr(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Expr, usize), AsmError> {
         let mut parsing_pos = raw_start;
+
         let mut unary_stack: Vec<OP> = Vec::with_capacity(8);
+        let mut binary_stack: Vec<OP> = Vec::with_capacity(8);
+
+        let mut output_stack: Vec<Expr> = Vec::with_capacity(8);
 
         loop {
             let mut chars = raw_line[parsing_pos..raw_stop].char_indices().peekable();
@@ -204,8 +272,7 @@ impl AssembleArgs {
                     None => return err!(self, kind: ExpectedExprTerm, pos: raw_stop),
                     Some((_, x)) if x.is_whitespace() || x == '+' => (), // whitespace and unary plus do nothing
                     Some((_, '-')) => unary_stack.push(OP::Neg),         // push unary ops onto the stack
-                    Some((_, '~')) => unary_stack.push(OP::BitNot),
-                    Some((_, '!')) => unary_stack.push(OP::LogNot),
+                    Some((_, '!')) => unary_stack.push(OP::Not),
                     Some((p, c)) => break (parsing_pos + p, c.is_digit(10)), // otherwise is a token, which also means end of term
                 }
                 chars.next(); // if we get here, we consumed it
@@ -220,7 +287,7 @@ impl AssembleArgs {
                     // if there's not a next character we're either done (depth 0), or failed
                     None => {
                         if paren_depth == 0 { break (raw_stop, None); }
-                        else { return err!(self, kind: MissingCloseParen, pos: raw_stop); }
+                        else { println!("{}..{}", raw_start, raw_stop); return err!(self, kind: MissingCloseParen, pos: raw_stop); }
                     }
                     // otherwise account for important characters
                     Some((p, ch)) => match ch {
@@ -232,7 +299,7 @@ impl AssembleArgs {
                         }
                         ')' => match paren_depth {
                             0 => return err!(self, kind: UnexpectedCloseParen, pos: p),
-                            1 => match self.extract_binary_op(raw_line, p + 1, raw_stop) { // this would drop down to level 0, so end of term
+                            1 => match self.extract_binary_op(raw_line, parsing_pos + p + 1, raw_stop) { // this would drop down to level 0, so end of term
                                 Some((op, aft)) => break (parsing_pos + p + 1, Some((op, aft))),
                                 None => break (parsing_pos + p + 1, None),
                             }
@@ -253,12 +320,14 @@ impl AssembleArgs {
                                 if x == '+' || x == '-' { chars.next(); } // make sure an exponent sign won't be parsed as binary + or - by skipping it
                             }
                         }
-                        _ if paren_depth == 0 => {
-                            if let Some((op, aft)) = self.extract_binary_op(raw_line, p, raw_stop) {
-                                break (parsing_pos + p, Some((op, aft))); // if we find a binary op, we're done
-                            }
-                            else if ch.is_whitespace() {
-                                break (parsing_pos + p, None); // otherwise if we're on whitespace we're done (but no binary op)
+                        _ => {
+                            if paren_depth == 0 {
+                                if let Some((op, aft)) = self.extract_binary_op(raw_line, parsing_pos + p, raw_stop) {
+                                    break (parsing_pos + p, Some((op, aft))); // if we find a binary op, we're done
+                                }
+                                else if ch.is_whitespace() || ch == ',' {
+                                    break (parsing_pos + p, None); // otherwise if we're on whitespace or comma we're done (but we have no binary op)
+                                }
                             }
                         }
                     }
@@ -274,7 +343,7 @@ impl AssembleArgs {
                 return err!(self, kind: ExpectedExprTerm, pos: term_start);
             }
 
-            let mut term_expr = match term.chars().next().unwrap() {
+            let term_expr = match term.chars().next().unwrap() {
                 '(' => { // if it's a sub-expression (paren grouped expr)
                     debug_assert_eq!(term.chars().rev().next().unwrap(), ')'); // last char of term should be a closing paren
                     let (expr, aft) = self.extract_expr(raw_line, term_start + 1, term_stop - 1)?; // parse interior as an expr
@@ -283,43 +352,189 @@ impl AssembleArgs {
                     }
                     expr
                 }
-                '$' => match term.to_uppercase().as_str() { // if it's a macro token (parse as case insensitive)
-                    CURRENT_LINE_MACRO => match SEG_OFFSETS.get(&self.current_seg) {
-                        None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
-                        Some(ident) => (OP::Add, ExprData::Ident(ident.to_string()), self.line_pos_in_seg as u64).into(),
+                '$' => match term { // if it's a user-level macro
+                    "$" => { // current line macro
+                        match SEG_OFFSETS.get(&self.current_seg) {
+                            None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
+                            Some(ident) => (OP::Add, ExprData::Ident(ident.to_string()), self.line_pos_in_seg as u64).into(),
+                        }
                     }
-                    START_OF_SEG_MACRO => match SEG_ORIGINS.get(&self.current_seg) {
-                        None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
-                        Some(ident) => ExprData::Ident(ident.to_string()).into(),
+                    "$$" => { // start of seg macro
+                        match SEG_ORIGINS.get(&self.current_seg) {
+                            None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
+                            Some(ident) => ExprData::Ident(ident.to_string()).into(),
+                        }
                     }
-                    TIMES_ITER_MACRO => match self.times {
-                        None => return err!(self, kinf: TimesIterOutisideOfTimes, pos: term_start),
-                        Some(info) => (info.current as u64).into(),
+                    "$i" => { // times iter macro
+                         match &self.times {
+                            None => return err!(self, kind: TimesIterOutisideOfTimes, pos: term_start),
+                            Some(info) => (info.current as u64).into(),
+                         }
                     }
-                    term_upper @ STRING_LITERAL_MACRO | BINARY_LITERAL_MACRO => {
-                        
+                    _ => { // otherwise it is either invalid or function-like - assume it's function-like
+                        let paren_pos = match term.find('(') {
+                            None => return err!(self, kind: UnrecognizedMacroInvocation, pos: term_start),
+                            Some(p) => p,
+                        };
+                        if term.chars().rev().next() != Some(')') {
+                            return err!(self, kind: UnrecognizedMacroInvocation, pos: term_start);
+                        }
+                        let func = &term[..paren_pos];
+                        let args = self.parse_comma_sep_exprs(raw_line, term_start + paren_pos + 1, term_stop - 1)?;
+
+                        match func {
+                            "$ptr" => { // pointer macro - interns a binary value in the rodata segment and returns a pointer to its eventual location
+                                if args.len() != 1 {
+                                    return err!(self, kind: IncorrectArgCount, pos: term_start);
+                                }
+                                let arg = args.into_iter().next().unwrap();
+
+                                let x = match arg.eval(&self.file.symbols) {
+                                    Err(_) => return err!(self, kind: FailedCriticalExpression, pos: term_start),
+                                    Ok(mut val) => match val.take_or_borrow().binary() {
+                                        None => return err!(self, kind: ExpectedBinaryValue, pos: term_start),
+                                        Some(content) => {
+                                            if content.is_empty() {
+                                                return err!(self, kind: EmptyBinaryValue, pos: term_start);
+                                            }
+                                            let idx = self.file.binary_set.add(content);
+                                            ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)).into()
+                                        }
+                                    }
+                                };
+                                x
+                            }
+                            "$if" => {
+                                if args.len() != 3 {
+                                    return err!(self, kind: IncorrectArgCount, pos: term_start);
+                                }
+                                let mut args = args.into_iter();
+                                let cond = args.next().unwrap();
+                                let left = args.next().unwrap();
+                                let right = args.next().unwrap();
+                                (OP::Condition, cond, Expr::from((OP::Pair, left, right))).into()
+                            }
+                            _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
+                                Some(op) => {
+                                    if args.len() != 1 {
+                                        return err!(self, kind: IncorrectArgCount, pos: term_start);
+                                    }
+                                    (op, args.into_iter().next().unwrap()).into()
+                                }
+                                None => {
+                                    return err!(self, kind: UnrecognizedMacroInvocation, pos: term_start);
+                                }
+                            }
+                        }
+                    }
+                }
+                '\'' | '"' => { // if it's a string literal
+                    debug_assert_eq!(term.chars().rev().next().unwrap(), term.chars().next().unwrap()); // first and last char should be the same
+                    let (content, _) = self.extract_string(raw_line, term_start, term_stop)?;
+                    ExprData::Value(Value::Binary(content)).into()
+                }
+                '0'..='9' => { // if it's a numeric constant
+                    let (term_fix, signed) = match term { // check if signed/unsigned suffix and remove it if present
+                        x if x.ends_with('u') => (&x[..x.len()-1], false),
+                        x => (x, true),
+                    };
+                    let (term_fix, radix) = match term_fix { // check for radix prefix and remove it if present
+                        x if x.starts_with("0x") => (&x[2..], 16),
+                        x if x.starts_with("0o") => (&x[2..], 8),
+                        x if x.starts_with("0b") => (&x[2..], 2),
+                        x => (x, 10),
+                    };
+                    let term_fix = term_fix.replace('_', ""); // remove all underscores (allowed as group separators)
+
+                    // terms should not have signs - this is handled by unary ops (and prevents e.g. 0x-5 instead of proper -0x5)
+                    if term_fix.starts_with('+') || term_fix.starts_with('-') {
+                        return err!(self, kind: IllFormedNumericLiteral, pos: term_start);
+                    }
+
+                    // parse it as correct type and propagate any errors
+                    match signed {
+                        false => match u64::from_str_radix(&term_fix, radix) {
+                            Err(_) => return err!(self, kind: IllFormedNumericLiteral, pos: term_start), // failed unsigned is failure
+                            Ok(v) => v.into(),
+                        }
+                        true => match i64::from_str_radix(&term_fix, radix) {
+                            Err(_) => match term_fix.parse::<f64>() { // failed signed (int) could just mean that it's (signed) float
+                                Err(_) => return err!(self, kind: IllFormedNumericLiteral, pos: term_start), // but if that fails too, it's a bust
+                                Ok(v) => v.into(),
+                            }
+                            Ok(v) => v.into(),
+                        }
+                    }
+                }
+                _ => match term { // otherwise it must be an keyword/identifier
+                    "true" => true.into(),
+                    "false" => false.into(),
+                    _ => { // if none of above, must be an identifier
+                        let mutated = self.mutate_name(raw_line, term_start, term_stop)?;
+                        if !is_valid_symbol_name(&mutated) {
+                            return err!(self, kind: InvalidSymbolName, pos: term_start); // we just need to make sure it's a valid name
+                        }
+                        ExprData::Ident(mutated).into()
                     }
                 }
             };
-        }
-    }
-    */
-}
 
-#[test]
-fn test_advance_cursor() {
-    let mut cursor = "hello world".char_indices().peekable();
-    assert_eq!(cursor.peek().unwrap().0, 0);
-    advance_cursor(&mut cursor, 5, 11);
-    assert_eq!(cursor.peek().unwrap().0, 5);
-    advance_cursor(&mut cursor, 5, 11);
-    assert_eq!(cursor.peek().unwrap().0, 5);
-    advance_cursor(&mut cursor, 10, 11);
-    assert_eq!(cursor.peek().unwrap().0, 10);
-    advance_cursor(&mut cursor, 11, 11);
-    assert_eq!(cursor.peek(), None);
-    advance_cursor(&mut cursor, 11, 11);
-    assert_eq!(cursor.peek(), None);
+            // update parsing pos - either after term (no bin op) or after bin op
+            parsing_pos = match bin_op {
+                None => term_stop,
+                Some((_, aft)) => aft,
+            };
+
+            // add the term to the output
+            output_stack.push(term_expr);
+
+            // apply any unary ops to the term before we begin
+            while let Some(op) = unary_stack.pop() {
+                let last = output_stack.pop().unwrap();
+                output_stack.push((op, last).into());
+            }
+
+            // handle the bin op (if present)
+            match bin_op {
+                Some((op, _)) => { // if there's an op, we need to handle precedence logic (shunting-yard algorithm)
+                    // handle any required ops that are still on the stack
+                    let op_prec = *PRECEDENCE.get(&op).unwrap();
+                    loop {
+                        let top = match binary_stack.last() {
+                            None => break,
+                            Some(op) => *op,
+                        };
+                        let top_prec = *PRECEDENCE.get(&top).unwrap();
+                        if top_prec.0 >= op_prec.0 && (top_prec.0 != op_prec.0 || op_prec.1 != Associativity::Left) {
+                            break;
+                        }
+
+                        // pop off op stack and put on output stack (but resolve the tree structure immediately)
+                        binary_stack.pop();
+                        let right = output_stack.pop().unwrap();
+                        let left = output_stack.pop().unwrap();
+                        output_stack.push((top, left, right).into()); // plop it back onto the output queue
+                    }
+
+                    // push this op onto the stack
+                    binary_stack.push(op);
+                }
+                None => {
+                    break; // if there wasn't a bin op, we're done parsing
+                }
+            }
+        }
+
+        // pop any remaining binary ops off the stack
+        while let Some(op) = binary_stack.pop() {
+            let right = output_stack.pop().unwrap();
+            let left = output_stack.pop().unwrap();
+            output_stack.push((op, left, right).into()); // plop it back onto the output queue
+        }
+
+        // there should now be only one thing in output, which is the result
+        Ok((output_stack.into_iter().next().unwrap(), parsing_pos))
+    }
 }
 
 #[cfg(test)]
@@ -345,7 +560,7 @@ fn create_context() -> AssembleArgs {
             data: Default::default(),
             bss_len: Default::default(),
 
-            binary_literals: Default::default(),
+            binary_set: Default::default(),
         },
     
         current_seg: AsmSegment::TEXT,
@@ -518,5 +733,123 @@ fn test_extr_string() {
             assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
             assert_eq!(e.pos, 3);
         }
+    }
+}
+
+#[test]
+fn test_extr_expr() {
+    let mut c = create_context();
+    let s = SymbolTable::new();
+
+    match c.extract_expr("true", 0, 4) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 4);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Logical(val)) => assert_eq!(val, true),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("false", 0, 5) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 5);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Logical(val)) => assert_eq!(val, false),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("5", 0, 1) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 1);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 5),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("7u", 0, 2) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 2);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Unsigned(val)) => assert_eq!(val, 7),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("3.14", 0, 4) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 4);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Floating(val)) => assert!((val - 3.14).abs() < 0.00000001),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+
+    match c.extract_expr("5+8", 0, 3) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 3);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 13),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("5+8*2-1", 0, 7) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 7);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 20),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("(5+1)*(5-1)", 0, 11) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 11);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 24),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("  (  5-3 )     *--+ -(5 -1)  ", 1, 29) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 27);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -8),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("$if(true,6 / -2,3 << 2)", 0, 23) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 23);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -3),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("   $if(  false == true  ,    6 / -  2 ,  3 << 2   )  ", 1, 53) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 51);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 12),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
     }
 }

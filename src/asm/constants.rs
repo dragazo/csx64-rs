@@ -16,9 +16,9 @@ pub(super) const LABEL_DEF_CHAR: char = ':';
 
 pub(super) const CURRENT_LINE_MACRO: &str = "$";
 pub(super) const START_OF_SEG_MACRO: &str = "$$";
-pub(super) const STRING_LITERAL_MACRO: &str = "$STR";
-pub(super) const BINARY_LITERAL_MACRO: &str = "$BIN";
 pub(super) const TIMES_ITER_MACRO: &str = "$I";
+
+pub(super) const POINTER_MACRO: &str = "$PTR";
 
 // these must be ordered in descending order of length to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
@@ -39,46 +39,46 @@ pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
     ("&", OP::And),
     ("^", OP::Xor),
     ("|", OP::Or),
-    ("?", OP::Condition),
-    (":", OP::Pair),
 ];
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Associativity {
+    Left, //Right, // currently everything we support is left associative, but maybe that'll change at some point
+}
+
 lazy_static! {
-    pub(super) static ref PRECEDENCE: HashMap<OP, i32> = {
+    pub(super) static ref PRECEDENCE: HashMap<OP, (i32, Associativity)> = {
         let mut m = HashMap::new();
         
-        m.insert(OP::Mul, 5);
+        m.insert(OP::Mul, (5, Associativity::Left));
 
-        m.insert(OP::Div, 5);
-        m.insert(OP::Mod, 5);
+        m.insert(OP::Div, (5, Associativity::Left));
+        m.insert(OP::Mod, (5, Associativity::Left));
 
-        m.insert(OP::Add, 6);
-        m.insert(OP::Sub, 6);
+        m.insert(OP::Add, (6, Associativity::Left));
+        m.insert(OP::Sub, (6, Associativity::Left));
 
-        m.insert(OP::SHL, 7);
-        m.insert(OP::SHR, 7);
+        m.insert(OP::SHL, (7, Associativity::Left));
+        m.insert(OP::SHR, (7, Associativity::Left));
 
-        m.insert(OP::Less, 9);
-        m.insert(OP::LessE, 9);
-        m.insert(OP::Great, 9);
-        m.insert(OP::GreatE, 9);
+        m.insert(OP::Less, (9, Associativity::Left));
+        m.insert(OP::LessE, (9, Associativity::Left));
+        m.insert(OP::Great, (9, Associativity::Left));
+        m.insert(OP::GreatE, (9, Associativity::Left));
 
-        m.insert(OP::Equ, 10);
-        m.insert(OP::Neq, 10);
+        m.insert(OP::Equ, (10, Associativity::Left));
+        m.insert(OP::Neq, (10, Associativity::Left));
 
-        m.insert(OP::And, 11);
-        m.insert(OP::Xor, 12);
-        m.insert(OP::Or, 13);
-
-        m.insert(OP::Pair, 100);
-        m.insert(OP::Condition, 100);
+        m.insert(OP::And, (11, Associativity::Left));
+        m.insert(OP::Xor, (12, Associativity::Left));
+        m.insert(OP::Or, (13, Associativity::Left));
 
         m
     };
 }
 
 lazy_static! {
-    pub(super) static ref FUNCTION_OPERATOR_TO_OP: HashMap<&'static str, OP> = {
+    pub(super) static ref UNARY_FUNCTION_OPERATOR_TO_OP: HashMap<&'static str, OP> = {
         let mut m = HashMap::new();
 
         // m.insert("$INT", OP::Int);
