@@ -90,3 +90,56 @@ fn test_cpu_register() {
     assert_eq!(r.x8(), 0x43);
     assert_eq!(r.x8h(), 0x86);
 }
+
+/// Represents a 512-bit ZMM (vector) register.
+/// 
+/// Values are held as an array of 64 bytes, which is suitably aligned for use in any simd operations.
+/// Multi-byte values must be stored little-endian to facilitate the correct index behavior.
+/// The provided element accessors automatically do this, but care should be taken if accessing the data directly (e.g. for simd operations).
+#[derive(Clone, Copy)]
+#[repr(align(64))]
+pub struct ZMMRegister {
+    pub data: [u8; 64],
+}
+impl Default for ZMMRegister {
+    fn default() -> Self {
+        Self { data: [0; 64] } // arrays this large don't impl Default on their own - new releases of rust might fix this
+    }
+}
+macro_rules! zmm_impl {
+    ($get:ident : $set:ident => $t:ident) => {
+        pub fn $get(&self, index: usize) -> $t {
+            $t::from_le(bytemuck::cast_slice(&self.data)[index])
+        }
+        pub fn $set(&mut self, index: usize, value: $t) {
+            bytemuck::cast_slice_mut(&mut self.data)[index] = value.to_le()
+        }
+    }
+}
+impl ZMMRegister {
+    pub fn get_u8(&self, index: usize) -> u8 {
+        self.data[index]
+    }
+    pub fn set_u8(&mut self, index: usize, value: u8) {
+        self.data[index] = value
+    }
+
+    zmm_impl! { get_u16 : set_u16 => u16 }
+    zmm_impl! { get_u32 : set_u32 => u32 }
+    zmm_impl! { get_u64 : set_u64 => u64 }
+}
+
+#[test]
+fn test_zmm_register() {
+    assert_eq!(std::mem::align_of::<ZMMRegister>(), 64);
+    assert_eq!(std::mem::size_of::<ZMMRegister>(), 64);
+    
+    let mut r = ZMMRegister::default();
+
+    for i in 0..64 {
+        r.set_u8(i, i as u8);
+    }
+    for i in 0..32 {
+        assert_eq!(r.get_u16(i), u16::from_le_bytes([i as u8 * 2, i as u8 * 2 + 1]));
+    }
+}

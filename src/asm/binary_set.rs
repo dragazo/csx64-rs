@@ -136,11 +136,8 @@ impl BinarySet {
 
                     // if data entry j is contained in value (entry i), we can remove j
                     if let Some(start) = find_subregion(&self.data[i], &self.data[j]) {
-                        // remove j via the move pop idiom
-                        let last = self.data.pop().unwrap();
-                        if j < self.data.len() {
-                            self.data[j] = last;
-                        }
+                        // remove j via the move swap idiom
+                        self.data.swap_remove(j);
 
                         // if i was the one we moved, repoint i to j (its new home)
                         if i == self.data.len() {
@@ -154,7 +151,7 @@ impl BinarySet {
                                 lit.src = i;
                                 lit.start += start;
                             }
-                            // if it referenced the moved entry (the one we used for move pop idiom), repoint it to j
+                            // if it referenced the moved entry (the one we used for move swap idiom), repoint it to j
                             else if lit.src == self.data.len() {
                                 lit.src = j;
                             }

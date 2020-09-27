@@ -2,6 +2,7 @@ use std::iter::Peekable;
 use std::str::CharIndices;
 use std::collections::VecDeque;
 use std::borrow::Cow;
+use std::cell;
 
 use super::*;
 use super::expr::{ExprData, OP, Value, ValueVariants};
@@ -83,6 +84,12 @@ fn test_valid_symname() {
     assert!(!is_valid_symbol_name("_7up "));
     assert!(!is_valid_symbol_name("_7u p"));
     assert!(!is_valid_symbol_name("$foo"));
+}
+
+pub(super) struct Imm {
+    pub(super) expr: Expr,
+    pub(super) sizecode: Option<u8>,
+
 }
 
 pub(super) struct TimesInfo {
@@ -356,7 +363,7 @@ impl AssembleArgs {
                     "$" => { // current line macro
                         match SEG_OFFSETS.get(&self.current_seg) {
                             None => return err!(self, kind: IllegalInCurrentSegment, pos: term_start),
-                            Some(ident) => (OP::Add, ExprData::Ident(ident.to_string()), self.line_pos_in_seg as u64).into(),
+                            Some(ident) => (OP::Add, ExprData::Ident(ident.to_string()), self.line_pos_in_seg as i64).into(),
                         }
                     }
                     "$$" => { // start of seg macro
@@ -467,8 +474,9 @@ impl AssembleArgs {
                     }
                 }
                 _ => match term { // otherwise it must be an keyword/identifier
-                    "true" => true.into(),
-                    "false" => false.into(),
+                    "true" | "TRUE" => true.into(),
+                    "false" | "FALSE" => false.into(),
+                    "null" | "NULL" => Value::Pointer(0).into(),
                     _ => { // if none of above, must be an identifier
                         let mutated = self.mutate_name(raw_line, term_start, term_stop)?;
                         if !is_valid_symbol_name(&mutated) {
@@ -533,7 +541,85 @@ impl AssembleArgs {
         }
 
         // there should now be only one thing in output, which is the result
-        Ok((output_stack.into_iter().next().unwrap(), parsing_pos))
+        debug_assert_eq!(output_stack.len(), 1);
+        let res = self.apply_ptrdiff(output_stack.into_iter().next().unwrap());
+
+        Ok((res, parsing_pos))
+    }
+
+    fn get_ptr_offset<'a>(&'a self, expr: &'a Expr, base: &str) -> Option<Expr> {
+        let target = match &*expr.data.borrow() {
+            ExprData::Value(_) => return None,
+            ExprData::Ident(ident) => {
+                if ident == base { return Some(Value::Pointer(0).into()); } // if this is the base itself, offset is zero
+                match self.file.symbols.get(ident) {
+                    None => return None,
+                    Some(symbol) => symbol,
+                }
+            }
+            ExprData::Uneval { op: _, left: _, right: _ } => expr,
+        };
+        match &*target.data.borrow() {
+            ExprData::Uneval { op: OP::Add, left, right } => match &*left.as_ref().unwrap().data.borrow() {
+                ExprData::Ident(ident) if ident == base => Some((**right.as_ref().unwrap()).clone()),
+                _ => None,
+            }
+            _ => None,
+        }
+    }
+    // applies ptrdiff logic (e.g. $-$ == 0) to an expr and returns the resulting expression.
+    // if no ptrdiff logic can be performed, returns the original expression,
+    // otherwise returns a modified expression which is guaranteed to yield the same value.
+    fn apply_ptrdiff(&self, expr: Expr) -> Expr {
+        let (mut add, mut sub) = expr.break_add_sub();
+        for base in PTRDIFF_IDS { // look for add/sub pairs that have a common base
+            let a = add.iter_mut().filter_map(|x| self.get_ptr_offset(x, base).map(|r| (x, r)));
+            let b = sub.iter_mut().filter_map(|x| self.get_ptr_offset(x, base).map(|r| (x, r)));
+            for (a, b) in a.zip(b) {
+                *a.0 = a.1; // every time we get a pair, replace them with their offset values
+                *b.0 = b.1;
+            }
+        }
+
+        // recurse to non-leaf children
+        let recurse = |x: Expr| match x.data.into_inner() {
+            x @ ExprData::Value(_) => Expr::from(x),
+            x @ ExprData::Ident(_) => Expr::from(x),
+            ExprData::Uneval { op, left, right } => {
+                let left = left.map(|x| Box::new(self.apply_ptrdiff(*x)));
+                let right = right.map(|x| Box::new(self.apply_ptrdiff(*x)));
+                ExprData::Uneval { op, left, right }.into()
+            }
+        };
+        let add = add.into_iter().map(recurse).collect();
+        let sub = sub.into_iter().map(recurse).collect();
+
+        Expr::chain_add_sub(add, sub).unwrap() // assemble the result
+    }
+
+    pub(super) fn extract_imm(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Imm, usize), AsmError> {
+        // extract the first whitespace separated thing (done like this cause we need index
+        let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+            None => return err!(self, kind: ExpectedExprTerm, pos: raw_stop),
+            Some(p) => raw_start + p,
+        };
+        let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace()) {
+            None => raw_stop,
+            Some(p) => token_start + p,
+        };
+
+        // check if we had an explicit size and get the expr start position (after size if present)
+        let (sizecode, expr_start) = match &raw_line[token_start..token_stop] {
+            "byte" => (Some(0), token_stop),
+            "word" => (Some(1), token_stop),
+            "dword" => (Some(2), token_stop),
+            "qword" => (Some(3), token_stop),
+            _ => (None, token_start),
+        };
+
+        // and finally, read the expr
+        let (expr, aft) = self.extract_expr(raw_line, expr_start, raw_stop)?;
+        Ok((Imm { expr, sizecode }, aft))
     }
 }
 
@@ -847,6 +933,42 @@ fn test_extr_expr() {
             assert_eq!(aft, 51);
             match expr.eval(&s).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 12),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+}
+#[test]
+fn test_ptriff() {
+    let mut c = create_context();
+    let s = SymbolTable::new();
+
+    match c.extract_expr("$-$", 0, 3) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 3);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("    $ + 3  + 3 - 1 - 2  - -- $ - 2 + 1  ", 2, 40) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 38);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 2),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("5*(($ + 8)-($ - 3))", 0, 19) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 19);
+            match expr.eval(&s).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 55),
                 _ => panic!(),
             }
         }

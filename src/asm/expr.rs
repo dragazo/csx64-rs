@@ -26,7 +26,6 @@ use crate::common::serialization::*;
 #[repr(u8)]
 pub enum OP {
     /// A special operation that can be used as a placeholder when building expression trees.
-    /// Attempting to evaluate an expression containing this op code will panic.
     Invalid,
 
     // binary ops
@@ -91,6 +90,16 @@ fn test_invalid_op_decode() {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ValueType {
+    Logical,
+    Signed,
+    Unsigned,
+    Pointer,
+    Floating,
+    Binary,
+}
+
 /// An int or float token in an expr.
 /// 
 /// The assembler doesn't know or care about signed/unsigned literals, so all integers are stored as raw `u64`.
@@ -100,6 +109,7 @@ pub enum Value {
     Logical(bool),
     Signed(i64),
     Unsigned(u64),
+    Pointer(u64),
     Floating(f64),
     Binary(Vec<u8>),
 }
@@ -118,12 +128,16 @@ impl BinaryWrite for Value {
                 3u8.bin_write(f)?;
                 v.bin_write(f)
             }
-            Value::Floating(v) => {
+            Value::Pointer(v) => {
                 4u8.bin_write(f)?;
+                v.bin_write(f)
+            }
+            Value::Floating(v) => {
+                5u8.bin_write(f)?;
                 v.to_bits().bin_write(f)
             }
             Value::Binary(v) => {
-                5u8.bin_write(f)?;
+                6u8.bin_write(f)?;
                 v.bin_write(f)
             }
         }
@@ -136,8 +150,9 @@ impl BinaryRead for Value {
             1 => Ok(Value::Logical(true)),
             2 => Ok(Value::Signed(BinaryRead::bin_read(f)?)),
             3 => Ok(Value::Unsigned(BinaryRead::bin_read(f)?)),
-            4 => Ok(Value::Floating(BinaryRead::bin_read(f)?)),
-            5 => Ok(Value::Binary(BinaryRead::bin_read(f)?)),
+            4 => Ok(Value::Pointer(BinaryRead::bin_read(f)?)),
+            5 => Ok(Value::Floating(BinaryRead::bin_read(f)?)),
+            6 => Ok(Value::Binary(BinaryRead::bin_read(f)?)),
             _ => Err(io::ErrorKind::InvalidData.into()),
         }
     }
@@ -167,82 +182,63 @@ impl From<Vec<u8>> for Value {
         Value::Binary(val)
     }
 }
-
 impl Value {
-    fn logical(self) -> Option<bool> {
+    fn get_type(&self) -> ValueType {
         match self {
-            Value::Logical(v) => Some(v),
-            _ => None,
+            Value::Logical(_) => ValueType::Logical,
+            Value::Signed(_) => ValueType::Signed,
+            Value::Unsigned(_) => ValueType::Unsigned,
+            Value::Pointer(_) => ValueType::Pointer,
+            Value::Floating(_) => ValueType::Floating,
+            Value::Binary(_) => ValueType::Binary,
         }
     }
-    fn signed(self) -> Option<i64> {
-        match self {
-            Value::Signed(v) => Some(v),
-            _ => None,
+}
+
+macro_rules! impl_value  {
+    ($name:ident: $var:path => $t:ty) => {
+        fn $name(self) -> Option<$t> {
+            match self {
+                $var(v) => Some(v),
+                _ => None,
+            }
         }
     }
-    fn unsigned(self) -> Option<u64> {
-        match self {
-            Value::Unsigned(v) => Some(v),
-            _ => None,
-        }
-    }
-    fn floating(self) -> Option<f64> {
-        match self {
-            Value::Floating(v) => Some(v),
-            _ => None,
-        }
-    }
-    fn binary(self) -> Option<Vec<u8>> {
-        match self {
-            Value::Binary(v) => Some(v),
-            _ => None,
-        }
-    }
+}
+impl Value {
+    impl_value! { logical: Value::Logical => bool }
+    impl_value! { signed: Value::Signed => i64 }
+    impl_value! { unsigned: Value::Unsigned => u64 }
+    impl_value! { pointer: Value::Pointer => u64 }
+    impl_value! { floating: Value::Floating => f64 }
+    impl_value! { binary: Value::Binary => Vec<u8> }
 }
 pub trait ValueVariants<'a> {
     fn logical(self) -> Option<Cow<'a, bool>>;
     fn signed(self) -> Option<Cow<'a, i64>>;
     fn unsigned(self) -> Option<Cow<'a, u64>>;
+    fn pointer(self) -> Option<Cow<'a, u64>>;
     fn floating(self) -> Option<Cow<'a, f64>>;
     fn binary(self) -> Option<Cow<'a, [u8]>>;
 }
+macro_rules! impl_value_variants {
+    ($name:ident: $var:path => $t:ty) => {
+        fn $name(self) -> Option<Cow<'a, $t>> {
+            match self {
+                Cow::Owned($var(v)) => Some(Cow::Owned(v)),
+                Cow::Borrowed($var(v)) => Some(Cow::Borrowed(v)),
+                _ => None,
+            }
+        }
+    }
+}
 impl<'a> ValueVariants<'a> for Cow<'a, Value> {
-    fn logical(self) -> Option<Cow<'a, bool>> {
-        match self {
-            Cow::Owned(Value::Logical(v)) => Some(Cow::Owned(v)),
-            Cow::Borrowed(Value::Logical(v)) => Some(Cow::Borrowed(v)),
-            _ => None,
-        }
-    }
-    fn signed(self) -> Option<Cow<'a, i64>> {
-        match self {
-            Cow::Owned(Value::Signed(v)) => Some(Cow::Owned(v)),
-            Cow::Borrowed(Value::Signed(v)) => Some(Cow::Borrowed(v)),
-            _ => None,
-        }
-    }
-    fn unsigned(self) -> Option<Cow<'a, u64>> {
-        match self {
-            Cow::Owned(Value::Unsigned(v)) => Some(Cow::Owned(v)),
-            Cow::Borrowed(Value::Unsigned(v)) => Some(Cow::Borrowed(v)),
-            _ => None,
-        }
-    }
-    fn floating(self) -> Option<Cow<'a, f64>> {
-        match self {
-            Cow::Owned(Value::Floating(v)) => Some(Cow::Owned(v)),
-            Cow::Borrowed(Value::Floating(v)) => Some(Cow::Borrowed(v)),
-            _ => None,
-        }
-    }
-    fn binary(self) -> Option<Cow<'a, [u8]>> {
-        match self {
-            Cow::Owned(Value::Binary(v)) => Some(Cow::Owned(v)),
-            Cow::Borrowed(Value::Binary(v)) => Some(Cow::Borrowed(v)),
-            _ => None,
-        }
-    }
+    impl_value_variants! { logical: Value::Logical => bool }
+    impl_value_variants! { signed: Value::Signed => i64 }
+    impl_value_variants! { unsigned: Value::Unsigned => u64 }
+    impl_value_variants! { pointer: Value::Pointer => u64 }
+    impl_value_variants! { floating: Value::Floating => f64 }
+    impl_value_variants! { binary: Value::Binary => [u8] }
 }
 
 /// Holds the information needed to create an instance of `Expr`.
@@ -273,16 +269,20 @@ impl BinaryWrite for ExprData {
                 0xfcu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Value(Value::Floating(value)) => {
+            ExprData::Value(Value::Pointer(value)) => {
                 0xfbu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Value(Value::Binary(value)) => {
+            ExprData::Value(Value::Floating(value)) => {
                 0xfau8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Ident(ident) => {
+            ExprData::Value(Value::Binary(value)) => {
                 0xf9u8.bin_write(f)?;
+                value.bin_write(f)
+            }
+            ExprData::Ident(ident) => {
+                0xf8u8.bin_write(f)?;
                 ident.bin_write(f)
             }
             ExprData::Uneval { op, left, right } => {
@@ -308,9 +308,10 @@ impl BinaryRead for ExprData {
             0xfe => Ok(true.into()),
             0xfd => Ok(Value::Signed(BinaryRead::bin_read(f)?).into()),
             0xfc => Ok(Value::Unsigned(BinaryRead::bin_read(f)?).into()),
-            0xfb => Ok(Value::Floating(BinaryRead::bin_read(f)?).into()),
-            0xfa => Ok(Value::Binary(BinaryRead::bin_read(f)?).into()),
-            0xf9 => Ok(ExprData::Ident(String::bin_read(f)?)),
+            0xfb => Ok(Value::Pointer(BinaryRead::bin_read(f)?).into()),
+            0xfa => Ok(Value::Floating(BinaryRead::bin_read(f)?).into()),
+            0xf9 => Ok(Value::Binary(BinaryRead::bin_read(f)?).into()),
+            0xf8 => Ok(ExprData::Ident(String::bin_read(f)?)),
             x => match OP::from_u8(x & 0x7f) {
                 None => Err(io::ErrorKind::InvalidData.into()),
                 Some(op) => {
@@ -354,8 +355,6 @@ impl<T> From<(OP, T)> for ExprData where Expr: From<T> {
 /// 
 /// This is an effectively-immutable (see `SymbolTable` example) numeric syntax tree.
 /// It is completely opaque aside from getting the value via `eval()`, and should be constructed via `ExprData`.
-/// 
-/// Attempting to evaluate an ill-formed expression will panic.
 #[derive(Clone)]
 pub struct Expr {
     pub(super) data: RefCell<ExprData>,
@@ -425,26 +424,17 @@ impl std::fmt::Debug for SymbolTable {
 }
 
 /// The specific reason why an illegal operation failed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IllegalReason {
-    MixedTypes,
+    IllFormed,
+    IncompatibleTypes(OP, ValueType, ValueType),
+    IncompatibleType(OP, ValueType),
+    NotLogicalType(ValueType),
     CyclicDependency,
 
     DivideByZero,
-    UnsignedNegative,
-
-    ArithmeticBool,
-    ShiftBool,
-    OrderedBool,
-
-    LogicalInt,
-
-    ArithmeticString,
-    ShiftString,
-    LogicalString,
-
-    ShiftFloat,
-    LogicalFloat,
+    NegativeShift,
+    LargeShift,
 }
 
 /// The reason why an expression failed to be evaluated.
@@ -459,6 +449,11 @@ pub enum EvalError {
     Illegal(IllegalReason),
     /// Denotes that evaluation failed because the stored symbol name was not defined.
     UndefinedSymbol(String),
+}
+impl From<IllegalReason> for EvalError {
+    fn from(reason: IllegalReason) -> Self {
+        EvalError::Illegal(reason)
+    }
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -476,16 +471,16 @@ fn test_all_legal() {
     assert!(all_legal(&[&Ok(Expr::from(34u64).value_ref()), &Ok(Expr::from(3.42).value_ref())]).is_ok());
     assert!(all_legal(&[&Ok(Expr::from(54u64).value_ref()), &Err(EvalError::UndefinedSymbol("heloo".into()))]).is_ok());
     assert!(all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".into())), &Err(EvalError::UndefinedSymbol("heloo".into()))]).is_ok());
-    match all_legal(&[&Err(EvalError::Illegal(IllegalReason::LogicalInt)), &Err(EvalError::UndefinedSymbol("heloo".into()))]) {
-        Err(EvalError::Illegal(IllegalReason::LogicalInt)) => (),
+    match all_legal(&[&Err(EvalError::Illegal(IllegalReason::IncompatibleType(OP::Not, ValueType::Floating))), &Err(EvalError::UndefinedSymbol("heloo".into()))]) {
+        Err(EvalError::Illegal(IllegalReason::IncompatibleType(OP::Not, ValueType::Floating))) => (),
         _ => panic!("wrong"),
     }
-    match all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".into())), &Err(EvalError::Illegal(IllegalReason::MixedTypes))]) {
-        Err(EvalError::Illegal(IllegalReason::MixedTypes)) => (),
+    match all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".into())), &Err(EvalError::Illegal(IllegalReason::IncompatibleTypes(OP::Add, ValueType::Signed, ValueType::Unsigned)))]) {
+        Err(EvalError::Illegal(IllegalReason::IncompatibleTypes(OP::Add, ValueType::Signed, ValueType::Unsigned))) => (),
         _ => panic!("wrong"),
     }
-    match all_legal(&[&Ok(Expr::from(463i64).value_ref()), &Err(EvalError::Illegal(IllegalReason::ArithmeticString))]) {
-        Err(EvalError::Illegal(IllegalReason::ArithmeticString)) => (),
+    match all_legal(&[&Ok(Expr::from(463i64).value_ref()), &Err(EvalError::Illegal(IllegalReason::IncompatibleTypes(OP::Div, ValueType::Binary, ValueType::Logical)))]) {
+        Err(EvalError::Illegal(IllegalReason::IncompatibleTypes(OP::Div, ValueType::Binary, ValueType::Logical))) => (),
         _ => panic!("wrong"),
     }
 }
@@ -616,191 +611,207 @@ impl Expr {
                 }
             }
             ExprData::Uneval { op, left, right } => { // if it's an unevaluated expression, evaluate it
-                fn binary_op<'a, LL, SS, UU, FF, BB>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, ll: LL, ss: SS, uu: UU, ff: FF, bb: BB) -> Result<Value, EvalError>
-                where LL: FnOnce(bool, bool) -> Result<Value, EvalError>, SS: FnOnce(i64, i64) -> Result<Value, EvalError>, UU: FnOnce(u64, u64) -> Result<Value, EvalError>,
-                    FF: FnOnce(f64, f64) -> Result<Value, EvalError>, BB: FnOnce(Vec<u8>, Vec<u8>) -> Result<Value, EvalError>
+                fn binary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, f: F) -> Result<Value, EvalError>
+                where F: FnOnce(ValueRef, ValueRef) -> Result<Value, EvalError>
                 {
-                    let left = left.as_ref().unwrap().eval(symbols);
-                    let right = right.as_ref().unwrap().eval(symbols);
+                    let (left, right) = match (left.as_ref(), right.as_ref()) {
+                        (Some(a), Some(b)) => (a.eval(symbols), b.eval(symbols)),
+                        _ => return Err(IllegalReason::IllFormed.into())
+                    };
                     all_legal(&[&left, &right])?; // if either was illegal, handle that first
-                    let (mut left, mut right) = (left?, right?);
-                    match left.take_or_clone() {
-                        Value::Logical(a) => match right.take_or_clone() {
-                            Value::Logical(b) => ll(a, b),
-                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
-                        }
-                        Value::Signed(a) => match right.take_or_clone() {
-                            Value::Signed(b) => ss(a, b),
-                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
-                        }
-                        Value::Unsigned(a) => match right.take_or_clone() {
-                            Value::Unsigned(b) => uu(a, b),
-                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
-                        }
-                        Value::Floating(a) => match right.take_or_clone() {
-                            Value::Floating(b) => ff(a, b),
-                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
-                        }
-                        Value::Binary(a) => match right.take_or_clone() {
-                            Value::Binary(b) => bb(a, b),
-                            _ => Err(EvalError::Illegal(IllegalReason::MixedTypes)),
-                        }
-                    }
+                    f(left?, right?)
                 }
                 macro_rules! binary_op {
-                    ($ll:expr; $ss:expr; $uu:expr; $ff:expr; $bb:expr;) => {
-                        binary_op(&left, &right, symbols, $ll, $ss, $uu, $ff, $bb)?
+                    ($f:expr) => {
+                        binary_op(&left, &right, symbols, $f)?
                     }
                 }
-        
-                fn unary_op<'a, L, S, U, F, B>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, l: L, s: S, u: U, f: F, b: B) -> Result<Value, EvalError>
-                where L: FnOnce(bool) -> Result<Value, EvalError>, S: FnOnce(i64) -> Result<Value, EvalError>, U: FnOnce(u64) -> Result<Value, EvalError>,
-                    F: FnOnce(f64) -> Result<Value, EvalError>, B: FnOnce(Vec<u8>) -> Result<Value, EvalError>
+
+                fn unary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, f: F) -> Result<Value, EvalError>
+                where F: FnOnce(ValueRef) -> Result<Value, EvalError>
                 {
-                    let left = left.as_ref().unwrap().eval(symbols);
-                    assert!(right.is_none()); // there should be no right operand
-                    match left?.take_or_clone() {
-                        Value::Logical(a) => l(a),
-                        Value::Signed(a) => s(a),
-                        Value::Unsigned(a) => u(a),
-                        Value::Floating(a) => f(a),
-                        Value::Binary(a) => b(a),
-                    }
+                    let left = match left.as_ref() {
+                        Some(a) => a.eval(symbols),
+                        _ => return Err(IllegalReason::IllFormed.into())
+                    };
+                    if let Some(_) = right.as_ref() { return Err(IllegalReason::IllFormed.into()) }
+                    f(left?)
                 }
                 macro_rules! unary_op {
-                    ($l:expr; $s:expr; $u:expr; $f:expr; $b:expr;) => {
-                        unary_op(&left, &right, symbols, $l, $s, $u, $f, $b)?
+                    ($f:expr) => {
+                        unary_op(&left, &right, symbols, $f)?
                     }
                 }
 
                 match op {
-                    OP::Invalid => panic!("invalid op encountered in expr"),
+                    OP::Invalid => return Err(IllegalReason::IllFormed.into()),
                     OP::Mul => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a, b| Ok(a.wrapping_mul(b).into());
-                        |a, b| Ok(a.wrapping_mul(b).into());
-                        |a, b| Ok((a * b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok(a.wrapping_mul(b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok(a.wrapping_mul(b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a * b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Div => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a, b| if b != 0 { Ok((a / b).into()) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
-                        |a, b| if b != 0 { Ok((a / b).into()) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
-                        |a, b| Ok((a / b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => if b != 0 { Ok((a / b).into()) } else { Err(IllegalReason::DivideByZero.into()) },
+                            (Value::Unsigned(a), Value::Unsigned(b)) => if b != 0 { Ok((a / b).into()) } else { Err(IllegalReason::DivideByZero.into()) },
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a / b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Mod => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a, b| if b != 0 { Ok((a % b).into()) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
-                        |a, b| if b != 0 { Ok((a % b).into()) } else { Err(EvalError::Illegal(IllegalReason::DivideByZero)) };
-                        |a, b| Ok((a % b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => if b != 0 { Ok((a % b).into()) } else { Err(IllegalReason::DivideByZero.into()) },
+                            (Value::Unsigned(a), Value::Unsigned(b)) => if b != 0 { Ok((a % b).into()) } else { Err(IllegalReason::DivideByZero.into()) },
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a % b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Add => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a, b| Ok(a.wrapping_add(b).into());
-                        |a, b| Ok(a.wrapping_add(b).into());
-                        |a, b| Ok((a + b).into());
-                        |mut a, mut b| { a.append(&mut b); Ok(Value::Binary(a)) };
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok(a.wrapping_add(b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok(a.wrapping_add(b).into()),
+                            (Value::Pointer(a), Value::Signed(b)) => Ok(Value::Pointer(a.wrapping_add(b as u64))),
+                            (Value::Signed(a), Value::Pointer(b)) => Ok(Value::Pointer((a as u64).wrapping_add(b)).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a + b).into()),
+                            (Value::Binary(mut a), Value::Binary(b)) => { a.extend_from_slice(&b); Ok(Value::Binary(a)) }
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Sub => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a, b| Ok(a.wrapping_sub(b).into());
-                        |a, b| Ok(a.wrapping_sub(b).into());
-                        |a, b| Ok((a - b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ArithmeticString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok(a.wrapping_sub(b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok(a.wrapping_sub(b).into()),
+                            (Value::Pointer(a), Value::Signed(b)) => Ok(Value::Pointer(a.wrapping_sub(b as u64)).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok(Value::Signed(a.wrapping_sub(b) as i64).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a - b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::SHL => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftBool));
-                        |a, b| Ok(if b < 64 { a << b } else { 0 }.into());
-                        |a, b| Ok(if b < 64 { a << b } else { 0 }.into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftFloat));
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => if b < 0 { Err(IllegalReason::NegativeShift.into())} else if b >= 64 { Err(IllegalReason::LargeShift.into()) } else { Ok((a << b).into()) },
+                            (Value::Unsigned(a), Value::Signed(b)) => if b < 0 { Err(IllegalReason::NegativeShift.into())} else if b >= 64 { Err(IllegalReason::LargeShift.into()) } else { Ok((a << b).into()) },
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::SHR => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftBool));
-                        |a, b| Ok(if b < 64 { a >> b } else { 0 }.into());
-                        |a, b| Ok(if b < 64 { a >> b } else { 0 }.into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftFloat));
-                        |_, _| Err(EvalError::Illegal(IllegalReason::ShiftString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => if b < 0 { Err(IllegalReason::NegativeShift.into())} else if b >= 64 { Err(IllegalReason::LargeShift.into()) } else { Ok((a >> b).into()) },
+                            (Value::Unsigned(a), Value::Signed(b)) => if b < 0 { Err(IllegalReason::NegativeShift.into())} else if b >= 64 { Err(IllegalReason::LargeShift.into()) } else { Ok((a >> b).into()) },
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Less => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::OrderedBool));
-                        |a, b| Ok((a < b).into());
-                        |a, b| Ok((a < b).into());
-                        |a, b| Ok((a < b).into());
-                        |a, b| Ok((a < b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a < b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a < b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a < b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a < b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a < b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::LessE => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::OrderedBool));
-                        |a, b| Ok((a <= b).into());
-                        |a, b| Ok((a <= b).into());
-                        |a, b| Ok((a <= b).into());
-                        |a, b| Ok((a <= b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a <= b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a <= b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a <= b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a <= b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a <= b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Great => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::OrderedBool));
-                        |a, b| Ok((a > b).into());
-                        |a, b| Ok((a > b).into());
-                        |a, b| Ok((a > b).into());
-                        |a, b| Ok((a > b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a > b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a > b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a > b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a > b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a > b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::GreatE => binary_op! {
-                        |_, _| Err(EvalError::Illegal(IllegalReason::OrderedBool));
-                        |a, b| Ok((a >= b).into());
-                        |a, b| Ok((a >= b).into());
-                        |a, b| Ok((a >= b).into());
-                        |a, b| Ok((a >= b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a >= b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a >= b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a >= b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a >= b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a >= b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Equ => binary_op! {
-                        |a, b| Ok((a == b).into());
-                        |a, b| Ok((a == b).into());
-                        |a, b| Ok((a == b).into());
-                        |a, b| Ok((a == b).into());
-                        |a, b| Ok((a == b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Logical(a), Value::Logical(b)) => Ok((a == b).into()),
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a == b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a == b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a == b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a == b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a == b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Neq => binary_op! {
-                        |a, b| Ok((a != b).into());
-                        |a, b| Ok((a != b).into());
-                        |a, b| Ok((a != b).into());
-                        |a, b| Ok((a != b).into());
-                        |a, b| Ok((a != b).into());
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Logical(a), Value::Logical(b)) => Ok((a != b).into()),
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a != b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a != b).into()),
+                            (Value::Pointer(a), Value::Pointer(b)) => Ok((a != b).into()),
+                            (Value::Floating(a), Value::Floating(b)) => Ok((a != b).into()),
+                            (Value::Binary(a), Value::Binary(b)) => Ok((a != b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::And => binary_op! {
-                        |a, b| Ok((a && b).into());
-                        |a, b| Ok((a & b).into());
-                        |a, b| Ok((a & b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalFloat));
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Logical(a), Value::Logical(b)) => Ok((a & b).into()),
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a & b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a & b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Or => binary_op! {
-                        |a, b| Ok((a || b).into());
-                        |a, b| Ok((a | b).into());
-                        |a, b| Ok((a | b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalFloat));
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Logical(a), Value::Logical(b)) => Ok((a | b).into()),
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a | b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a | b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Xor => binary_op! {
-                        |a, b| Ok((a ^ b).into());
-                        |a, b| Ok((a ^ b).into());
-                        |a, b| Ok((a ^ b).into());
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalFloat));
-                        |_, _| Err(EvalError::Illegal(IllegalReason::LogicalString));
+                        |mut a, mut b| match (a.take_or_clone(), b.take_or_clone()) {
+                            (Value::Logical(a), Value::Logical(b)) => Ok((a ^ b).into()),
+                            (Value::Signed(a), Value::Signed(b)) => Ok((a ^ b).into()),
+                            (Value::Unsigned(a), Value::Unsigned(b)) => Ok((a ^ b).into()),
+                            (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into())
+                        }
                     },
                     OP::Neg => unary_op! {
-                        |_| Err(EvalError::Illegal(IllegalReason::ArithmeticBool));
-                        |a| Ok((-a).into());
-                        |_| Err(EvalError::Illegal(IllegalReason::UnsignedNegative));
-                        |a| Ok((-a).into());
-                        |_| Err(EvalError::Illegal(IllegalReason::ArithmeticString));
+                        |mut a| match a.take_or_clone() {
+                            Value::Signed(a) => Ok((-a).into()),
+                            Value::Floating(a) => Ok((-a).into()),
+                            a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into())
+                        }
                     },
                     OP::Not => unary_op! {
-                        |a| Ok((!a).into());
-                        |a| Ok((!a).into());
-                        |a| Ok((!a).into());
-                        |_| Err(EvalError::Illegal(IllegalReason::LogicalFloat));
-                        |_| Err(EvalError::Illegal(IllegalReason::LogicalString));
+                        |mut a| match a.take_or_clone() {
+                            Value::Logical(a) => Ok((!a).into()),
+                            Value::Signed(a) => Ok((!a).into()),
+                            Value::Unsigned(a) => Ok((!a).into()),
+                            a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into())
+                        }
                     },
+
+
+
+
+
+
+
                     // OP::Int => unary_op! {
                     //     |a| Ok(if a { 1i64 } else { 0i64 }.into());
                     //     |a| Ok(a.into());
@@ -887,31 +898,34 @@ impl Expr {
                     //     };
                     //     |_| Err(EvalError::Illegal(IllegalReason::InvalidStringOp));
                     // },
+
                     OP::Condition => {
-                        let cond = left.as_ref().unwrap().eval(symbols);
-                        let val = match &*right.as_ref().unwrap().data.borrow() {
+                        let (cond, pair) = match (left.as_ref(), right.as_ref()) {
+                            (Some(a), Some(b)) => (a.eval(symbols), b),
+                            _ => return Err(IllegalReason::IllFormed.into()),
+                        };
+                        let val = match &*pair.data.borrow() {
                             ExprData::Uneval { op: OP::Pair, left, right } => {
-                                let r1 = left.as_ref().unwrap().eval(symbols);
-                                let r2 = right.as_ref().unwrap().eval(symbols);
+                                let (r1, r2) = match (left.as_ref(), right.as_ref()) {
+                                    (Some(a), Some(b)) => (a.eval(symbols), b.eval(symbols)),
+                                    _ => return Err(IllegalReason::IllFormed.into()),
+                                };
                                 all_legal(&[&cond, &r1, &r2])?; // if any were illegal, handle that first
 
                                 let (mut cond, r1, r2) = (cond?, r1?, r2?);
                                 let cond = match cond.take_or_clone() { // we can take the values because we're guaranteed to own them (not from different symbol in table)
                                     Value::Logical(v) => v,
-                                    Value::Signed(_) => return Err(EvalError::Illegal(IllegalReason::LogicalInt)),
-                                    Value::Unsigned(_) => return Err(EvalError::Illegal(IllegalReason::LogicalInt)),
-                                    Value::Floating(_) => return Err(EvalError::Illegal(IllegalReason::LogicalFloat)),
-                                    Value::Binary(_) => return Err(EvalError::Illegal(IllegalReason::LogicalString)),
+                                    a => return Err(IllegalReason::NotLogicalType(a.get_type()).into()),
                                 };
                                 if cond { r1 } else { r2 } .take_or_clone()
                             }
-                            _ => panic!("encountered ill-formed ternary conditional in expr"),
+                            _ => return Err(IllegalReason::IllFormed.into()),
                         };
                         
                         *root = ExprData::Value(val);
                         return Ok(ValueRef::mine(root)); // we now have a (cached) value - just pass that back directly
                     }
-                    OP::Pair => panic!("encountered ill-formed ternary conditional in expr"),
+                    OP::Pair => return Err(IllegalReason::IllFormed.into()),
                 }
             }
         };
@@ -925,6 +939,51 @@ impl Expr {
     /// it should never be evaluated with any other symbol table.
     pub(super) fn eval<'a>(&'a self, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
         Self::eval_recursive(self.data.borrow_mut(), symbols)
+    }
+
+    /// Breaks an expression up into a set of positive terms and negative terms.
+    /// Assuming +/- are associative, + is commutative, and - is anticommutative,
+    /// the expr is reconstructed as sum(res.0)-sum(res.1).
+    pub(super) fn break_add_sub(self) -> (Vec<Expr>, Vec<Expr>) {
+        let mut add = vec![];
+        let mut sub = vec![];
+        self.recursive_break_add_sub(&mut add, &mut sub); // refer to the recursive helper starting with empty lists
+        (add, sub)
+    }
+    fn recursive_break_add_sub(self, add: &mut Vec<Expr>, sub: &mut Vec<Expr>) {
+        match self.data.into_inner() {
+            ExprData::Uneval { op: OP::Add, left, right } => {
+                left.unwrap().recursive_break_add_sub(add, sub);
+                right.unwrap().recursive_break_add_sub(add, sub);
+            }
+            ExprData::Uneval { op: OP::Sub, left, right } => {
+                left.unwrap().recursive_break_add_sub(add, sub);
+                right.unwrap().recursive_break_add_sub(sub, add);
+            }
+            ExprData::Uneval { op: OP::Neg, left, right: _ } => {
+                left.unwrap().recursive_break_add_sub(sub, add);
+            }
+            x => add.push(x.into()),
+        }
+    }
+
+    // chains the exprs together by addition (left associative).
+    pub(super) fn chain_add(add: Vec<Expr>) -> Option<Expr> {
+        let mut add = add.into_iter().fuse();
+        let mut res = add.next();
+        for expr in add {
+            let sum = (OP::Add, res.take().unwrap(), expr).into();
+            res = Some(sum);
+        }
+        res
+    }
+    // chains the exprs together with addition subtraction (left associative)
+    pub(super) fn chain_add_sub(add: Vec<Expr>, sub: Vec<Expr>) -> Option<Expr> {
+        match (add.is_empty(), sub.is_empty()) {
+            (_, true) => Self::chain_add(add),
+            (true, false) => Some((OP::Neg, Self::chain_add(sub).unwrap()).into()),
+            (false, false) => Some((OP::Sub, Self::chain_add(add).unwrap(), Self::chain_add(sub).unwrap()).into()),
+        }
     }
 
     #[cfg(test)]
@@ -953,50 +1012,49 @@ fn test_catch_cyclic_dep() {
 }
 
 #[test]
-#[should_panic]
 fn test_uneval_invalid() {
-    let _ = Expr::from((OP::Invalid, 2u64, 44u64)).eval(&Default::default());
+    let s = SymbolTable::new();
+
+    match Expr::from((OP::Invalid, 2u64, 44u64)).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from((OP::Condition, 2u64, 44u64)).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from((OP::Pair, 2u64, 44u64)).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Add, left: None, right: Some(Box::new(44u64.into())) }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Add, left: Some(Box::new(2u64.into())), right: None }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Add, left: None, right: None }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Neg, left: Some(Box::new(2u64.into())), right: Some(Box::new(3u64.into())) }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Neg, left: None, right: None }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+    match Expr::from(ExprData::Uneval { op: OP::Neg, left: None, right: Some(Box::new(3u64.into())) }).eval(&s) {
+        Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
+        v => panic!("{:?}", v),
+    }
+
+    ()
 }
-#[test]
-#[should_panic]
-fn test_uneval_incomplete_ternary() {
-    let _ = Expr::from((OP::Condition, 2u64, 44u64)).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_dangling_pair() {
-    let _ = Expr::from((OP::Pair, 2u64, 44u64)).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_missing_binary_1() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Add, left: None, right: Some(Box::new(44u64.into())) }).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_missing_binary_2() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Add, left: Some(Box::new(2u64.into())), right: None }).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_missing_binary_3() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Add, left: None, right: None }).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_extra_unary() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Neg, left: Some(Box::new(2u64.into())), right: Some(Box::new(3u64.into())) }).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_missing_unary_1() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Neg, left: None, right: None }).eval(&Default::default());
-}
-#[test]
-#[should_panic]
-fn test_uneval_missing_unary_2() {
-    let _ = Expr::from(ExprData::Uneval { op: OP::Neg, left: None, right: Some(Box::new(3u64.into())) }).eval(&Default::default());
-}
+
 #[test]
 fn test_expr_eval() {
     let mut s = SymbolTable::default();
