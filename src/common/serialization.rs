@@ -24,6 +24,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::{mem, cmp};
+use std::num::FpCategory;
+use rug::{Float, float::Special, ops::NegAssign};
+use rug::{Integer, integer::Order};
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -285,5 +288,110 @@ impl<T: BinaryRead + Hash + Eq> BinaryRead for HashSet<T> {
             }
         }
         Ok(res)
+    }
+}
+
+impl BinaryWrite for Integer {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        self.to_digits::<u8>(Order::LsfLe).bin_write(f)
+    }
+}
+impl BinaryRead for Integer {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Integer> {
+        Ok(Integer::from_digits(&Vec::<u8>::bin_read(f)?, Order::LsfLe))
+    }
+}
+
+impl BinaryWrite for Float {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        let is_negative = self.is_sign_negative();
+        let prec = self.prec();
+
+        prec.bin_write(f)?;
+        match self.classify() {
+            FpCategory::Nan => match is_negative {
+                false => 0u8.bin_write(f),
+                true => 1u8.bin_write(f),
+            }
+            FpCategory::Infinite => match is_negative {
+                false => 2u8.bin_write(f),
+                true => 3u8.bin_write(f),
+            }
+            FpCategory::Zero => match is_negative {
+                false => 4u8.bin_write(f),
+                true => 5u8.bin_write(f),
+            }
+            FpCategory::Subnormal => unreachable!(), // rug float cannot be subnormal
+            FpCategory::Normal => {
+                let (mut sig, mut exp) = self.to_integer_exp().unwrap(); // extract sig/exp and convert sig to positive
+                if is_negative { sig.neg_assign(); }
+                debug_assert!(sig > 0);
+
+                let trailing_zeros = sig.find_one(0).unwrap(); // for minimal storage, we'll chop off trailing zeros
+                sig >>= trailing_zeros;
+                exp += trailing_zeros as i32;
+
+                match is_negative {
+                    false => 6u8.bin_write(f)?,
+                    true => 7u8.bin_write(f)?,
+                }
+                exp.bin_write(f)?;
+                sig.bin_write(f)
+            }
+        }
+    }
+}
+impl BinaryRead for Float {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Float> {
+        let prec = BinaryRead::bin_read(f)?;
+        let prefix = u8::bin_read(f)?;
+        let res = match prefix {
+            0 => Float::with_val(prec, Special::Nan),
+            1 => -Float::with_val(prec, Special::Nan),
+
+            2 => Float::with_val(prec, Special::Infinity),
+            3 => Float::with_val(prec, Special::NegInfinity),
+
+            4 => Float::with_val(prec, Special::Zero),
+            5 => Float::with_val(prec, Special::NegZero),
+
+            6 | 7 => {
+                let exp = i32::bin_read(f)?;
+                let sig = Integer::bin_read(f)?;
+                let mut v = Float::with_val(prec, sig) << exp;
+                if prefix == 7 { v.neg_assign() }
+                v
+            }
+
+            _ => return Err(io::ErrorKind::InvalidData.into()),
+        };
+        Ok(res)
+    }
+}
+#[test]
+fn test_serial_float() {
+    let vals = &[
+        Float::with_val(78, Special::Zero),
+        Float::with_val(43, Special::NegZero),
+        Float::with_val(53, Special::Infinity),
+        Float::with_val(66, Special::NegInfinity),
+        Float::with_val(102, Special::Nan),
+        -Float::with_val(12, Special::Nan),
+        Float::with_val(150, 1) / 10,
+        Float::with_val(15, -1) / 10,
+        Float::with_val(76, 1) << rug::float::exp_max(),
+        Float::with_val(72, -1) << rug::float::exp_min(),
+    ];
+    let mut c = Cursor::new(vec![]);
+    for v in vals {
+        v.bin_write(&mut c).unwrap();
+    }
+    c.set_position(0);
+    for v in vals {
+        let r = Float::bin_read(&mut c).unwrap();
+        assert_eq!(r.prec(), v.prec());
+        assert_eq!(r.is_sign_negative(), v.is_sign_negative());
+        assert_eq!(r.classify(), v.classify());
+        if !r.is_nan() { assert_eq!(&r, v); }
     }
 }
