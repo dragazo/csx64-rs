@@ -3,6 +3,8 @@
 use std::io::{self, Read, Write};
 
 pub mod serialization;
+pub mod util;
+pub mod f80;
 
 use serialization::*;
 

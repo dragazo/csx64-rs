@@ -86,10 +86,23 @@ fn test_valid_symname() {
     assert!(!is_valid_symbol_name("$foo"));
 }
 
-pub(super) struct Imm {
-    pub(super) expr: Expr,
-    pub(super) sizecode: Option<u8>,
-
+// grabs the first whitespace-separated token and returns it, along with the index just after it.
+// if no token is present, returns empty string and the index of one past the end of the string.
+fn grab_whitespace_sep_token(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
+    let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+        None => raw_stop,
+        Some(p) => raw_start + p,
+    };
+    let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace()) {
+        None => raw_stop,
+        Some(p) => token_start + p,
+    };
+    (&raw_line[token_start..token_stop], token_stop)
+}
+#[test]
+fn test_grab_ws_sep_token() {
+    assert_eq!(grab_whitespace_sep_token("   \t hello world  ", 3, 18), ("hello", 10));
+    assert_eq!(grab_whitespace_sep_token("    \t  ", 1, 7), ("", 7));
 }
 
 pub(super) struct TimesInfo {
@@ -598,28 +611,90 @@ impl AssembleArgs {
     }
 
     pub(super) fn extract_imm(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Imm, usize), AsmError> {
-        // extract the first whitespace separated thing (done like this cause we need index
-        let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
-            None => return err!(self, kind: ExpectedExprTerm, pos: raw_stop),
-            Some(p) => raw_start + p,
-        };
-        let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace()) {
-            None => raw_stop,
-            Some(p) => token_start + p,
-        };
-
         // check if we had an explicit size and get the expr start position (after size if present)
-        let (sizecode, expr_start) = match &raw_line[token_start..token_stop] {
-            "byte" => (Some(0), token_stop),
-            "word" => (Some(1), token_stop),
-            "dword" => (Some(2), token_stop),
-            "qword" => (Some(3), token_stop),
-            _ => (None, token_start),
+        let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
+        let (sizecode, expr_start) = match token {
+            "byte" | "BYTE" => (Some(Sizecode(0)), token_stop),
+            "word" | "WORD" => (Some(Sizecode(1)), token_stop),
+            "dword" | "DWORD" => (Some(Sizecode(2)), token_stop),
+            "qword" | "QWORD" => (Some(Sizecode(3)), token_stop),
+            _ => (None, raw_start),
         };
 
         // and finally, read the expr
         let (expr, aft) = self.extract_expr(raw_line, expr_start, raw_stop)?;
         Ok((Imm { expr, sizecode }, aft))
+    }
+    pub(super) fn extract_address(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Address, usize), AsmError> {
+        // check if we had an explicit size and get the expr start position (after size if present)
+        let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
+        let (sizecode, mut next_start) = match token {
+            "byte" | "BYTE" => (Some(Sizecode(0)), token_stop),
+            "word" | "WORD" => (Some(Sizecode(1)), token_stop),
+            "dword" | "DWORD" => (Some(Sizecode(2)), token_stop),
+            "qword" | "QWORD" => (Some(Sizecode(3)), token_stop),
+            "xmmword" | "XMMWORD" => (Some(Sizecode(4)), token_stop),
+            "ymmword" | "YMMWORD" => (Some(Sizecode(5)), token_stop),
+            "zmmword" | "ZMMWORD" => (Some(Sizecode(6)), token_stop),
+            _ => (None, raw_start),
+        };
+        if let Some(_) = sizecode { // explicit adderss size requires the ptr specifier
+            let (token, token_stop) = grab_whitespace_sep_token(raw_line, next_start, raw_stop);
+            match token {
+                "ptr" | "PTR" => next_start = token_stop,
+                _ => return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len()),
+            }
+        }
+
+        // after the size part, we need to find the start of the core address component [expr]
+        let address_start = match raw_line[next_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+            None => return err!(self, kind: ExpectedAddress, pos: raw_stop),
+            Some(p) => next_start + p,
+        };
+        if raw_line[address_start..].chars().next().unwrap() != '[' {
+            return err!(self, kind: ExpectedAddress, pos: address_start);
+        }
+        let (imm, imm_aft) = self.extract_imm(raw_line, address_start + 1, raw_stop)?;
+        if raw_line[imm_aft..].trim_start().chars().next() != Some(']') {
+            return err!(self, kind: UnterminatedAddress, pos: imm_aft);
+        }
+
+        // now we need to handle all the register arithmetic stuff
+
+
+
+        unimplemented!()
+    }
+
+    pub(super) fn parse_arg(&mut self, arg: &str) -> Result<Argument, AsmError> {
+        debug_assert_eq!(arg, arg.trim());
+
+        // handle all the register types first
+        if let Some(reg) = CPU_REGISTER_INFO.get(arg) {
+            return Ok(Argument::CPURegister(*reg));
+        }
+        if let Some(reg) = FPU_REGISTER_INFO.get(arg) {
+            return Ok(Argument::FPURegister(*reg));
+        }
+        if let Some(reg) = VPU_REGISTER_INFO.get(arg) {
+            return Ok(Argument::VPURegister(*reg));
+        }
+
+        // otherwise we know it's either an address or an expr - decide based on the last character
+        if arg.chars().rev().next().unwrap() == ']' {
+            let (res, aft) = self.extract_address(arg, 0, arg.len())?;
+            if aft != arg.len() {
+                return err!(self, kind: FailedParseAddress, pos: 0);
+            }
+            Ok(Argument::Address(res))
+        }
+        else {
+            let (res, aft) = self.extract_imm(arg, 0, arg.len())?;
+            if aft != arg.len() {
+                return err!(self, kind: FailedParseImm, pos: 0);
+            }
+            Ok(Argument::Imm(res))
+        }
     }
 }
 

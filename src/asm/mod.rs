@@ -44,6 +44,16 @@ pub enum AsmErrorKind {
     IllegalInCurrentSegment,
     TimesIterOutisideOfTimes,
 
+    ExpectedAddress,
+    UnterminatedAddress,
+    AddressSizeMissingPtr,
+
+    FailedParseImm,
+    FailedParseAddress,
+    FailedParseCPURegister,
+    FailedParseFPURegister,
+    FailedParseVPURegister,
+
     FailedCriticalExpression,
 }
 
@@ -56,16 +66,57 @@ pub struct AsmError {
 }
 
 #[derive(Clone)]
+struct Imm {
+    expr: Expr,
+    sizecode: Option<Sizecode>, // size of the value
+}
+
+#[derive(Clone)]
+struct Address {
+    base: Expr,
+    a: u8,
+    b: u8,
+    sizecode: Option<Sizecode>, // size of the pointed-to value (not the address itself)
+}
+
+#[derive(Clone)]
+enum Argument {
+    CPURegister(CPURegisterInfo),
+    FPURegister(FPURegisterInfo),
+    VPURegister(VPURegisterInfo),
+    Address(Address),
+    Imm(Imm),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Sizecode(u8);
+impl Sizecode {
+    const fn size(self) -> u8 {
+        1 << self.0
+    }
+}
+impl BinaryWrite for Sizecode {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        self.0.bin_write(f)
+    }
+}
+impl BinaryRead for Sizecode {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Sizecode> {
+        Ok(Sizecode(u8::bin_read(f)?))
+    }
+}
+
+#[derive(Clone)]
 struct Hole {
     address: u64,
-    size: u8,
+    sizecode: Sizecode,
     line: usize,
     expr: Expr,
 }
 impl BinaryWrite for Hole {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         self.address.bin_write(f)?;
-        self.size.bin_write(f)?;
+        self.sizecode.bin_write(f)?;
         self.line.bin_write(f)?;
         self.expr.bin_write(f)
     }
@@ -73,10 +124,10 @@ impl BinaryWrite for Hole {
 impl BinaryRead for Hole {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<Hole> {
         let address = u64::bin_read(f)?;
-        let size = u8::bin_read(f)?;
+        let sizecode = Sizecode::bin_read(f)?;
         let line = usize::bin_read(f)?;
         let expr = Expr::bin_read(f)?;
-        Ok(Hole { address, size, line, expr })
+        Ok(Hole { address, sizecode, line, expr })
     }
 }
 

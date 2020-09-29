@@ -1,5 +1,7 @@
 //! Various types of emulated hardware registers.
 
+use rug::float::Round;
+
 /// A 64-bit general-purpose CPU register with standard partitioning.
 #[derive(Default, Clone, Copy)]
 pub struct CPURegister(pub u64);
@@ -142,4 +144,112 @@ fn test_zmm_register() {
     for i in 0..32 {
         assert_eq!(r.get_u16(i), u16::from_le_bytes([i as u8 * 2, i as u8 * 2 + 1]));
     }
+}
+
+macro_rules! impl_flag {
+    ($get:ident : $set:ident : $flip:ident => [$mask:expr]) => {
+        pub fn $get(self) -> bool {
+            (self.0 & $mask) != 0
+        }
+        pub fn $set(&mut self, value: bool) {
+            if value { self.0 |= $mask; } else { self.0 &= !$mask; }
+        }
+        pub fn $flip(&mut self) {
+            self.0 ^= $mask;
+        }
+    }
+}
+macro_rules! impl_field {
+    ($get:ident : $set:ident => $from:ty [ $shift:expr => $mask:expr ] $to:ty) => {
+        pub fn $get(self) -> $to {
+            ((self.0 >> $shift) & $mask) as $to
+        }
+        pub fn $set(&mut self, val: $to) {
+            assert_eq!(val, val & $mask);
+            self.0 = (self.0 & !($mask << $shift)) | ((val as $from) << $shift);
+        }
+    }
+}
+
+/// The FPU control word.
+#[derive(Clone, Copy)]
+pub struct Control(pub u16);
+impl Control {
+    impl_flag! { get_im : set_im : flip_im => [1] }
+    impl_flag! { get_dm : set_dm : flip_dm => [2] }
+    impl_flag! { get_zm : set_zm : flip_zm => [4] }
+    impl_flag! { get_om : set_om : flip_om => [8] }
+    impl_flag! { get_um : set_um : flip_um => [16] }
+    impl_flag! { get_pm : set_pm : flip_pm => [32] }
+    impl_flag! { get_iem : set_iem : flip_iem => [128] }
+    impl_flag! { get_ic : set_ic : flip_ic => [4096] }
+
+    impl_field! { get_pc : set_pc => u16 [ 8 => 3 ] u8 }
+    impl_field! { get_rc : set_rc => u16 [ 10 => 3 ] u8 }
+
+    /// Gets the rounding control field and interprets it as a rounding mode enum for program use.
+    pub fn get_rc_enum(self) -> Round {
+        match self.get_rc() {
+            0 => Round::Nearest,
+            1 => Round::Down,
+            2 => Round::Up,
+            3 => Round::Zero,
+            _ => unreachable!(),
+        }
+    }
+    /// Gets the precision control field value in terms of the number of bits.
+    /// Fails only for `0b01`, which is reserved.
+    pub fn get_pc_val(self) -> Result<u32, ()> {
+        match self.get_pc() {
+            0 => Ok(24),
+            1 => Err(()),
+            2 => Ok(53),
+            3 => Ok(64),
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// The FPU status word.
+#[derive(Clone, Copy)]
+pub struct Status(pub u16);
+impl Status {
+    impl_flag! { get_i : set_i : flip_i => [1] }
+    impl_flag! { get_d : set_d : flip_d => [2] }
+    impl_flag! { get_z : set_z : flip_z => [4] }
+    impl_flag! { get_o : set_o : flip_o => [8] }
+    impl_flag! { get_u : set_u : flip_u => [16] }
+    impl_flag! { get_p : set_p : flip_p => [32] }
+    impl_flag! { get_sf : set_sf : flip_sf => [64] }
+    impl_flag! { get_ir : set_ir : flip_ir => [128] }
+    impl_flag! { get_c0 : set_c0 : flip_c0 => [256] }
+    impl_flag! { get_c1 : set_c1 : flip_c1 => [512] }
+    impl_flag! { get_c2 : set_c2 : flip_c2 => [1024] }
+    impl_flag! { get_c3 : set_c3 : flip_c3 => [16384] }
+    impl_flag! { get_b : set_b : flip_b => [32768] }
+
+    impl_field! { get_top : set_top => u16 [ 11 => 7 ] u8 }
+}
+
+/// The FPU tag word.
+#[derive(Clone, Copy)]
+pub struct Tag(pub u16);
+impl Tag {
+    pub fn get_physical(self, index: u8) -> u8 {
+        ((self.0 >> (2 * index)) & 3) as u8
+    }
+    pub fn set_physical(&mut self, index: u8, value: TagValue) {
+        assert!(index <= 7);
+        let s = 2 * index;
+        self.0 = (self.0 & !(3 << s)) | ((value as u16) << s);
+    }
+}
+
+/// The valid values for a register tag.
+#[repr(u8)]
+pub enum TagValue {
+    NonZero = 0,
+    Zero = 1,
+    Special = 2,
+    Empty = 3,
 }
