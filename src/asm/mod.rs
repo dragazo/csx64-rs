@@ -9,7 +9,7 @@ mod constants;
 mod asm_args;
 
 use binary_set::BinarySet;
-use expr::{Expr, SymbolTable};
+use expr::{Expr, SymbolTable, TypeSet};
 use constants::*;
 use asm_args::*;
 
@@ -32,6 +32,7 @@ pub enum AsmErrorKind {
     ExpectedCommaBeforeToken,
     UnrecognizedMacroInvocation,
     IncorrectArgCount,
+    IllFormedExpr,
 
     IllFormedNumericLiteral,
     
@@ -47,6 +48,18 @@ pub enum AsmErrorKind {
     ExpectedAddress,
     UnterminatedAddress,
     AddressSizeMissingPtr,
+    AddressRegMultNotCriticalExpr,
+    AddressRegMultNotSignedInt,
+    AddressRegInvalidMult,
+    AddressRegIllegalOp,
+    AddressConflictingSizes,
+    AddressTooManyRegs,
+    AddressSizeUnsupported,
+    AddressTypeUnsupported,
+    AddressInteriorNotSingleExpr,
+    AddressPtrSpecWithoutSize,
+    AddressSizeNotRecognized,
+    AddressUseOfHighRegister,
 
     FailedParseImm,
     FailedParseAddress,
@@ -68,15 +81,16 @@ pub struct AsmError {
 #[derive(Clone)]
 struct Imm {
     expr: Expr,
-    sizecode: Option<Sizecode>, // size of the value
+    size: Option<Size>, // size of the value
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Address {
-    base: Expr,
-    a: u8,
-    b: u8,
-    sizecode: Option<Sizecode>, // size of the pointed-to value (not the address itself)
+    size: Size,                 // size of the address itself
+    r1: Option<(u8, u8)>,       // r1 and r1 mult
+    r2: Option<u8>,             // r2 (mult of 1)
+    base: Option<Expr>,         // constant base address - 0 if absent, but saves space in the binary
+    pointed_size: Option<Size>, // size of the pointed-to value (not the address itself)
 }
 
 #[derive(Clone)]
@@ -88,46 +102,115 @@ enum Argument {
     Imm(Imm),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Sizecode(u8);
-impl Sizecode {
-    const fn size(self) -> u8 {
-        1 << self.0
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Size {
+    Byte,
+    Word,
+    Dword,
+    Qword,
+
+    Xmmword,
+    Ymmword,
+    Zmmword,
+
+    Tword,
+}
+impl Size {
+    /// If self is a basic size (byte, word, dword, qword), returns the sizecode (0, 1, 2, 3).
+    fn basic_sizecode(self) -> Option<u8> {
+        match self {
+            Size::Byte => Some(0),
+            Size::Word => Some(1),
+            Size::Dword => Some(2),
+            Size::Qword => Some(3),
+            _ => None
+        }
+    }
+    /// If elf is a basic size (byte, word, dword, qword), returns the size (1, 2, 4, 8).
+    fn basic_size(self) -> Option<u8> {
+        self.basic_sizecode().map(|v| 1 << v)
+    }
+
+    /// If self is a vector size (xmmword, ymmword, zmmword), returns the sizecode (0, 1, 2)
+    fn vector_sizecode(self) -> Option<u8> {
+        match self {
+            Size::Xmmword => Some(0),
+            Size::Ymmword => Some(1),
+            Size::Zmmword => Some(2),
+            _ => None
+        }
+    }
+    /// If self is a vector size (xmmword, ymmword, zmmword), return the size (16, 32, 64).
+    fn vector_size(self) -> Option<u8> {
+        self.vector_sizecode().map(|v| 1 << (v + 4))
     }
 }
-impl BinaryWrite for Sizecode {
+impl BinaryWrite for Size {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        self.0.bin_write(f)
+        match self {
+            Size::Byte => 0u8,
+            Size::Word => 1,
+            Size::Dword => 2,
+            Size::Qword => 3,
+            Size::Xmmword => 4,
+            Size::Ymmword => 5,
+            Size::Zmmword => 6,
+            Size::Tword => 7,
+        }.bin_write(f)
     }
 }
-impl BinaryRead for Sizecode {
-    fn bin_read<F: Read>(f: &mut F) -> io::Result<Sizecode> {
-        Ok(Sizecode(u8::bin_read(f)?))
+impl BinaryRead for Size {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Size> {
+        Ok(match u8::bin_read(f)? {
+            0 => Size::Byte,
+            1 => Size::Word,
+            2 => Size::Dword,
+            3 => Size::Qword,
+            4 => Size::Xmmword,
+            5 => Size::Ymmword,
+            6 => Size::Zmmword,
+            7 => Size::Tword,
+            _ => return Err(io::ErrorKind::InvalidData.into()),
+        })
     }
+}
+#[test]
+fn test_size_fns() {
+    assert_eq!(Size::Byte.basic_sizecode(), Some(0));
+    assert_eq!(Size::Dword.basic_size(), Some(4));
+    assert_eq!(Size::Dword.vector_size(), None);
+    assert_eq!(Size::Xmmword.basic_sizecode(), None);
+    assert_eq!(Size::Xmmword.vector_sizecode(), Some(0));
+    assert_eq!(Size::Xmmword.vector_size(), Some(16));
+    assert_eq!(Size::Ymmword.vector_sizecode(), Some(1));
+    assert_eq!(Size::Ymmword.vector_size(), Some(32));
 }
 
 #[derive(Clone)]
 struct Hole {
     address: u64,
-    sizecode: Sizecode,
+    size: Size,
     line: usize,
     expr: Expr,
+    allowed_types: TypeSet,
 }
 impl BinaryWrite for Hole {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         self.address.bin_write(f)?;
-        self.sizecode.bin_write(f)?;
+        self.size.bin_write(f)?;
         self.line.bin_write(f)?;
-        self.expr.bin_write(f)
+        self.expr.bin_write(f)?;
+        self.allowed_types.bin_write(f)
     }
 }
 impl BinaryRead for Hole {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<Hole> {
-        let address = u64::bin_read(f)?;
-        let sizecode = Sizecode::bin_read(f)?;
-        let line = usize::bin_read(f)?;
-        let expr = Expr::bin_read(f)?;
-        Ok(Hole { address, sizecode, line, expr })
+        let address = BinaryRead::bin_read(f)?;
+        let size = BinaryRead::bin_read(f)?;
+        let line = BinaryRead::bin_read(f)?;
+        let expr = BinaryRead::bin_read(f)?;
+        let allowed_types = BinaryRead::bin_read(f)?;
+        Ok(Hole { address, size, line, expr, allowed_types })
     }
 }
 

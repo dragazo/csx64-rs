@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::fmt::{self, Debug};
 use std::mem;
 use std::borrow::Cow;
+use rug::Float;
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -17,6 +18,10 @@ use std::io::Cursor;
 use num_traits::FromPrimitive;
 
 use crate::common::serialization::*;
+
+/// Number of precision bits to use for floating point values.
+/// This is strictly larger than fpu precision (64) so that we can have nigh-perfect end-results from expr after truncating to 64.
+pub const PRECISION: u32 = 80;
 
 /// The supported operations in an expr.
 /// 
@@ -100,6 +105,30 @@ pub enum ValueType {
     Binary,
 }
 
+bitflags! {
+    pub struct TypeSet: u8 {
+        const Logical = 1;
+        const Signed = 2;
+        const Unsigned = 4;
+        const Pointer = 8;
+        const Floating = 16;
+        const Binary = 32;
+    }
+}
+impl BinaryWrite for TypeSet {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        self.bits().bin_write(f)
+    }
+}
+impl BinaryRead for TypeSet {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Self> {
+        match Self::from_bits(u8::bin_read(f)?) {
+            Some(v) => Ok(v),
+            None => Err(io::ErrorKind::InvalidData.into()),
+        }
+    }
+}
+
 /// An int or float token in an expr.
 /// 
 /// The assembler doesn't know or care about signed/unsigned literals, so all integers are stored as raw `u64`.
@@ -110,7 +139,7 @@ pub enum Value {
     Signed(i64),
     Unsigned(u64),
     Pointer(u64),
-    Floating(f64),
+    Floating(Float),
     Binary(Vec<u8>),
 }
 impl BinaryWrite for Value {
@@ -134,7 +163,7 @@ impl BinaryWrite for Value {
             }
             Value::Floating(v) => {
                 5u8.bin_write(f)?;
-                v.to_bits().bin_write(f)
+                v.bin_write(f)
             }
             Value::Binary(v) => {
                 6u8.bin_write(f)?;
@@ -172,8 +201,8 @@ impl From<u64> for Value {
         Value::Unsigned(val)
     }
 }
-impl From<f64> for Value {
-    fn from(val: f64) -> Self {
+impl From<Float> for Value {
+    fn from(val: Float) -> Self {
         Value::Floating(val)
     }
 }
@@ -210,7 +239,7 @@ impl Value {
     impl_value! { signed: Value::Signed => i64 }
     impl_value! { unsigned: Value::Unsigned => u64 }
     impl_value! { pointer: Value::Pointer => u64 }
-    impl_value! { floating: Value::Floating => f64 }
+    impl_value! { floating: Value::Floating => Float }
     impl_value! { binary: Value::Binary => Vec<u8> }
 }
 pub trait ValueVariants<'a> {
@@ -218,7 +247,7 @@ pub trait ValueVariants<'a> {
     fn signed(self) -> Option<Cow<'a, i64>>;
     fn unsigned(self) -> Option<Cow<'a, u64>>;
     fn pointer(self) -> Option<Cow<'a, u64>>;
-    fn floating(self) -> Option<Cow<'a, f64>>;
+    fn floating(self) -> Option<Cow<'a, Float>>;
     fn binary(self) -> Option<Cow<'a, [u8]>>;
 }
 macro_rules! impl_value_variants {
@@ -237,7 +266,7 @@ impl<'a> ValueVariants<'a> for Cow<'a, Value> {
     impl_value_variants! { signed: Value::Signed => i64 }
     impl_value_variants! { unsigned: Value::Unsigned => u64 }
     impl_value_variants! { pointer: Value::Pointer => u64 }
-    impl_value_variants! { floating: Value::Floating => f64 }
+    impl_value_variants! { floating: Value::Floating => Float }
     impl_value_variants! { binary: Value::Binary => [u8] }
 }
 
@@ -468,7 +497,7 @@ fn all_legal(res: &[&Result<ValueRef, EvalError>]) -> Result<(), EvalError> {
 }
 #[test]
 fn test_all_legal() {
-    assert!(all_legal(&[&Ok(Expr::from(34u64).value_ref()), &Ok(Expr::from(3.42).value_ref())]).is_ok());
+    assert!(all_legal(&[&Ok(Expr::from(34u64).value_ref()), &Ok(Expr::from(Float::with_val(PRECISION, 3.42)).value_ref())]).is_ok());
     assert!(all_legal(&[&Ok(Expr::from(54u64).value_ref()), &Err(EvalError::UndefinedSymbol("heloo".into()))]).is_ok());
     assert!(all_legal(&[&Err(EvalError::UndefinedSymbol("heloo".into())), &Err(EvalError::UndefinedSymbol("heloo".into()))]).is_ok());
     match all_legal(&[&Err(EvalError::Illegal(IllegalReason::IncompatibleType(OP::Not, ValueType::Floating))), &Err(EvalError::UndefinedSymbol("heloo".into()))]) {

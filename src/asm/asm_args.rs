@@ -3,9 +3,10 @@ use std::str::CharIndices;
 use std::collections::VecDeque;
 use std::borrow::Cow;
 use std::cell;
+use rug::Float;
 
 use super::*;
-use super::expr::{ExprData, OP, Value, ValueVariants};
+use super::expr::{ExprData, OP, Value, ValueVariants, PRECISION};
 
 macro_rules! err {
     ($self:expr, kind:$kind:ident, pos:$pos:expr) => {
@@ -86,8 +87,8 @@ fn test_valid_symname() {
     assert!(!is_valid_symbol_name("$foo"));
 }
 
-// grabs the first whitespace-separated token and returns it, along with the index just after it.
-// if no token is present, returns empty string and the index of one past the end of the string.
+/// Grabs the first whitespace-separated token and returns it, along with the index just after it.
+/// If no token is present, returns empty string and the index of one past the end of the input string.
 fn grab_whitespace_sep_token(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
     let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
         None => raw_stop,
@@ -103,6 +104,36 @@ fn grab_whitespace_sep_token(raw_line: &str, raw_start: usize, raw_stop: usize) 
 fn test_grab_ws_sep_token() {
     assert_eq!(grab_whitespace_sep_token("   \t hello world  ", 3, 18), ("hello", 10));
     assert_eq!(grab_whitespace_sep_token("    \t  ", 1, 7), ("", 7));
+    assert_eq!(grab_whitespace_sep_token("", 0, 0), ("", 0));
+}
+
+/// Trims all leading whitespace characters and returns the result and the index of the starting portion.
+/// If the string is empty or whitespace, returns empty string and one past the end of the input string.
+fn trim_start_with_pos(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
+    match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+        Some(p) => (&raw_line[raw_start + p..raw_stop], raw_start + p),
+        None => ("", raw_stop),
+    }
+}
+#[test]
+fn test_trim_start_with_pos() {
+    assert_eq!(trim_start_with_pos("   \t hello world  ", 3, 18), ("hello world  ", 5));
+    assert_eq!(trim_start_with_pos("    \t  ", 1, 7), ("", 7));
+    assert_eq!(trim_start_with_pos("", 0, 0), ("", 0));
+}
+
+fn parse_size_str(val: &str, success: usize, failure: usize) -> (Option<Size>, usize) {
+    match val {
+        "byte" | "BYTE" => (Some(Size::Byte), success),
+        "word" | "WORD" => (Some(Size::Word), success),
+        "dword" | "DWORD" => (Some(Size::Dword), success),
+        "qword" | "QWORD" => (Some(Size::Qword), success),
+        "xmmword" | "XMMWORD" => (Some(Size::Xmmword), success),
+        "ymmword" | "YMMWORD" => (Some(Size::Ymmword), success),
+        "zmmword" | "ZMMWORD" => (Some(Size::Zmmword), success),
+        "tword" | "TWORD" => (Some(Size::Tword), success),
+        _ => (None, failure)
+    }
 }
 
 pub(super) struct TimesInfo {
@@ -307,7 +338,7 @@ impl AssembleArgs {
                     // if there's not a next character we're either done (depth 0), or failed
                     None => {
                         if paren_depth == 0 { break (raw_stop, None); }
-                        else { println!("{}..{}", raw_start, raw_stop); return err!(self, kind: MissingCloseParen, pos: raw_stop); }
+                        else { return err!(self, kind: MissingCloseParen, pos: raw_stop); }
                     }
                     // otherwise account for important characters
                     Some((p, ch)) => match ch {
@@ -345,8 +376,8 @@ impl AssembleArgs {
                                 if let Some((op, aft)) = self.extract_binary_op(raw_line, parsing_pos + p, raw_stop) {
                                     break (parsing_pos + p, Some((op, aft))); // if we find a binary op, we're done
                                 }
-                                else if ch.is_whitespace() || ch == ',' {
-                                    break (parsing_pos + p, None); // otherwise if we're on whitespace or comma we're done (but we have no binary op)
+                                else if ch.is_whitespace() || ch == ',' || ch == ']' {
+                                    break (parsing_pos + p, None); // otherwise if we're on a term-breaking char we're done (but we have no binary op)
                                 }
                             }
                         }
@@ -478,9 +509,9 @@ impl AssembleArgs {
                             Ok(v) => v.into(),
                         }
                         true => match i64::from_str_radix(&term_fix, radix) {
-                            Err(_) => match term_fix.parse::<f64>() { // failed signed (int) could just mean that it's (signed) float
+                            Err(_) => match Float::parse(term_fix) { // failed signed (int) could just mean that it's (signed) float
                                 Err(_) => return err!(self, kind: IllFormedNumericLiteral, pos: term_start), // but if that fails too, it's a bust
-                                Ok(v) => v.into(),
+                                Ok(v) => Float::with_val(PRECISION, v).into(),
                             }
                             Ok(v) => v.into(),
                         }
@@ -613,36 +644,52 @@ impl AssembleArgs {
     pub(super) fn extract_imm(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Imm, usize), AsmError> {
         // check if we had an explicit size and get the expr start position (after size if present)
         let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
-        let (sizecode, expr_start) = match token {
-            "byte" | "BYTE" => (Some(Sizecode(0)), token_stop),
-            "word" | "WORD" => (Some(Sizecode(1)), token_stop),
-            "dword" | "DWORD" => (Some(Sizecode(2)), token_stop),
-            "qword" | "QWORD" => (Some(Sizecode(3)), token_stop),
-            _ => (None, raw_start),
-        };
+        let (size, expr_start) = parse_size_str(token, token_stop, raw_start);
 
         // and finally, read the expr
         let (expr, aft) = self.extract_expr(raw_line, expr_start, raw_stop)?;
-        Ok((Imm { expr, sizecode }, aft))
+        Ok((Imm { expr, size }, aft))
     }
     pub(super) fn extract_address(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Address, usize), AsmError> {
         // check if we had an explicit size and get the expr start position (after size if present)
         let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
-        let (sizecode, mut next_start) = match token {
-            "byte" | "BYTE" => (Some(Sizecode(0)), token_stop),
-            "word" | "WORD" => (Some(Sizecode(1)), token_stop),
-            "dword" | "DWORD" => (Some(Sizecode(2)), token_stop),
-            "qword" | "QWORD" => (Some(Sizecode(3)), token_stop),
-            "xmmword" | "XMMWORD" => (Some(Sizecode(4)), token_stop),
-            "ymmword" | "YMMWORD" => (Some(Sizecode(5)), token_stop),
-            "zmmword" | "ZMMWORD" => (Some(Sizecode(6)), token_stop),
-            _ => (None, raw_start),
-        };
-        if let Some(_) = sizecode { // explicit adderss size requires the ptr specifier
-            let (token, token_stop) = grab_whitespace_sep_token(raw_line, next_start, raw_stop);
-            match token {
-                "ptr" | "PTR" => next_start = token_stop,
-                _ => return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len()),
+        if token.is_empty() {
+            return err!(self, kind: ExpectedAddress, pos: raw_stop);
+        }
+        if let Some(p) = token.find('[') {
+            let token_fix = &token[..p];
+            if token_fix == "ptr" || token_fix == "PTR" {
+                return err!(self, kind: AddressPtrSpecWithoutSize, pos: token_stop - token.len());
+            }
+            if p != 0 { // if token has an open bracket that's not the first char then we have something bad
+                if parse_size_str(token_fix, 0, 0).0.is_some() { // if we can parse it as a size, then we're missing ptr spec
+                    return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len() + p);
+                }
+                else { // otherwise we have an unknown size
+                    return err!(self, kind: AddressSizeNotRecognized, pos: token_stop - token.len());
+                }
+            }
+        }
+        if token == "ptr" || token == "PTR" {
+            return err!(self, kind: AddressPtrSpecWithoutSize, pos: token_stop - token.len());
+        }
+        let (pointed_size, mut next_start) = parse_size_str(token, token_stop, raw_start);
+        match pointed_size {
+            Some(_) => { // explicit size requires the ptr specifier
+                let (mut token, mut token_stop) = grab_whitespace_sep_token(raw_line, next_start, raw_stop);
+                if let Some(p) = token.find('[') {
+                    token_stop -= token.len() - p; // chop off at an open bracket if we have one
+                    token = &token[..p];
+                }
+                match token {
+                    "ptr" | "PTR" => next_start = token_stop,
+                    _ => return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len()),
+                }
+            }
+            None => { // if we failed to parse the size, we must start with an open bracket (just the address component)
+                if token.chars().next() != Some('[') {
+                    return err!(self, kind: AddressSizeNotRecognized, pos: token_stop - token.len());
+                }
             }
         }
 
@@ -654,16 +701,152 @@ impl AssembleArgs {
         if raw_line[address_start..].chars().next().unwrap() != '[' {
             return err!(self, kind: ExpectedAddress, pos: address_start);
         }
-        let (imm, imm_aft) = self.extract_imm(raw_line, address_start + 1, raw_stop)?;
-        if raw_line[imm_aft..].trim_start().chars().next() != Some(']') {
-            return err!(self, kind: UnterminatedAddress, pos: imm_aft);
+        let (mut imm, imm_aft) = self.extract_imm(raw_line, address_start + 1, raw_stop)?;
+        let (tail, tail_start) = trim_start_with_pos(raw_line, imm_aft, raw_stop);
+        match tail.chars().next() {
+            Some(']') => (),
+            None => return err!(self, kind: UnterminatedAddress, pos: raw_stop),
+            Some(_) => return err!(self, kind: AddressInteriorNotSingleExpr, pos: tail_start),
+        }
+        if let Some(size) = imm.size {
+            match size {
+                Size::Word | Size::Dword | Size::Qword => (),
+                _ => return err!(self, kind: AddressSizeUnsupported, pos: address_start),
+            }
         }
 
         // now we need to handle all the register arithmetic stuff
+        let mut r1: Option<(u8, u8)> = None; // reg id and multiplier
+        let mut r2: Option<u8> = None; // reg id
+        for reg in CPU_REGISTER_INFO.iter() {
+            if let Some(mult) = self.get_reg_mult(reg.0, &imm.expr, address_start)? { // see if this register is present in the expression
+                if reg.1.high { // first of all, high registers are not allowed (this is just for better error messages)
+                    return err!(self, kind: AddressUseOfHighRegister, pos: address_start);
+                }
 
+                let mut mult = match mult.eval(&self.file.symbols) { // if it is then it must be a critical expression
+                    Ok(mut val) => match &*val.take_or_borrow() {
+                        Value::Signed(v) => *v,
+                        _ => return err!(self, kind: AddressRegMultNotSignedInt, pos: address_start),
+                    },
+                    Err(_) => return err!(self, kind: AddressRegMultNotCriticalExpr, pos: address_start),
+                };
+                if mult == 0 { continue; } // if it's zero then it canceled out and we don't need it
 
+                match imm.size { 
+                    None => imm.size = Some(reg.1.size), // if we don't already have a required size, set it to this register size
+                    Some(size) => if size != reg.1.size { // otherwise enforce pre-existing value
+                        return err!(self, kind: AddressConflictingSizes, pos: address_start);
+                    }
+                }
 
-        unimplemented!()
+                // if the multiplier is trivial or has a trivial component (of 1)
+                if mult & 1 != 0 {
+                    mult &= !1; // remove the trivial component
+                    if r2.is_none() { r2 = Some(reg.1.id); } // prioritize putting it in r2 since r2 can't have a multiplier (other than 1)
+                    else if r1.is_none() { r1 = Some((reg.1.id, 0)); } // otherwise we have to put it in r1 and give it a multiplier of 1 (mult code 0)
+                    else { return err!(self, kind: AddressTooManyRegs, pos: address_start); } // if we don't have anywhere to put it, failure
+                }
+                // now, if a (non-trivial) component is present
+                if mult != 0 {
+                    let multcode = match mult { // decode the multiplier into its sizecode equivalent
+                        1 => 0,
+                        2 => 1,
+                        4 => 2,
+                        8 => 3,
+                        _ => return err!(self, kind: AddressRegInvalidMult, pos: address_start),
+                    };
+
+                    if r1.is_none() { r1 = Some((reg.1.id, multcode)); }
+                    else { return err!(self, kind: AddressTooManyRegs, pos: address_start); }
+                }
+            }
+        }
+
+        let size = match imm.size {
+            None => Size::Qword, // if we still don't have an explicit address size, use 64-bit
+            Some(size) => match size {
+                Size::Word | Size::Dword | Size::Qword => size,
+                _ => return err!(self, kind: AddressSizeUnsupported, pos: address_start), // unsupported addressing modes
+            }
+        };
+        let base = {
+            let present = match imm.expr.eval(&self.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => *v != 0, // if it's nonzero we have to keep it
+                    _ => return err!(self, kind: AddressTypeUnsupported, pos: address_start), // if it's some other type it's invalid
+                }
+                Err(_) => true, // failure to evaluate means we can't statically elide it, so we assume it's present
+            };
+            if present { Some(imm.expr) } else { None }
+        };
+
+        //TODO: move this logic into the address writer insted of pre-computing it here
+        // [1: base][1:][2: mult_1][2: size][1: r1][1: r2]   ([4: r1][4: r2])   ([size: base])
+        // let a = (if base.is_some() { 0x80 } else { 0 }) | (r1.unwrap_or((0, 0)).1 << 4) | (size << 2) | (if r1.is_some() { 2 } else { 0 }) | (if r2.is_some() { 1 } else { 0 });
+        // let b = (r1.unwrap_or((0, 0)).0 << 4) | r2.unwrap_or(0);
+        Ok((Address { size, r1, r2, base, pointed_size }, imm_aft + 1))
+    }
+    fn get_reg_mult(&self, reg: &str, expr: &Expr, err_pos: usize) -> Result<Option<Expr>, AsmError> {
+        let handle = &mut *expr.data.borrow_mut();
+        match handle {
+            ExprData::Value(_) => Ok(None),
+            ExprData::Ident(ident) => {
+                if ident.eq_ignore_ascii_case(reg) {
+                    *handle = 0i64.into(); // if we got a register, replace it with zero
+                    Ok(Some(1i64.into())) // report a multiplier of 1
+                }
+                else {
+                    Ok(None)
+                }
+            }
+            ExprData::Uneval { op, left, right } => {
+                let a = match left.as_ref() {
+                    None => return err!(self, kind: IllFormedExpr, pos: err_pos),
+                    Some(x) => self.get_reg_mult(reg, x, err_pos)?,
+                };
+                match op {
+                    OP::Neg => {
+                        if let Some(_) = right.as_ref() { return err!(self, kind: IllFormedExpr, pos: err_pos); }
+                        Ok(a.map(|t| (OP::Neg, t).into())) // just return the negative if we had something
+                    }
+                    OP::Add | OP::Sub => {
+                        let b = match right.as_ref() {
+                            None => return err!(self, kind: IllFormedExpr, pos: err_pos),
+                            Some(x) => self.get_reg_mult(reg, x, err_pos)?,
+                        };
+                        
+                        // if neither existed, return None, otherwise combine them with defaults of 0 if either is not present
+                        if a.is_none() && b.is_none() { Ok(None) }
+                        else { Ok(Some((*op, a.unwrap_or(0i64.into()), b.unwrap_or(0i64.into())).into())) }
+                    }
+                    OP::Mul => match a { // reg must not be present in both branches - this is done by allowing either as wildcard, which will always fail to evaluate
+                        Some(a) => Ok(Some((OP::Mul, a, (**right.as_ref().unwrap()).clone()).into())), // return what we got times the other side (currently unmodified due to not recursing to it)
+                        None => {
+                            let b = match right.as_ref() {
+                                None => return err!(self, kind: IllFormedExpr, pos: err_pos),
+                                Some(x) => self.get_reg_mult(reg, x, err_pos)?,
+                            };
+                            match b {
+                                Some(b) => Ok(Some((OP::Mul, (**left.as_ref().unwrap()).clone(), b).into())), // return what we got times the other side (currently unmodified do to left returning None)
+                                None => Ok(None), // if we got nothing for both, report nothing
+                            }
+                        }
+                    }
+                    _ => { // for any other (unsuported) operation, just ensure that the register was not present
+                        if let Some(_) = a {
+                            return err!(self, kind: AddressRegIllegalOp, pos: err_pos);
+                        }
+                        if let Some(v) = right.as_ref() {
+                            if let Some(_) = self.get_reg_mult(reg, v, err_pos)? {
+                                return err!(self, kind: AddressRegIllegalOp, pos: err_pos);
+                            }
+                        }
+                        Ok(None)
+                    }
+                }
+            }
+        }
     }
 
     pub(super) fn parse_arg(&mut self, arg: &str) -> Result<Argument, AsmError> {
@@ -783,14 +966,14 @@ fn test_extr_string() {
         }
         Err(_) => panic!(),
     }
-    match c.extract_string("hello      ' wo rld'  ", 12, 22) {
+    match c.extract_string("hello      ' wo rld' b ", 12, 22) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.kind, AsmErrorKind::ExpectedString);
             assert_eq!(e.pos, 13);
         }
     }
-    match c.extract_string("hello      ' wo rld'  ", 5, 19) {
+    match c.extract_string("hello      ' wo rld'y ", 5, 19) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.kind, AsmErrorKind::IncompleteString);
@@ -839,7 +1022,7 @@ fn test_extr_string() {
         }
         Err(_) => panic!(),
     }
-    match c.extract_string("  '\\y'", 2, 6) {
+    match c.extract_string("  '\\y'y", 2, 7) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.kind, AsmErrorKind::InvalidEscape);
@@ -946,7 +1129,7 @@ fn test_extr_expr() {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
             match expr.eval(&s).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Floating(val)) => assert!((val - 3.14).abs() < 0.00000001),
+                Cow::Owned(Value::Floating(val)) => assert!(Float::from(val - 3.14).abs() < 0.00000001),
                 _ => panic!(),
             }
         }
@@ -973,7 +1156,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("(5+1)*(5-1)", 0, 11) {
+    match c.extract_expr("(5+1)*(5-1) g", 0, 13) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 11);
             match expr.eval(&s).unwrap().take_or_borrow() {
@@ -983,7 +1166,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("  (  5-3 )     *--+ -(5 -1)  ", 1, 29) {
+    match c.extract_expr("  (  5-3 )     *--+ -(5 -1)f  ", 1, 30) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 27);
             match expr.eval(&s).unwrap().take_or_borrow() {
@@ -1048,5 +1231,340 @@ fn test_ptriff() {
             }
         }
         Err(e) => panic!("{:?}", e),
+    }
+}
+#[test]
+fn test_numeric_formats() {
+    let mut c = create_context();
+    match c.extract_expr("0x2Ff4", 0, 6) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 6);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 0x2Ff4),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("0x2Ff4u", 0, 7) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 7);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Unsigned(v) => assert_eq!(*v, 0x2Ff4),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("0o23_34", 0, 7) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 7);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 0o23_34),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("0o23_34_u", 0, 9) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 9);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Unsigned(v) => assert_eq!(*v, 0o23_34),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("0b1011_0010", 0, 11) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 11);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 0b1011_0010),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("0b1011_0010u", 0, 12) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 12);
+            match expr.eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Unsigned(v) => assert_eq!(*v, 0b1011_0010),
+                    x => panic!("unexpected type: {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+}
+#[test]
+fn test_address_parser() {
+    let mut c = create_context();
+    match c.extract_address("   dword     ptr  [0x2334]  ", 2, 28) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 26);
+            assert_eq!(addr.size, Size::Qword);
+            assert_eq!(addr.r1, None);
+            assert_eq!(addr.r2, None);
+            assert_eq!(addr.pointed_size, Some(Size::Dword));
+            match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 0x2334),
+                    x => panic!("unexpected type {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address(".  tword     ptr  [4*eax] _", 2, 27) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 25);
+            assert_eq!(addr.size, Size::Dword);
+            assert_eq!(addr.r1, Some((0, 2)));
+            assert_eq!(addr.r2, None);
+            assert_eq!(addr.pointed_size, Some(Size::Tword));
+            assert!(addr.base.is_none());
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("   tword     ptr  [ax+bx]  ", 2, 27) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 25);
+            assert_eq!(addr.size, Size::Word);
+            assert_eq!(addr.r1.unwrap().1, 0);
+            assert_eq!(addr.r1.unwrap().0 + addr.r2.unwrap(), 1);
+            assert_eq!(addr.pointed_size, Some(Size::Tword));
+            assert!(addr.base.is_none());
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("   zmmword     ptr  [4*(r8d + 7)]   ", 2, 36) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 33);
+            assert_eq!(addr.size, Size::Dword);
+            assert_eq!(addr.r1, Some((8, 2)));
+            assert_eq!(addr.r2, None);
+            assert_eq!(addr.pointed_size, Some(Size::Zmmword));
+            match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 28),
+                    x => panic!("unexpected type {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("  [4*(4 * (2 + r8) + (7 + -r8 * (1 + 1 * 1))) + r8] g ", 2, 54) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 51);
+            assert_eq!(addr.size, Size::Qword);
+            assert_eq!(addr.r1, Some((8, 3)));
+            assert_eq!(addr.r2, Some(8));
+            assert_eq!(addr.pointed_size, None);
+            match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
+                Ok(v) => match &*v {
+                    Value::Signed(v) => assert_eq!(*v, 60),
+                    x => panic!("unexpected type {:?}", x),
+                }
+                Err(e) => panic!("{:?}", e),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("[5*ax] extra stuff after", 0, 24) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 6);
+            assert_eq!(addr.size, Size::Word);
+            assert_eq!(addr.r1, Some((0, 2)));
+            assert_eq!(addr.r2, Some(0));
+            assert_eq!(addr.pointed_size, None);
+            assert!(addr.base.is_none());
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("   5 * ax]  ", 2, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 3);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+        }
+    }
+    match c.extract_address("   [5 * ax  ", 2, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 12);
+            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+        }
+    }
+    match c.extract_address("   word [5 * ax  ", 2, 17) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 8);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
+        }
+    }
+    match c.extract_address("   word[5 * ax  ", 2, 16) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 7);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
+        }
+    }
+    match c.extract_address("   word ptr[5 * ax  ", 2, 20) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 20);
+            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+        }
+    }
+    match c.extract_address("   word ptr[9 * ax]  ", 2, 21) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 19);
+            assert_eq!(addr.size, Size::Word);
+            assert_eq!(addr.r1, Some((0, 3)));
+            assert_eq!(addr.r2, Some(0));
+            assert_eq!(addr.pointed_size, Some(Size::Word));
+            assert!(addr.base.is_none());
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_address("  word ptr[   ]  ", 1, 17) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 14);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+        }
+    }
+    match c.extract_address("  word ptr[]  ", 1, 14) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 11);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+        }
+    }
+    match c.extract_address("  word ptr[a b]  ", 1, 17) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 13);
+            assert_eq!(e.kind, AsmErrorKind::AddressInteriorNotSingleExpr);
+        }
+    }
+    match c.extract_address("  ptr[45]  ", 1, 11) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize);
+        }
+    }
+    match c.extract_address("  ptr [45]  ", 1, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize);
+        }
+    }
+    match c.extract_address("  sefsfsd[45]  ", 1, 11) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+        }
+    }
+    match c.extract_address("  sefsfsd [45]  ", 1, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+        }
+    }
+    match c.extract_address("          ", 1, 10) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 10);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedAddress);
+        }
+    }
+    match c.extract_address("  [  byte 45]   ", 1, 16) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  [tword 45]   ", 1, 15) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  [ xmmword 45]   ", 1, 18) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  [ ymmword 45]   ", 1, 18) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  [ zmmword 45]   ", 1, 18) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  word ptr [al]   ", 1, 18) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 11);
+            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+        }
+    }
+    match c.extract_address("  [ah]   ", 1, 9) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressUseOfHighRegister);
+        }
+    }
+    match c.extract_address("  [ax*bx]   ", 1, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
+        }
+    }
+    match c.extract_address("  [ax*ax]   ", 1, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
+        }
     }
 }
