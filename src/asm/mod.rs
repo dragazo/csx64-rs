@@ -5,6 +5,7 @@ use std::io::{self, Read, Write};
 
 pub mod binary_set;
 pub mod expr;
+pub mod caseless;
 mod constants;
 mod asm_args;
 
@@ -67,6 +68,8 @@ pub enum AsmErrorKind {
     FailedParseFPURegister,
     FailedParseVPURegister,
 
+    RegisterWithSizeSpec,
+
     FailedCriticalExpression,
 }
 
@@ -78,7 +81,7 @@ pub struct AsmError {
     pub pos: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Imm {
     expr: Expr,
     size: Option<Size>, // size of the value
@@ -93,7 +96,7 @@ struct Address {
     pointed_size: Option<Size>, // size of the pointed-to value (not the address itself)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Argument {
     CPURegister(CPURegisterInfo),
     FPURegister(FPURegisterInfo),

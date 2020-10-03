@@ -7,6 +7,7 @@ use rug::Float;
 
 use super::*;
 use super::expr::{ExprData, OP, Value, ValueVariants, PRECISION};
+use super::caseless::Caseless;
 
 macro_rules! err {
     ($self:expr, kind:$kind:ident, pos:$pos:expr) => {
@@ -123,16 +124,9 @@ fn test_trim_start_with_pos() {
 }
 
 fn parse_size_str(val: &str, success: usize, failure: usize) -> (Option<Size>, usize) {
-    match val {
-        "byte" | "BYTE" => (Some(Size::Byte), success),
-        "word" | "WORD" => (Some(Size::Word), success),
-        "dword" | "DWORD" => (Some(Size::Dword), success),
-        "qword" | "QWORD" => (Some(Size::Qword), success),
-        "xmmword" | "XMMWORD" => (Some(Size::Xmmword), success),
-        "ymmword" | "YMMWORD" => (Some(Size::Ymmword), success),
-        "zmmword" | "ZMMWORD" => (Some(Size::Zmmword), success),
-        "tword" | "TWORD" => (Some(Size::Tword), success),
-        _ => (None, failure)
+    match SIZE_KEYWORDS.get(&Caseless(val)) {
+        Some(size) => (Some(*size), success),
+        None => (None, failure),
     }
 }
 
@@ -595,7 +589,7 @@ impl AssembleArgs {
         let target = match &*expr.data.borrow() {
             ExprData::Value(_) => return None,
             ExprData::Ident(ident) => {
-                if ident == base { return Some(Value::Pointer(0).into()); } // if this is the base itself, offset is zero
+                if ident == base { return Some(Value::Signed(0).into()); } // if this is the base itself, offset is zero (signed because we want the offset value)
                 match self.file.symbols.get(ident) {
                     None => return None,
                     Some(symbol) => symbol,
@@ -604,8 +598,11 @@ impl AssembleArgs {
             ExprData::Uneval { op: _, left: _, right: _ } => expr,
         };
         match &*target.data.borrow() {
-            ExprData::Uneval { op: OP::Add, left, right } => match &*left.as_ref().unwrap().data.borrow() {
-                ExprData::Ident(ident) if ident == base => Some((**right.as_ref().unwrap()).clone()),
+            ExprData::Uneval { op: OP::Add, left, right } => match &*left.as_ref().unwrap().data.borrow() { // unwraps are ok cause we know we generated the value just before
+                ExprData::Ident(ident) if ident == base => match &*right.as_ref().unwrap().data.borrow() {
+                    ExprData::Value(Value::Signed(v)) => Some((*v).into()), // rhs of address should always be a signed constant (never needs to be evaluated)
+                    _ => panic!("address improperly constructed"),
+                }
                 _ => None,
             }
             _ => None,
@@ -658,7 +655,7 @@ impl AssembleArgs {
         }
         if let Some(p) = token.find('[') {
             let token_fix = &token[..p];
-            if token_fix == "ptr" || token_fix == "PTR" {
+            if Caseless(token_fix) == Caseless("PTR") {
                 return err!(self, kind: AddressPtrSpecWithoutSize, pos: token_stop - token.len());
             }
             if p != 0 { // if token has an open bracket that's not the first char then we have something bad
@@ -670,7 +667,7 @@ impl AssembleArgs {
                 }
             }
         }
-        if token == "ptr" || token == "PTR" {
+        if Caseless(token) == Caseless("PTR") {
             return err!(self, kind: AddressPtrSpecWithoutSize, pos: token_stop - token.len());
         }
         let (pointed_size, mut next_start) = parse_size_str(token, token_stop, raw_start);
@@ -681,10 +678,8 @@ impl AssembleArgs {
                     token_stop -= token.len() - p; // chop off at an open bracket if we have one
                     token = &token[..p];
                 }
-                match token {
-                    "ptr" | "PTR" => next_start = token_stop,
-                    _ => return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len()),
-                }
+                if Caseless(token) == Caseless("PTR") { next_start = token_stop; }
+                else { return err!(self, kind: AddressSizeMissingPtr, pos: token_stop - token.len()); }
             }
             None => { // if we failed to parse the size, we must start with an open bracket (just the address component)
                 if token.chars().next() != Some('[') {
@@ -719,7 +714,7 @@ impl AssembleArgs {
         let mut r1: Option<(u8, u8)> = None; // reg id and multiplier
         let mut r2: Option<u8> = None; // reg id
         for reg in CPU_REGISTER_INFO.iter() {
-            if let Some(mult) = self.get_reg_mult(reg.0, &imm.expr, address_start)? { // see if this register is present in the expression
+            if let Some(mult) = self.get_reg_mult(*reg.0, &imm.expr, address_start)? { // see if this register is present in the expression
                 if reg.1.high { // first of all, high registers are not allowed (this is just for better error messages)
                     return err!(self, kind: AddressUseOfHighRegister, pos: address_start);
                 }
@@ -787,12 +782,12 @@ impl AssembleArgs {
         // let b = (r1.unwrap_or((0, 0)).0 << 4) | r2.unwrap_or(0);
         Ok((Address { size, r1, r2, base, pointed_size }, imm_aft + 1))
     }
-    fn get_reg_mult(&self, reg: &str, expr: &Expr, err_pos: usize) -> Result<Option<Expr>, AsmError> {
+    fn get_reg_mult(&self, reg: Caseless<'_>, expr: &Expr, err_pos: usize) -> Result<Option<Expr>, AsmError> {
         let handle = &mut *expr.data.borrow_mut();
         match handle {
             ExprData::Value(_) => Ok(None),
             ExprData::Ident(ident) => {
-                if ident.eq_ignore_ascii_case(reg) {
+                if Caseless(ident) == reg {
                     *handle = 0i64.into(); // if we got a register, replace it with zero
                     Ok(Some(1i64.into())) // report a multiplier of 1
                 }
@@ -849,35 +844,32 @@ impl AssembleArgs {
         }
     }
 
-    pub(super) fn parse_arg(&mut self, arg: &str) -> Result<Argument, AsmError> {
-        debug_assert_eq!(arg, arg.trim());
+    /// Attempts to extract an argument from the string, be it a register, address, or imm.
+    /// On success, returns the extracted argument and the index just after it.
+    /// On failure, the returned error is from imm extraction due to being the most general.
+    pub(super) fn extract_arg(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Argument, usize), AsmError> {
+        // first, try address, since they could parse as an expr if given explicit size
+        if let Ok((addr, aft)) = self.extract_address(raw_line, raw_start, raw_stop) {
+            return Ok((Argument::Address(addr), aft));
+        }
+        // then parse as imm - all registers are parseable as imm, then we extract them separately
+        let (imm, aft) = self.extract_imm(raw_line, raw_start, raw_stop)?;
+        // if it was only an identifier, it might be a register
+        if let ExprData::Ident(ident) = &*imm.expr.data.borrow() {
+            let res = if let Some(reg) = CPU_REGISTER_INFO.get(&Caseless(ident)) { Some(Argument::CPURegister(*reg)) }
+            else if let Some(reg) = FPU_REGISTER_INFO.get(&Caseless(ident)) { Some(Argument::FPURegister(*reg)) }
+            else if let Some(reg) = VPU_REGISTER_INFO.get(&Caseless(ident)) { Some(Argument::VPURegister(*reg)) }
+            else { None };
 
-        // handle all the register types first
-        if let Some(reg) = CPU_REGISTER_INFO.get(arg) {
-            return Ok(Argument::CPURegister(*reg));
-        }
-        if let Some(reg) = FPU_REGISTER_INFO.get(arg) {
-            return Ok(Argument::FPURegister(*reg));
-        }
-        if let Some(reg) = VPU_REGISTER_INFO.get(arg) {
-            return Ok(Argument::VPURegister(*reg));
-        }
-
-        // otherwise we know it's either an address or an expr - decide based on the last character
-        if arg.chars().rev().next().unwrap() == ']' {
-            let (res, aft) = self.extract_address(arg, 0, arg.len())?;
-            if aft != arg.len() {
-                return err!(self, kind: FailedParseAddress, pos: 0);
+            if let Some(res) = res {
+                if let Some(_) = imm.size { // if it is indeed a register, we should not have a size specifier
+                    return err!(self, kind: RegisterWithSizeSpec, pos: aft - ident.len());
+                }
+                return Ok((res, aft));
             }
-            Ok(Argument::Address(res))
         }
-        else {
-            let (res, aft) = self.extract_imm(arg, 0, arg.len())?;
-            if aft != arg.len() {
-                return err!(self, kind: FailedParseImm, pos: 0);
-            }
-            Ok(Argument::Imm(res))
-        }
+        // otherwise it was an expression
+        Ok((Argument::Imm(imm), aft))
     }
 }
 
@@ -1083,12 +1075,10 @@ fn test_extr_string() {
 #[test]
 fn test_extr_expr() {
     let mut c = create_context();
-    let s = SymbolTable::new();
-
     match c.extract_expr("true", 0, 4) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Logical(val)) => assert_eq!(val, true),
                 _ => panic!(),
             }
@@ -1098,7 +1088,7 @@ fn test_extr_expr() {
     match c.extract_expr("false", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Logical(val)) => assert_eq!(val, false),
                 _ => panic!(),
             }
@@ -1108,7 +1098,7 @@ fn test_extr_expr() {
     match c.extract_expr("5", 0, 1) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 1);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 5),
                 _ => panic!(),
             }
@@ -1118,7 +1108,7 @@ fn test_extr_expr() {
     match c.extract_expr("7u", 0, 2) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 2);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Unsigned(val)) => assert_eq!(val, 7),
                 _ => panic!(),
             }
@@ -1128,18 +1118,17 @@ fn test_extr_expr() {
     match c.extract_expr("3.14", 0, 4) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Floating(val)) => assert!(Float::from(val - 3.14).abs() < 0.00000001),
                 _ => panic!(),
             }
         }
         Err(e) => panic!("{:?}", e),
     }
-
     match c.extract_expr("5+8", 0, 3) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 3);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 13),
                 _ => panic!(),
             }
@@ -1149,7 +1138,7 @@ fn test_extr_expr() {
     match c.extract_expr("5+8*2-1", 0, 7) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 7);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 20),
                 _ => panic!(),
             }
@@ -1159,7 +1148,7 @@ fn test_extr_expr() {
     match c.extract_expr("(5+1)*(5-1) g", 0, 13) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 11);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 24),
                 _ => panic!(),
             }
@@ -1169,7 +1158,7 @@ fn test_extr_expr() {
     match c.extract_expr("  (  5-3 )     *--+ -(5 -1)f  ", 1, 30) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 27);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, -8),
                 _ => panic!(),
             }
@@ -1179,7 +1168,7 @@ fn test_extr_expr() {
     match c.extract_expr("$if(true,6 / -2,3 << 2)", 0, 23) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 23);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, -3),
                 _ => panic!(),
             }
@@ -1189,7 +1178,7 @@ fn test_extr_expr() {
     match c.extract_expr("   $if(  false == true  ,    6 / -  2 ,  3 << 2   )  ", 1, 53) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 51);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 12),
                 _ => panic!(),
             }
@@ -1200,12 +1189,12 @@ fn test_extr_expr() {
 #[test]
 fn test_ptriff() {
     let mut c = create_context();
-    let s = SymbolTable::new();
-
+    c.file.symbols.define("foo".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 10i64).into()).unwrap();
+    c.file.symbols.define("bar".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 14i64).into()).unwrap();
     match c.extract_expr("$-$", 0, 3) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 3);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
@@ -1215,7 +1204,7 @@ fn test_ptriff() {
     match c.extract_expr("    $ + 3  + 3 - 1 - 2  - -- $ - 2 + 1  ", 2, 40) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 38);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 2),
                 _ => panic!(),
             }
@@ -1225,8 +1214,48 @@ fn test_ptriff() {
     match c.extract_expr("5*(($ + 8)-($ - 3))", 0, 19) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 19);
-            match expr.eval(&s).unwrap().take_or_borrow() {
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
                 Cow::Owned(Value::Signed(val)) => assert_eq!(val, 55),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("foo-foo", 0, 7) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 7);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("foo-$", 0, 5) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 5);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 10),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("$-foo", 0, 5) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 5);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -10),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("bar-foo", 0, 7) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 7);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 4),
                 _ => panic!(),
             }
         }
@@ -1346,6 +1375,17 @@ fn test_address_parser() {
         }
         Err(e) => panic!("{:?}", e),
     }
+    match c.extract_address(".  tword     ptr  [3*eax + EaX] _", 2, 33) {
+        Ok((addr, aft)) => {
+            assert_eq!(aft, 31);
+            assert_eq!(addr.size, Size::Dword);
+            assert_eq!(addr.r1, Some((0, 2)));
+            assert_eq!(addr.r2, None);
+            assert_eq!(addr.pointed_size, Some(Size::Tword));
+            assert!(addr.base.is_none());
+        }
+        Err(e) => panic!("{:?}", e),
+    }
     match c.extract_address("   tword     ptr  [ax+bx]  ", 2, 27) {
         Ok((addr, aft)) => {
             assert_eq!(aft, 25);
@@ -1357,7 +1397,7 @@ fn test_address_parser() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_address("   zmmword     ptr  [4*(r8d + 7)]   ", 2, 36) {
+    match c.extract_address("   zmMword     ptr  [4*(r8d + 7)]   ", 2, 36) {
         Ok((addr, aft)) => {
             assert_eq!(aft, 33);
             assert_eq!(addr.size, Size::Dword);
@@ -1374,7 +1414,7 @@ fn test_address_parser() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_address("  [4*(4 * (2 + r8) + (7 + -r8 * (1 + 1 * 1))) + r8] g ", 2, 54) {
+    match c.extract_address("  [4*(4 * (2 + r8) + (7 + -r8 * (1 + 1 * 1))) + R8] g ", 2, 54) {
         Ok((addr, aft)) => {
             assert_eq!(aft, 51);
             assert_eq!(addr.size, Size::Qword);
@@ -1423,14 +1463,14 @@ fn test_address_parser() {
             assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
         }
     }
-    match c.extract_address("   word[5 * ax  ", 2, 16) {
+    match c.extract_address("   wOrd[5 * ax  ", 2, 16) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.pos, 7);
             assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
         }
     }
-    match c.extract_address("   word ptr[5 * ax  ", 2, 20) {
+    match c.extract_address("   WORD ptr[5 * ax  ", 2, 20) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.pos, 20);
@@ -1448,7 +1488,7 @@ fn test_address_parser() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_address("  word ptr[   ]  ", 1, 17) {
+    match c.extract_address("  word pTr[   ]  ", 1, 17) {
         Ok(_) => panic!(),
         Err(e) => {
             assert_eq!(e.pos, 14);
@@ -1565,6 +1605,37 @@ fn test_address_parser() {
         Err(e) => {
             assert_eq!(e.pos, 2);
             assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
+        }
+    }
+}
+#[test]
+fn test_parse_arg() {
+    let mut c = create_context();
+    match c.extract_arg("g RaX g", 1, 7).unwrap() {
+        (Argument::CPURegister(CPURegisterInfo { id: 0, size: Size::Qword, high: false }), 5) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g sT0 g", 1, 7).unwrap() {
+        (Argument::FPURegister(FPURegisterInfo { id: 0 }), 5) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g XmM0 g", 1, 8).unwrap() {
+        (Argument::VPURegister(VPURegisterInfo { id: 0, size: Size::Xmmword }), 6) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g bYte PtR [20+rax] g", 1, 21).unwrap() {
+        (Argument::Address(Address { .. }), 19) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g foo + bar g", 1, 13).unwrap() {
+        (Argument::Imm(Imm { .. }), 11) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("       ", 1, 7) {
+        Ok(x) => panic!("{:?}", x),
+        Err(e) => {
+            assert_eq!(e.pos, 7);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
         }
     }
 }
