@@ -2,7 +2,6 @@
 //! 
 //! This is used to support reading/writing extended precision fp values for `tword` loads in the FPU.
 
-use std::borrow::Cow;
 use std::num::FpCategory;
 use std::cmp::Ordering;
 use std::convert::TryInto;

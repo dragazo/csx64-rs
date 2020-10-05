@@ -1,26 +1,11 @@
 use std::collections::{HashMap, BTreeMap, BTreeSet};
 
 use super::expr::*;
-use super::Size;
+use super::{Size, AsmSegment};
 use super::caseless::Caseless;
-
-bitflags! {
-    pub(super) struct AsmSegment: u8 {
-        const TEXT = 1;
-        const RODATA = 2;
-        const DATA = 4;
-        const BSS = 8;
-    }
-}
 
 pub(super) const COMMENT_CHAR: char = ';';
 pub(super) const LABEL_DEF_CHAR: char = ':';
-
-pub(super) const CURRENT_LINE_MACRO: &str = "$";
-pub(super) const START_OF_SEG_MACRO: &str = "$$";
-pub(super) const TIMES_ITER_MACRO: &str = "$I";
-
-pub(super) const POINTER_MACRO: &str = "$PTR";
 
 // these must be ordered in descending order of length to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
@@ -105,51 +90,26 @@ lazy_static! {
     };
 }
 
-lazy_static! {
-    pub(super) static ref SEG_OFFSETS: HashMap<AsmSegment, &'static str> = {
-        let mut m = HashMap::new();
-
-        m.insert(AsmSegment::TEXT, "#t");
-        m.insert(AsmSegment::RODATA, "#r");
-        m.insert(AsmSegment::DATA, "#d");
-        m.insert(AsmSegment::BSS, "#b");
-
-        m
-    };
+pub(super) fn get_seg_offset_str(seg: AsmSegment) -> &'static str {
+    match seg {
+        AsmSegment::Text => "#t",
+        AsmSegment::Rodata => "#r",
+        AsmSegment::Data => "#d",
+        AsmSegment::Bss => "#b",
+    }
+}
+pub(super) fn get_seg_origin_str(seg: AsmSegment) -> &'static str {
+    match seg {
+        AsmSegment::Text => "#T",
+        AsmSegment::Rodata => "#R",
+        AsmSegment::Data => "#D",
+        AsmSegment::Bss => "#B",
+    }
 }
 
-lazy_static! {
-    pub(super) static ref SEG_ORIGINS: HashMap<AsmSegment, &'static str> = {
-        let mut m = HashMap::new();
-
-        m.insert(AsmSegment::TEXT, "#T");
-        m.insert(AsmSegment::RODATA, "#R");
-        m.insert(AsmSegment::DATA, "#D");
-        m.insert(AsmSegment::BSS, "#B");
-
-        m
-    };
-}
 pub(super) const BINARY_LITERAL_SYMBOL_PREFIX: &str = "#L";
 
 pub(super) const PTRDIFF_IDS: &[&'static str] = &["#t", "#r", "#d", "#b", "#T", "#R", "#D", "#B"];
-
-lazy_static! {
-    pub(super) static ref ADDITIONAL_RESERVED_SYMBOLS: BTreeSet<Caseless<'static>> = {
-        let mut s = BTreeSet::new();
-
-        s.insert(Caseless("BYTE"));
-        s.insert(Caseless("WORD"));
-        s.insert(Caseless("DWORD"));
-        s.insert(Caseless("QWORD"));
-        s.insert(Caseless("XMMWORD"));
-        s.insert(Caseless("YMMWORD"));
-        s.insert(Caseless("ZMMWORD"));
-        s.insert(Caseless("TWORD"));
-
-        s
-    };
-}
 
 lazy_static! {
     pub(super) static ref SIZE_KEYWORDS: BTreeMap<Caseless<'static>, Size> = {
@@ -358,29 +318,39 @@ lazy_static! {
     };
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Instruction {
+    NOP,
+}
+
 lazy_static! {
-    static ref VALID_LOCK_INSTRUCTIONS: BTreeSet<Caseless<'static>> = {
+    pub(super) static ref INSTRUCTIONS: BTreeMap<Caseless<'static>, Instruction> = {
+        let mut m = BTreeMap::new();
+        
+        m.insert(Caseless("NOP"), Instruction::NOP);
+
+        m
+    };
+}
+
+lazy_static! {
+    pub(super) static ref RESERVED_SYMBOLS: BTreeSet<Caseless<'static>> = {
         let mut s = BTreeSet::new();
 
-        s.insert(Caseless("ADD"));
-        s.insert(Caseless("ADC"));
-        s.insert(Caseless("AND"));
-        s.insert(Caseless("BTC"));
-        s.insert(Caseless("BTR"));
-        s.insert(Caseless("BTS"));
-        s.insert(Caseless("CMPXCHG"));
-        s.insert(Caseless("CMPXCHG8B"));
-        s.insert(Caseless("CMPXCHG16B"));
-        s.insert(Caseless("DEC"));
-        s.insert(Caseless("INC"));
-        s.insert(Caseless("NEG"));
-        s.insert(Caseless("NOT"));
-        s.insert(Caseless("OR"));
-        s.insert(Caseless("SBB"));
-        s.insert(Caseless("SUB"));
-        s.insert(Caseless("XOR"));
-        s.insert(Caseless("XADD"));
-        s.insert(Caseless("XCHG"));
+        s.insert(Caseless("IF"));
+        s.insert(Caseless("TIMES"));
+
+        s.insert(Caseless("TRUE"));
+        s.insert(Caseless("FALSE"));
+        s.insert(Caseless("NULL"));
+
+        s.insert(Caseless("PTR"));
+
+        for (siz, _) in SIZE_KEYWORDS.iter() { s.insert(*siz); }
+        for (reg, _) in CPU_REGISTER_INFO.iter() { s.insert(*reg); }
+        for (reg, _) in FPU_REGISTER_INFO.iter() { s.insert(*reg); }
+        for (reg, _) in VPU_REGISTER_INFO.iter() { s.insert(*reg); }
+        for (ins, _) in INSTRUCTIONS.iter() { s.insert(*ins); }
 
         s
     };

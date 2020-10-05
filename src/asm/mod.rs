@@ -1,7 +1,7 @@
 //! Everything pertaining to the creation of CSX64 shared object files, object files, and executables.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Write, BufRead};
 
 pub mod binary_set;
 pub mod expr;
@@ -16,8 +16,45 @@ use asm_args::*;
 
 use crate::common::serialization::*;
 
+/// Grabs the first whitespace-separated token and returns it, along with the index just after it.
+/// If no token is present, returns empty string and the index of one past the end of the input string.
+fn grab_whitespace_sep_token(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
+    let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+        None => raw_stop,
+        Some(p) => raw_start + p,
+    };
+    let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace()) {
+        None => raw_stop,
+        Some(p) => token_start + p,
+    };
+    (&raw_line[token_start..token_stop], token_stop)
+}
+#[test]
+fn test_grab_ws_sep_token() {
+    assert_eq!(grab_whitespace_sep_token("   \t hello world  ", 3, 18), ("hello", 10));
+    assert_eq!(grab_whitespace_sep_token("    \t  ", 1, 7), ("", 7));
+    assert_eq!(grab_whitespace_sep_token("", 0, 0), ("", 0));
+}
+
+/// Trims all leading whitespace characters and returns the result and the index of the starting portion.
+/// If the string is empty or whitespace, returns empty string and one past the end of the input string.
+fn trim_start_with_pos(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
+    match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
+        Some(p) => (&raw_line[raw_start + p..raw_stop], raw_start + p),
+        None => ("", raw_stop),
+    }
+}
+#[test]
+fn test_trim_start_with_pos() {
+    assert_eq!(trim_start_with_pos("   \t hello world  ", 3, 18), ("hello world  ", 5));
+    assert_eq!(trim_start_with_pos("    \t  ", 1, 7), ("", 7));
+    assert_eq!(trim_start_with_pos("", 0, 0), ("", 0));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsmErrorKind {
+    ReadError,
+
     ExpectedString,
     UnexpectedString,
     IncompleteString,
@@ -36,9 +73,11 @@ pub enum AsmErrorKind {
     IllFormedExpr,
 
     IllFormedNumericLiteral,
+    NumericLiteralWithZeroPrefix,
     
     LocalSymbolBeforeNonlocal,
     InvalidSymbolName,
+    ReservedSymbolName,
 
     ExpectedBinaryValue,
     EmptyBinaryValue,
@@ -69,16 +108,46 @@ pub enum AsmErrorKind {
     FailedParseVPURegister,
 
     RegisterWithSizeSpec,
-
+    
     FailedCriticalExpression,
+    
+    TimesMissingCount,
+    TimesCountNotImm,
+    TimesCountHadSizeSpec,
+    TimesCountNotCriticalExpression,
+    TimesCountNotInteger,
+    TimesCountWasNegative,
+    TimesUsedOnEmptyLine,
+
+    IfMissingExpr,
+    IfExprNotImm,
+    IfExprHadSizeSpec,
+    IfExprNotCriticalExpression,
+    IfExprNotLogical,
+    IfUsedOnEmptyLine,
+
+    UnrecognizedInstruction,
 }
 
 #[derive(Debug)]
 pub struct AsmError {
     pub kind: AsmErrorKind,
-    pub line_num: usize,
-    pub line: String,
     pub pos: usize,
+    pub line: String,
+    pub line_num: usize,
+}
+#[derive(Debug)]
+struct InternalAsmError {
+    kind: AsmErrorKind,
+    pos: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AsmSegment {
+    Text = 1,
+    Rodata = 2,
+    Data = 4,
+    Bss = 8,
 }
 
 #[derive(Clone, Debug)]
@@ -312,4 +381,72 @@ impl BinaryRead for ObjectFile {
     }
 }
 
+/// Attempts to assemble the `asm` source file into an `ObjectFile`.
+/// It is not required that `asm` be an actual file - it can just be in memory.
+/// `asm_name` is the effective name of the source file (the assembly program can access its own file name).
+/// It is recommended that `asm_name` be meaningful, as it is might be used by the `asm` program to construct error messages, but this is not required.
+pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) -> Result<ObjectFile, AsmError> {
+    let mut args = AssembleArgs {
+        file: ObjectFile {
+            global_symbols: Default::default(),
+            extern_symbols: Default::default(),
 
+            symbols: predefines,
+
+            text_align: 1,
+            rodata_align: 1,
+            data_align: 1,
+            bss_align: 1,
+
+            text_holes: Default::default(),
+            rodata_holes: Default::default(),
+            data_holes: Default::default(),
+
+            text: Default::default(),
+            rodata: Default::default(),
+            data: Default::default(),
+            bss_len: 0,
+
+            binary_set: Default::default(),
+        },
+
+        current_seg: None,
+        done_segs: Default::default(),
+
+        line_num: 0,
+        line_pos_in_seg: 0,
+
+        last_nonlocal_label: None,
+        
+        times: None,
+        
+        label_def: None,
+        instruction: None,
+        arguments: Default::default(),
+    };
+
+    macro_rules! err {
+        ($err:ident => $line:ident : $line_num:expr) => {
+            Err(AsmError { kind: $err.kind, pos: $err.pos, line: $line, line_num: $line_num })
+        }
+    }
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match asm.read_line(&mut line) {
+            Err(_) => return Err(AsmError { kind: AsmErrorKind::ReadError, line, line_num: args.line_num, pos: 0 }),
+            Ok(v) => if v == 0 { break; }
+        }
+        args.line_num += 1;
+        let header_aft = match args.extract_header(&line) {
+            Err(e) => return err!(e => line : args.line_num),
+            Ok(v) => v,
+        };
+        debug_assert!(match line[header_aft..].chars().next() { Some(c) => c.is_whitespace() || c == COMMENT_CHAR, None => true });
+
+        
+    }
+
+    Ok(args.file)
+}

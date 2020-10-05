@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 #[cfg(test)]
 use std::collections::BTreeSet;
 
-pub fn cmp_ignore_ascii_case(a: &str, b: &str) -> Ordering {
+fn cmp_ignore_ascii_case(a: &str, b: &str) -> Ordering {
     let (mut a, mut b) = (a.chars(), b.chars());
     loop {
         match (a.next(), b.next()) {
@@ -52,10 +52,17 @@ fn test_caseless() {
     assert!(Caseless("abc") < Caseless("BCD"));
     assert!(Caseless("ABC") < Caseless("bcd"));
 
+    assert!(Caseless("ABC") < Caseless("abcd"));
+    assert!(Caseless("abc") < Caseless("ABCD"));
+
+    assert!(Caseless("ABCDE") > Caseless("abcd"));
+    assert!(Caseless("abcde") > Caseless("ABCD"));
+
     {
         let mut s = BTreeSet::new();
         s.insert(Caseless("hello"));
         assert!(s.contains(&Caseless("HellO")));
         assert!(!s.contains(&Caseless("HellfO")));
+        assert!(!s.insert(Caseless("hEllo")));
     }
 }
