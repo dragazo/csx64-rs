@@ -10,11 +10,8 @@ use super::caseless::Caseless;
 use std::borrow::Cow;
 
 macro_rules! err {
-    ($pos:expr, $kind:path) => {
-        Err(InternalAsmError {
-            kind: $kind,
-            pos: $pos,
-        })
+    ($pos:expr, $kind:expr) => {
+        Err(InternalAsmError { kind: $kind, pos: $pos })
     };
 }
 
@@ -330,7 +327,7 @@ impl AssembleArgs {
                             }
 
                             let (_, aft) = self.extract_string(raw_line, p, raw_stop)?;  // if we run into a string, refer to the string extractor to get aft
-                            advance_cursor(&mut chars, aft - 1, raw_stop); // jump to just before aft position (the end quote)
+                            advance_cursor(&mut chars, aft - 1 - raw_start, raw_stop); // jump to just before aft position (the end quote) (account for base index change)
                             debug_assert_ne!(chars.peek().unwrap().0, p);
                             debug_assert_eq!(chars.peek().unwrap().1, ch); // sanity check: should not be same position, but should be same char
                         }
@@ -344,7 +341,7 @@ impl AssembleArgs {
                                 if let Some((op, aft)) = self.extract_binary_op(raw_line, parsing_pos + p, raw_stop) {
                                     break (parsing_pos + p, Some((op, aft))); // if we find a binary op, we're done
                                 }
-                                else if ch.is_whitespace() || ch == ',' || ch == ']' {
+                                else if ch.is_whitespace() || ch == ',' || ch == ']' || ch == COMMENT_CHAR {
                                     break (parsing_pos + p, None); // otherwise if we're on a term-breaking char we're done (but we have no binary op)
                                 }
                             }
@@ -366,8 +363,10 @@ impl AssembleArgs {
                 '(' => { // if it's a sub-expression (paren grouped expr)
                     debug_assert_eq!(term.chars().rev().next().unwrap(), ')'); // last char of term should be a closing paren
                     let (expr, aft) = self.extract_expr(raw_line, term_start + 1, term_stop - 1)?; // parse interior as an expr
-                    if !raw_line[aft..term_stop-1].trim_start().is_empty() {
-                        return err!(term_start, AsmErrorKind::ParenInteriorNotExpr); // we should be able to consume the whole interior
+                    match raw_line[aft..term_stop-1].trim_start().chars().next() {
+                        None => (),
+                        Some(x) if x == COMMENT_CHAR => return err!(aft, AsmErrorKind::MissingCloseParen),
+                        Some(_) => return err!(term_start, AsmErrorKind::ParenInteriorNotExpr), // we should be able to consume the whole interior
                     }
                     expr
                 }
@@ -398,7 +397,7 @@ impl AssembleArgs {
                         match func {
                             "$ptr" => { // pointer macro - interns a binary value in the rodata segment and returns a pointer to its eventual location
                                 if args.len() != 1 {
-                                    return err!(term_start, AsmErrorKind::IncorrectArgCount);
+                                    return err!(term_start, AsmErrorKind::IncorrectArgCount(1));
                                 }
                                 let arg = args.into_iter().next().unwrap();
 
@@ -419,7 +418,7 @@ impl AssembleArgs {
                             }
                             "$if" => {
                                 if args.len() != 3 {
-                                    return err!(term_start, AsmErrorKind::IncorrectArgCount);
+                                    return err!(term_start, AsmErrorKind::IncorrectArgCount(3));
                                 }
                                 let mut args = args.into_iter();
                                 let cond = args.next().unwrap();
@@ -430,7 +429,7 @@ impl AssembleArgs {
                             _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
                                 Some(op) => {
                                     if args.len() != 1 {
-                                        return err!(term_start, AsmErrorKind::IncorrectArgCount);
+                                        return err!(term_start, AsmErrorKind::IncorrectArgCount(1));
                                     }
                                     (op, args.into_iter().next().unwrap()).into()
                                 }
@@ -490,9 +489,6 @@ impl AssembleArgs {
                     else if Caseless(term) == Caseless("NULL") { Value::Pointer(0).into() }
                     else { // if none of above, must be an identifier
                         let (mutated, _) = self.mutate_name(term, term_start)?;
-                        if !is_valid_symbol_name(&mutated) {
-                            return err!(term_start, AsmErrorKind::InvalidSymbolName); // we just need to make sure it's a valid name
-                        }
                         ExprData::Ident(mutated).into()
                     }
                 }
@@ -673,6 +669,7 @@ impl AssembleArgs {
         let (tail, tail_start) = trim_start_with_pos(raw_line, imm_aft, raw_stop);
         match tail.chars().next() {
             Some(']') => (),
+            Some(x) if x == COMMENT_CHAR => return err!(tail_start, AsmErrorKind::UnterminatedAddress),
             None => return err!(raw_stop, AsmErrorKind::UnterminatedAddress),
             Some(_) => return err!(tail_start, AsmErrorKind::AddressInteriorNotSingleExpr),
         }
@@ -915,19 +912,48 @@ impl AssembleArgs {
         };
 
         Ok(token.1)
+    }
+    pub(super) fn extract_arguments(&mut self, raw_line: &str, raw_start: usize) -> Result<(), InternalAsmError> {
+        self.arguments.clear();
 
-        // // parse the rest of the line as comma-separated arguments
-        // let (tail, mut pos) = trim_start_with_pos(raw_line, token.1, raw_line.len());
-        // if !tail.is_empty() && !tail.starts_with(COMMENT_CHAR) { // check if we're done with line or entering a comment section (no args)
-        //     loop { // parse one or more comma-separated arguments
-        //         let (arg, aft) = self.extract_arg(raw_line, pos, raw_line.len())?;
-        //         self.arguments.push(arg);
+        // parse the rest of the line as comma-separated arguments
+        let (tail, mut pos) = trim_start_with_pos(raw_line, raw_start, raw_line.len());
+        if !tail.is_empty() && !tail.starts_with(COMMENT_CHAR) { // check if we're done with line or entering a comment section (no args)
+            loop { // parse one or more comma-separated arguments
+                let (arg, aft) = self.extract_arg(raw_line, pos, raw_line.len())?;
+                self.arguments.push(arg);
 
-        //         let (tail, tail_pos) = trim_start_with_pos(raw_line, aft, raw_line.len());
-        //         if tail.chars().next() != Some(',') { break; } // if we're not followed by a comma we're done
-        //         pos = tail_pos + 1;
-        //     }
-        // }
+                let (tail, tail_pos) = trim_start_with_pos(raw_line, aft, raw_line.len());
+                if tail.chars().next() != Some(',') { break; } // if we're not followed by a comma we're done
+                pos = tail_pos + 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// appends a byte to the current segment, if valid
+    fn append_byte(&mut self, val: u8) -> Result<(), InternalAsmError> {
+        match self.current_seg {
+            None => return err!(0, AsmErrorKind::WriteOutsideOfSegment),
+            Some(seg) => match seg {
+                AsmSegment::Text => self.file.text.push(val),
+                AsmSegment::Rodata => self.file.rodata.push(val),
+                AsmSegment::Data => self.file.data.push(val),
+                AsmSegment::Bss => return err!(0, AsmErrorKind::WriteInBssSegment),
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles instructions which take no arguments.
+    /// Writes `op`, followed by `ext_op` (if valid).
+    pub(super) fn process_no_arg_op(&mut self, op: Option<u8>, ext_op: Option<u8>) -> Result<(), InternalAsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return err!(0, AsmErrorKind::InstructionOutsideOfTextSegment); }
+        if self.arguments.len() != 0 { return err!(0, AsmErrorKind::IncorrectArgCount(0)); }
+        if let Some(ext) = op { self.append_byte(ext)? }
+        if let Some(ext) = ext_op { self.append_byte(ext)? }
+        Ok(())
     }
 }
 
@@ -1057,9 +1083,9 @@ fn test_extr_string() {
         }
         Err(_) => panic!(),
     }
-    match c.extract_string("  'hello world' 'another string' ", 1, 33) {
+    match c.extract_string("  'hello;world' 'another string' ", 1, 33) {
         Ok((res, aft)) => {
-            assert_eq!(res, "hello world".as_bytes());
+            assert_eq!(res, "hello;world".as_bytes());
             assert_eq!(aft, 15);
         }
         Err(_) => panic!(),
@@ -1132,7 +1158,7 @@ fn test_extr_string() {
 #[test]
 fn test_extr_expr() {
     let mut c = create_context();
-    match c.extract_expr("true", 0, 4) {
+    match c.extract_expr("trUe;", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
             match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
@@ -1142,7 +1168,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("false", 0, 5) {
+    match c.extract_expr("faLse", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
             match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
@@ -1152,17 +1178,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("null", 0, 4) {
-        Ok((expr, aft)) => {
-            assert_eq!(aft, 4);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Pointer(val)) => assert_eq!(val, 0),
-                _ => panic!(),
-            }
-        }
-        Err(e) => panic!("{:?}", e),
-    }
-    match c.extract_expr("NUll", 0, 4) {
+    match c.extract_expr("nuLl", 0, 4) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
             match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
@@ -1256,6 +1272,37 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
+    match c.extract_expr("(5+1)*;(5-1) g", 0, 13) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, 6);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+        }
+    }
+    match c.extract_expr("(5+1);*(5-1) g", 0, 13) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 5);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 6),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("(5;+1)", 0, 6) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::MissingCloseParen);
+        }
+    }
+    match c.extract_expr(";(5;+1)", 0, 7) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, 0);
+            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+        }
+    }
     match c.extract_expr("  (  5-3 )     *--+ -(5 -1)f  ", 1, 30) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 27);
@@ -1265,6 +1312,33 @@ fn test_extr_expr() {
             }
         }
         Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("  'hello world'  ", 1, 17) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 15);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Binary(val)) => assert_eq!(val, "hello world".as_bytes()),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("  'hello;world'  ", 1, 17) {
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 15);
+            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
+                Cow::Owned(Value::Binary(val)) => assert_eq!(val, "hello;world".as_bytes()),
+                _ => panic!(),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_expr("  'hello;world\"  ", 1, 17) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, 2);
+            assert_eq!(e.kind, AsmErrorKind::IncompleteString);
+        }
     }
     match c.extract_expr("$if(TrUe,6 / -2,3 << 2)", 0, 23) {
         Ok((expr, aft)) => {
@@ -1332,7 +1406,7 @@ fn test_ptriff() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("foo-$", 0, 5) {
+    match c.extract_expr("foo-$;comment", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
             match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
@@ -1366,7 +1440,7 @@ fn test_ptriff() {
 #[test]
 fn test_numeric_formats() {
     let mut c = create_context();
-    match c.extract_expr("0x2Ff4", 0, 6) {
+    match c.extract_expr("0x2Ff4;comment", 0, 6) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 6);
             match expr.eval(&c.file.symbols) {
@@ -1708,6 +1782,13 @@ fn test_address_parser() {
             assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
         }
     }
+    match c.extract_address("  [ax;*ax]   ", 1, 12) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, 5);
+            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+        }
+    }
 }
 #[test]
 fn test_parse_arg() {
@@ -1848,6 +1929,11 @@ fn test_extract_header() {
     assert_eq!(c.instruction, Some(Instruction::NOP));
 
     assert_eq!(c.extract_header("  NoP  ; this is a comment ").unwrap(), 5);
+    assert_eq!(c.label_def, None);
+    assert_eq!(c.times, None);
+    assert_eq!(c.instruction, Some(Instruction::NOP));
+
+    assert_eq!(c.extract_header("  NoP; this is a comment ").unwrap(), 5);
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
     assert_eq!(c.instruction, Some(Instruction::NOP));

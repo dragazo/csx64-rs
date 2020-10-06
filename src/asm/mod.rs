@@ -10,20 +10,22 @@ mod constants;
 mod asm_args;
 
 use binary_set::BinarySet;
-use expr::{Expr, SymbolTable, TypeSet};
+use expr::*;
 use constants::*;
 use asm_args::*;
 
 use crate::common::serialization::*;
+use crate::common::OPCode;
 
 /// Grabs the first whitespace-separated token and returns it, along with the index just after it.
 /// If no token is present, returns empty string and the index of one past the end of the input string.
+/// This function is comment-aware and will treat a comment character as a stopping point.
 fn grab_whitespace_sep_token(raw_line: &str, raw_start: usize, raw_stop: usize) -> (&str, usize) {
     let token_start = match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()) {
         None => raw_stop,
         Some(p) => raw_start + p,
     };
-    let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace()) {
+    let token_stop = match raw_line[token_start..raw_stop].find(|c: char| c.is_whitespace() || c == COMMENT_CHAR) {
         None => raw_stop,
         Some(p) => token_start + p,
     };
@@ -34,6 +36,8 @@ fn test_grab_ws_sep_token() {
     assert_eq!(grab_whitespace_sep_token("   \t hello world  ", 3, 18), ("hello", 10));
     assert_eq!(grab_whitespace_sep_token("    \t  ", 1, 7), ("", 7));
     assert_eq!(grab_whitespace_sep_token("", 0, 0), ("", 0));
+    assert_eq!(grab_whitespace_sep_token("  test;comment  ", 1, 16), ("test", 6));
+    assert_eq!(grab_whitespace_sep_token("  test; comment  ", 1, 17), ("test", 6));
 }
 
 /// Trims all leading whitespace characters and returns the result and the index of the starting portion.
@@ -69,7 +73,6 @@ pub enum AsmErrorKind {
     ParenInteriorNotExpr,
     ExpectedCommaBeforeToken,
     UnrecognizedMacroInvocation,
-    IncorrectArgCount,
     IllFormedExpr,
 
     IllFormedNumericLiteral,
@@ -82,6 +85,8 @@ pub enum AsmErrorKind {
     ExpectedBinaryValue,
     EmptyBinaryValue,
 
+    LabelOutsideOfSegment,
+    SymbolAlreadyDefined,
     IllegalInCurrentSegment,
     TimesIterOutisideOfTimes,
 
@@ -127,6 +132,16 @@ pub enum AsmErrorKind {
     IfUsedOnEmptyLine,
 
     UnrecognizedInstruction,
+
+    IncorrectArgCount(u8),
+    ExpectedExpressionArg(u8),
+
+    WriteOutsideOfSegment,
+    WriteInBssSegment,
+    InstructionOutsideOfTextSegment,
+
+    EQUWithoutLabel,
+    EQUArgumentHadSizeSpec,
 }
 
 #[derive(Debug)]
@@ -428,6 +443,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) 
     macro_rules! err {
         ($err:ident => $line:ident : $line_num:expr) => {
             Err(AsmError { kind: $err.kind, pos: $err.pos, line: $line, line_num: $line_num })
+        };
+        ($pos:expr, $kind:expr => $line:ident : $line_num:expr) => {
+            Err(AsmError { kind: $kind, pos: $pos, line: $line, line_num: $line_num })
         }
     }
 
@@ -445,7 +463,81 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) 
         };
         debug_assert!(match line[header_aft..].chars().next() { Some(c) => c.is_whitespace() || c == COMMENT_CHAR, None => true });
 
-        
+        if let Some((name, _)) = &args.label_def {
+            if args.instruction != Some(Instruction::EQU) { // equ defines its own symbol, otherwise it's a real label
+                let val = match args.current_seg {
+                    None => return err!(0, AsmErrorKind::LabelOutsideOfSegment => line : args.line_num),
+                    Some(seg) => {
+                        let off = match seg {
+                            AsmSegment::Text => args.file.text.len(),
+                            AsmSegment::Rodata => args.file.rodata.len(),
+                            AsmSegment::Data => args.file.data.len(),
+                            AsmSegment::Bss => args.file.bss_len,
+                        };
+                        Expr::from((OP::Add, ExprData::Ident(get_seg_offset_str(seg).into()), off as i64))
+                    }
+                };
+                if let Err(_) = args.file.symbols.define(name.clone(), val) {
+                    return err!(0, AsmErrorKind::SymbolAlreadyDefined => line : args.line_num);
+                }
+            }
+        }
+
+        // if times count is zero, we shouldn't even look at the rest of the line
+        if let Some(TimesInfo { total_count: 0, current: _ }) = args.times { continue; }
+        let instruction = match args.instruction {
+            None => {
+                debug_assert!(args.times.is_none()); // this is a syntax error, and should be handled elsewhere
+                continue; // if there's not an instruction on this line, we also don't have to do anything
+            }
+            Some(x) => x,
+        };
+        loop { // otherwise we have to parse it once each time and update the times iter count after each step (if applicable)
+            if let Err(e) = args.extract_arguments(&line, header_aft) {
+                return err!(e => line : args.line_num);
+            }
+
+            let res = match instruction { // then we proceed into the handlers
+                Instruction::EQU => match &args.label_def {
+                    None => return err!(0, AsmErrorKind::EQUWithoutLabel => line : args.line_num),
+                    Some((name, _)) => {
+                        if args.arguments.len() != 1 {
+                            return err!(0, AsmErrorKind::IncorrectArgCount(1) => line : args.line_num);
+                        }
+                        let val = match args.arguments.pop().unwrap() {
+                            Argument::Imm(imm) => {
+                                if let Some(_) = imm.size {
+                                    return err!(0, AsmErrorKind::EQUArgumentHadSizeSpec => line : args.line_num);
+                                }
+                                imm.expr
+                            }
+                            _ => return err!(0, AsmErrorKind::ExpectedExpressionArg(0) => line : args.line_num),
+                        };
+                        if let Err(_) = args.file.symbols.define(name.into(), val) {
+                            return err!(0, AsmErrorKind::SymbolAlreadyDefined => line : args.line_num);
+                        }
+                        Ok(())
+                    }
+                }
+                Instruction::NOP => args.process_no_arg_op(Some(OPCode::NOP as u8), None),
+            };
+            if let Err(e) = res { // process any errors we got from the handler
+                return err!(e => line : args.line_num);
+            }
+
+            match &mut args.times { // update times count if applicable (and test for break condition)
+                None => break,
+                Some(info) => {
+                    info.current += 1;
+                    if info.current >= info.total_count { break; }
+                }
+            }
+        }
+
+        // if we defined a non-local symbol, add it after we finish assembling that line (locals in this line should refer to past parent)
+        if let Some((symbol, Locality::Nonlocal)) = args.label_def.take() { // we can take it since we're about to blow it up on next pass anyway
+            args.last_nonlocal_label = Some(symbol);
+        }
     }
 
     Ok(args.file)

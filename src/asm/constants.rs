@@ -321,6 +321,7 @@ lazy_static! {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Instruction {
     NOP,
+    EQU,
 }
 
 lazy_static! {

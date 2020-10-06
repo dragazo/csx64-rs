@@ -11,7 +11,7 @@ use serialization::*;
 /// The supported op codes for the execution engine.
 /// 
 /// Nearly all of these have sub-encodings and therefore actually encode many more instructions.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum OPCode
 {
