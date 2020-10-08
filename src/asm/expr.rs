@@ -105,30 +105,6 @@ pub enum ValueType {
     Binary,
 }
 
-bitflags! {
-    pub struct TypeSet: u8 {
-        const Logical = 1;
-        const Signed = 2;
-        const Unsigned = 4;
-        const Pointer = 8;
-        const Floating = 16;
-        const Binary = 32;
-    }
-}
-impl BinaryWrite for TypeSet {
-    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        self.bits().bin_write(f)
-    }
-}
-impl BinaryRead for TypeSet {
-    fn bin_read<F: Read>(f: &mut F) -> io::Result<Self> {
-        match Self::from_bits(u8::bin_read(f)?) {
-            Some(v) => Ok(v),
-            None => Err(io::ErrorKind::InvalidData.into()),
-        }
-    }
-}
-
 /// An int or float token in an expr.
 /// 
 /// The assembler doesn't know or care about signed/unsigned literals, so all integers are stored as raw `u64`.

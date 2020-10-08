@@ -13,9 +13,11 @@ use binary_set::BinarySet;
 use expr::*;
 use constants::*;
 use asm_args::*;
+use caseless::Caseless;
 
 use crate::common::serialization::*;
 use crate::common::OPCode;
+use crate::common::f80::F80;
 
 /// Grabs the first whitespace-separated token and returns it, along with the index just after it.
 /// If no token is present, returns empty string and the index of one past the end of the input string.
@@ -38,6 +40,7 @@ fn test_grab_ws_sep_token() {
     assert_eq!(grab_whitespace_sep_token("", 0, 0), ("", 0));
     assert_eq!(grab_whitespace_sep_token("  test;comment  ", 1, 16), ("test", 6));
     assert_eq!(grab_whitespace_sep_token("  test; comment  ", 1, 17), ("test", 6));
+    assert_eq!(grab_whitespace_sep_token("  ;test; comment  ", 1, 17), ("", 2));
 }
 
 /// Trims all leading whitespace characters and returns the result and the index of the starting portion.
@@ -57,7 +60,8 @@ fn test_trim_start_with_pos() {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsmErrorKind {
-    ReadError,
+    ReadError, // failure while reading the file
+    BoundsError, // index failure (corrupted input)
 
     ExpectedString,
     UnexpectedString,
@@ -133,12 +137,28 @@ pub enum AsmErrorKind {
 
     UnrecognizedInstruction,
 
+    UnrecognizedSegment,
+    SegmentAlreadyCompleted,
+    ExtraContentAfterSegmentName,
+    LabelOnSegmentLine,
+
     IncorrectArgCount(u8),
     ExpectedExpressionArg(u8),
 
     WriteOutsideOfSegment,
     WriteInBssSegment,
     InstructionOutsideOfTextSegment,
+
+    HoleContentInvalidType(HoleType),
+    TruncatedSignificantBits,
+    WriteIntegerAsUnsupportedSize(Size),
+    WriteFloatAsUnsupportedSize(Size),
+
+    UnsupportedOperandSize,
+    OperandsHadDifferentSizes,
+    SizeSpecOnForcedSize,
+    BinaryOpUnsupportedSrcDestTypes, // e.g. memory x memory
+    CouldNotDeduceOperandSize,
 
     EQUWithoutLabel,
     EQUArgumentHadSizeSpec,
@@ -154,6 +174,7 @@ pub struct AsmError {
 #[derive(Debug)]
 struct InternalAsmError {
     kind: AsmErrorKind,
+    line_num: usize,
     pos: usize,
 }
 
@@ -173,7 +194,7 @@ struct Imm {
 
 #[derive(Clone, Debug)]
 struct Address {
-    size: Size,                 // size of the address itself
+    address_size: Size,         // size of the address itself
     r1: Option<(u8, u8)>,       // r1 and r1 mult
     r2: Option<u8>,             // r2 (mult of 1)
     base: Option<Expr>,         // constant base address - 0 if absent, but saves space in the binary
@@ -190,7 +211,7 @@ enum Argument {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Size {
+pub enum Size {
     Byte,
     Word,
     Dword,
@@ -203,6 +224,20 @@ enum Size {
     Tword,
 }
 impl Size {
+    /// Returns the size of this type in bytes.
+    fn size(self) -> usize {
+        match self {
+            Size::Byte => 1,
+            Size::Word => 2,
+            Size::Dword => 4,
+            Size::Qword => 8,
+            Size::Xmmword => 16,
+            Size::Ymmword => 32,
+            Size::Zmmword => 64,
+            Size::Tword => 10,
+        }
+    }
+
     /// If self is a basic size (byte, word, dword, qword), returns the sizecode (0, 1, 2, 3).
     fn basic_sizecode(self) -> Option<u8> {
         match self {
@@ -273,31 +308,63 @@ fn test_size_fns() {
     assert_eq!(Size::Ymmword.vector_size(), Some(32));
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HoleType {
+    Signed,
+    Unsigned,
+    Pointer,
+    Integral, // signed, unsigned, or pointer
+    Floating,
+}
+impl BinaryWrite for HoleType {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        match self {
+            HoleType::Signed => 0u8,
+            HoleType::Unsigned => 1u8,
+            HoleType::Pointer => 2u8,
+            HoleType::Integral => 3u8,
+            HoleType::Floating => 4u8,
+        }.bin_write(f)
+    }
+}
+impl BinaryRead for HoleType {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<HoleType> {
+        Ok(match u8::bin_read(f)? {
+            0 => HoleType::Signed,
+            1 => HoleType::Unsigned,
+            2 => HoleType::Pointer,
+            3 => HoleType::Integral,
+            4 => HoleType::Floating,
+            _ => return Err(io::ErrorKind::InvalidData.into())
+        })
+    }
+}
+
 #[derive(Clone)]
 struct Hole {
-    address: u64,
+    address: usize,
     size: Size,
-    line: usize,
     expr: Expr,
-    allowed_types: TypeSet,
+    line_num: usize,
+    allowed_type: HoleType,
 }
 impl BinaryWrite for Hole {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         self.address.bin_write(f)?;
         self.size.bin_write(f)?;
-        self.line.bin_write(f)?;
+        self.line_num.bin_write(f)?;
         self.expr.bin_write(f)?;
-        self.allowed_types.bin_write(f)
+        self.allowed_type.bin_write(f)
     }
 }
 impl BinaryRead for Hole {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<Hole> {
         let address = BinaryRead::bin_read(f)?;
         let size = BinaryRead::bin_read(f)?;
-        let line = BinaryRead::bin_read(f)?;
+        let line_num = BinaryRead::bin_read(f)?;
         let expr = BinaryRead::bin_read(f)?;
-        let allowed_types = BinaryRead::bin_read(f)?;
-        Ok(Hole { address, size, line, expr, allowed_types })
+        let allowed_type = BinaryRead::bin_read(f)?;
+        Ok(Hole { address, size, line_num, expr, allowed_type })
     }
 }
 
@@ -396,6 +463,102 @@ impl BinaryRead for ObjectFile {
     }
 }
 
+/// Writes a binary value to the given segment at the specified position.
+/// If the value is out of bounds, fails with Err, otherwise always succeeds.
+fn segment_write_bin(seg: &mut Vec<u8>, val: &[u8], pos: usize) -> Result<(), ()> {
+    match seg.get_mut(pos..pos+val.len()) {
+        None => Err(()),
+        Some(dest) => {
+            dest.copy_from_slice(val);
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+enum PatchError {
+    Illegal(InternalAsmError),
+    NotPatched(EvalError),
+}
+
+/// Attempts to patch the hole in the given segment.
+/// On critical (bad/illegal) failure, returns Err.
+/// Otherwise returns Ok(Err) if evaluation fails (this is not a bad error, as it might can be patched later).
+/// Returns Ok(OK(())) to denote that everything succeeded and the hole was successfully patched.
+fn patch_hole(seg: &mut Vec<u8>, symbols: &SymbolTable, hole: &Hole) -> Result<(), PatchError> {
+    let val = match hole.expr.eval(symbols) {
+        Err(e) => return Err(PatchError::NotPatched(e)),
+        Ok(v) => v,
+    };
+
+    macro_rules! err {
+        ($hole:ident => $kind:expr) => {
+            Err(PatchError::Illegal(InternalAsmError { line_num: $hole.line_num, pos: 0, kind: $kind }))
+        }
+    }
+
+    let write_res = match &*val {
+        Value::Signed(v) => {
+            if hole.allowed_type != HoleType::Signed && hole.allowed_type != HoleType::Integral {
+                return err!(hole => AsmErrorKind::HoleContentInvalidType(hole.allowed_type)); 
+            }
+            match hole.size {
+                Size::Byte => {
+                    if *v as i8 as i64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                }
+                Size::Word => {
+                    if *v as i16 as i64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i16).to_le_bytes(), hole.address)
+                }
+                Size::Dword => {
+                    if *v as i32 as i64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i32).to_le_bytes(), hole.address)
+                }
+                Size::Qword => segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address),
+                x => return err!(hole => AsmErrorKind::WriteIntegerAsUnsupportedSize(x)),
+            }
+        }
+        Value::Unsigned(v) | Value::Pointer(v) => {
+            if hole.allowed_type != HoleType::Unsigned && hole.allowed_type != HoleType::Integral {
+                return err!(hole => AsmErrorKind::HoleContentInvalidType(hole.allowed_type)); 
+            }
+            match hole.size {
+                Size::Byte => {
+                    if *v as u8 as u64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                }
+                Size::Word => {
+                    if *v as u16 as u64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                }
+                Size::Dword => {
+                    if *v as u32 as u64 != *v { return err!(hole => AsmErrorKind::TruncatedSignificantBits); }
+                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                }
+                Size::Qword => segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address),
+                x => return err!(hole => AsmErrorKind::WriteIntegerAsUnsupportedSize(x)),
+            }
+        }
+        Value::Floating(v) => {
+            if hole.allowed_type != HoleType::Floating {
+                return err!(hole => AsmErrorKind::HoleContentInvalidType(hole.allowed_type)); 
+            }
+            match hole.size {
+                Size::Dword => segment_write_bin(seg, &v.to_f32().to_le_bytes(), hole.address),
+                Size::Qword => segment_write_bin(seg, &v.to_f64().to_le_bytes(), hole.address),
+                Size::Tword => segment_write_bin(seg, &F80::from(v).0, hole.address),
+                x => return err!(hole => AsmErrorKind::WriteIntegerAsUnsupportedSize(x)),
+            }
+        }
+        _ => return err!(hole => AsmErrorKind::HoleContentInvalidType(hole.allowed_type)),
+    };
+    match write_res {
+        Err(_) => Err(PatchError::Illegal(InternalAsmError { line_num: hole.line_num, pos: 0, kind: AsmErrorKind::BoundsError })),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// Attempts to assemble the `asm` source file into an `ObjectFile`.
 /// It is not required that `asm` be an actual file - it can just be in memory.
 /// `asm_name` is the effective name of the source file (the assembly program can access its own file name).
@@ -431,13 +594,10 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) 
         line_num: 0,
         line_pos_in_seg: 0,
 
+        label_def: None,
         last_nonlocal_label: None,
         
         times: None,
-        
-        label_def: None,
-        instruction: None,
-        arguments: Default::default(),
     };
 
     macro_rules! err {
@@ -457,14 +617,18 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) 
             Ok(v) => if v == 0 { break; }
         }
         args.line_num += 1;
-        let header_aft = match args.extract_header(&line) {
+        let (instruction, header_aft) = match args.extract_header(&line) {
             Err(e) => return err!(e => line : args.line_num),
             Ok(v) => v,
         };
         debug_assert!(match line[header_aft..].chars().next() { Some(c) => c.is_whitespace() || c == COMMENT_CHAR, None => true });
 
         if let Some((name, _)) = &args.label_def {
-            if args.instruction != Some(Instruction::EQU) { // equ defines its own symbol, otherwise it's a real label
+            // label on a segment line would be ambiguous where label should go - end of previous segment or start of next
+            if instruction == Some(Instruction::SEGMENT) { return err!(0, AsmErrorKind::LabelOnSegmentLine => line : args.line_num); }
+
+            // equ defines its own symbol, otherwise it's a real label
+            if instruction != Some(Instruction::EQU) {
                 let val = match args.current_seg {
                     None => return err!(0, AsmErrorKind::LabelOutsideOfSegment => line : args.line_num),
                     Some(seg) => {
@@ -484,42 +648,85 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable) 
         }
 
         // if times count is zero, we shouldn't even look at the rest of the line
-        if let Some(TimesInfo { total_count: 0, current: _ }) = args.times { continue; }
-        let instruction = match args.instruction {
+        let instruction = match instruction {
             None => {
                 debug_assert!(args.times.is_none()); // this is a syntax error, and should be handled elsewhere
                 continue; // if there's not an instruction on this line, we also don't have to do anything
             }
             Some(x) => x,
         };
+        if let Some(TimesInfo { total_count: 0, current: _ }) = args.times { continue; }
         loop { // otherwise we have to parse it once each time and update the times iter count after each step (if applicable)
-            if let Err(e) = args.extract_arguments(&line, header_aft) {
-                return err!(e => line : args.line_num);
-            }
-
             let res = match instruction { // then we proceed into the handlers
-                Instruction::EQU => match &args.label_def {
-                    None => return err!(0, AsmErrorKind::EQUWithoutLabel => line : args.line_num),
-                    Some((name, _)) => {
-                        if args.arguments.len() != 1 {
-                            return err!(0, AsmErrorKind::IncorrectArgCount(1) => line : args.line_num);
-                        }
-                        let val = match args.arguments.pop().unwrap() {
-                            Argument::Imm(imm) => {
-                                if let Some(_) = imm.size {
-                                    return err!(0, AsmErrorKind::EQUArgumentHadSizeSpec => line : args.line_num);
+                Instruction::SEGMENT => {
+                    let (seg, seg_aft) = grab_whitespace_sep_token(&line, header_aft, line.len());
+                    if seg.is_empty() { return err!(0, AsmErrorKind::IncorrectArgCount(1) => line : args.line_num); }
+                    let seg = match SEGMENTS.get(&Caseless(seg)) {
+                        None => return err!(0, AsmErrorKind::UnrecognizedSegment => line : args.line_num),
+                        Some(seg) => *seg,
+                    };
+                    if args.done_segs.contains(&seg) { return err!(0, AsmErrorKind::SegmentAlreadyCompleted => line : args.line_num); }
+                    args.done_segs.push(seg);
+                    args.current_seg = Some(seg);
+
+                    // make sure we didn't have extra stuff after the segment name
+                    let (tok, _) = grab_whitespace_sep_token(&line, seg_aft, line.len());
+                    if !tok.is_empty() { return err!(0, AsmErrorKind::ExtraContentAfterSegmentName => line : args.line_num); }
+
+                    Ok(())
+                }
+                _ => { // all the non-prefix ops are handled here to avoid duping the arg parsing code in every handler
+                    let arguments = match args.extract_arguments(&line, header_aft) {
+                        Err(e) => return err!(e => line : args.line_num),
+                        Ok(x) => x,
+                    };
+                    match instruction {
+                        Instruction::EQU => match &args.label_def {
+                            None => return err!(0, AsmErrorKind::EQUWithoutLabel => line : args.line_num),
+                            Some((name, _)) => {
+                                if arguments.len() != 1 {
+                                    return err!(0, AsmErrorKind::IncorrectArgCount(1) => line : args.line_num);
                                 }
-                                imm.expr
+                                let val = match arguments.into_iter().next().unwrap() {
+                                    Argument::Imm(imm) => {
+                                        if let Some(_) = imm.size {
+                                            return err!(0, AsmErrorKind::EQUArgumentHadSizeSpec => line : args.line_num);
+                                        }
+                                        imm.expr
+                                    }
+                                    _ => return err!(0, AsmErrorKind::ExpectedExpressionArg(0) => line : args.line_num),
+                                };
+                                if let Err(_) = args.file.symbols.define(name.into(), val) {
+                                    return err!(0, AsmErrorKind::SymbolAlreadyDefined => line : args.line_num);
+                                }
+                                Ok(())
                             }
-                            _ => return err!(0, AsmErrorKind::ExpectedExpressionArg(0) => line : args.line_num),
-                        };
-                        if let Err(_) = args.file.symbols.define(name.into(), val) {
-                            return err!(0, AsmErrorKind::SymbolAlreadyDefined => line : args.line_num);
                         }
-                        Ok(())
+                        Instruction::SEGMENT => unreachable!(), // handled above
+                        Instruction::NOP => args.process_no_arg_op(arguments, Some(OPCode::NOP as u8), None),
+
+                        Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+
+                        Instruction::MOVZ => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(0), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVNZ => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(1), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVS => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(2), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVNS => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(3), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVP => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(4), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVNP => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(5), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVO => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(6), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVNO => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(7), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVC => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(8), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVNC => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(9), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVB => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(10), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVBE => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(11), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVA => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(12), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVAE => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(13), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVL => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(14), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVLE => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(15), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVG => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(16), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
+                        Instruction::MOVGE => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(17), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None),
                     }
                 }
-                Instruction::NOP => args.process_no_arg_op(Some(OPCode::NOP as u8), None),
             };
             if let Err(e) = res { // process any errors we got from the handler
                 return err!(e => line : args.line_num);
