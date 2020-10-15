@@ -16,6 +16,8 @@ macro_rules! insert {
 pub(super) const COMMENT_CHAR: char = ';';
 pub(super) const LABEL_DEF_CHAR: char = ':';
 
+pub(super) const MAX_ALIGN: u64 = 1024;
+
 // these must be ordered in descending order of length to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[
     ("<<", OP::SHL),
@@ -128,9 +130,9 @@ lazy_static! {
         insert!(m: Caseless("WORD") => Size::Word);
         insert!(m: Caseless("DWORD") => Size::Dword);
         insert!(m: Caseless("QWORD") => Size::Qword);
-        insert!(m: Caseless("XMMWORD") => Size::Xmmword);
-        insert!(m: Caseless("YMMWORD") => Size::Ymmword);
-        insert!(m: Caseless("ZMMWORD") => Size::Zmmword);
+        insert!(m: Caseless("XWORD") => Size::Xword);
+        insert!(m: Caseless("YWORD") => Size::Yword);
+        insert!(m: Caseless("ZWORD") => Size::Zword);
         insert!(m: Caseless("TWORD") => Size::Tword);
 
         m
@@ -256,72 +258,72 @@ lazy_static! {
     pub(super) static ref VPU_REGISTER_INFO: BTreeMap<Caseless<'static>, VPURegisterInfo> = {
         let mut m = BTreeMap::new();
 
-        insert!(m: Caseless("XMM0") => VPURegisterInfo { id: 0, size: Size::Xmmword });
-        insert!(m: Caseless("XMM1") => VPURegisterInfo { id: 1, size: Size::Xmmword });
-        insert!(m: Caseless("XMM2") => VPURegisterInfo { id: 2, size: Size::Xmmword });
-        insert!(m: Caseless("XMM3") => VPURegisterInfo { id: 3, size: Size::Xmmword });
-        insert!(m: Caseless("XMM4") => VPURegisterInfo { id: 4, size: Size::Xmmword });
-        insert!(m: Caseless("XMM5") => VPURegisterInfo { id: 5, size: Size::Xmmword });
-        insert!(m: Caseless("XMM6") => VPURegisterInfo { id: 6, size: Size::Xmmword });
-        insert!(m: Caseless("XMM7") => VPURegisterInfo { id: 7, size: Size::Xmmword });
-        insert!(m: Caseless("XMM8") => VPURegisterInfo { id: 8, size: Size::Xmmword });
-        insert!(m: Caseless("XMM9") => VPURegisterInfo { id: 9, size: Size::Xmmword });
-        insert!(m: Caseless("XMM10") => VPURegisterInfo { id: 10, size: Size::Xmmword });
-        insert!(m: Caseless("XMM11") => VPURegisterInfo { id: 11, size: Size::Xmmword });
-        insert!(m: Caseless("XMM12") => VPURegisterInfo { id: 12, size: Size::Xmmword });
-        insert!(m: Caseless("XMM13") => VPURegisterInfo { id: 13, size: Size::Xmmword });
-        insert!(m: Caseless("XMM14") => VPURegisterInfo { id: 14, size: Size::Xmmword });
-        insert!(m: Caseless("XMM15") => VPURegisterInfo { id: 15, size: Size::Xmmword });
+        insert!(m: Caseless("XMM0") => VPURegisterInfo { id: 0, size: Size::Xword });
+        insert!(m: Caseless("XMM1") => VPURegisterInfo { id: 1, size: Size::Xword });
+        insert!(m: Caseless("XMM2") => VPURegisterInfo { id: 2, size: Size::Xword });
+        insert!(m: Caseless("XMM3") => VPURegisterInfo { id: 3, size: Size::Xword });
+        insert!(m: Caseless("XMM4") => VPURegisterInfo { id: 4, size: Size::Xword });
+        insert!(m: Caseless("XMM5") => VPURegisterInfo { id: 5, size: Size::Xword });
+        insert!(m: Caseless("XMM6") => VPURegisterInfo { id: 6, size: Size::Xword });
+        insert!(m: Caseless("XMM7") => VPURegisterInfo { id: 7, size: Size::Xword });
+        insert!(m: Caseless("XMM8") => VPURegisterInfo { id: 8, size: Size::Xword });
+        insert!(m: Caseless("XMM9") => VPURegisterInfo { id: 9, size: Size::Xword });
+        insert!(m: Caseless("XMM10") => VPURegisterInfo { id: 10, size: Size::Xword });
+        insert!(m: Caseless("XMM11") => VPURegisterInfo { id: 11, size: Size::Xword });
+        insert!(m: Caseless("XMM12") => VPURegisterInfo { id: 12, size: Size::Xword });
+        insert!(m: Caseless("XMM13") => VPURegisterInfo { id: 13, size: Size::Xword });
+        insert!(m: Caseless("XMM14") => VPURegisterInfo { id: 14, size: Size::Xword });
+        insert!(m: Caseless("XMM15") => VPURegisterInfo { id: 15, size: Size::Xword });
 
-        insert!(m: Caseless("YMM0") => VPURegisterInfo { id: 0, size: Size::Ymmword });
-        insert!(m: Caseless("YMM1") => VPURegisterInfo { id: 1, size: Size::Ymmword });
-        insert!(m: Caseless("YMM2") => VPURegisterInfo { id: 2, size: Size::Ymmword });
-        insert!(m: Caseless("YMM3") => VPURegisterInfo { id: 3, size: Size::Ymmword });
-        insert!(m: Caseless("YMM4") => VPURegisterInfo { id: 4, size: Size::Ymmword });
-        insert!(m: Caseless("YMM5") => VPURegisterInfo { id: 5, size: Size::Ymmword });
-        insert!(m: Caseless("YMM6") => VPURegisterInfo { id: 6, size: Size::Ymmword });
-        insert!(m: Caseless("YMM7") => VPURegisterInfo { id: 7, size: Size::Ymmword });
-        insert!(m: Caseless("YMM8") => VPURegisterInfo { id: 8, size: Size::Ymmword });
-        insert!(m: Caseless("YMM9") => VPURegisterInfo { id: 9, size: Size::Ymmword });
-        insert!(m: Caseless("YMM10") => VPURegisterInfo { id: 10, size: Size::Ymmword });
-        insert!(m: Caseless("YMM11") => VPURegisterInfo { id: 11, size: Size::Ymmword });
-        insert!(m: Caseless("YMM12") => VPURegisterInfo { id: 12, size: Size::Ymmword });
-        insert!(m: Caseless("YMM13") => VPURegisterInfo { id: 13, size: Size::Ymmword });
-        insert!(m: Caseless("YMM14") => VPURegisterInfo { id: 14, size: Size::Ymmword });
-        insert!(m: Caseless("YMM15") => VPURegisterInfo { id: 15, size: Size::Ymmword });
+        insert!(m: Caseless("YMM0") => VPURegisterInfo { id: 0, size: Size::Yword });
+        insert!(m: Caseless("YMM1") => VPURegisterInfo { id: 1, size: Size::Yword });
+        insert!(m: Caseless("YMM2") => VPURegisterInfo { id: 2, size: Size::Yword });
+        insert!(m: Caseless("YMM3") => VPURegisterInfo { id: 3, size: Size::Yword });
+        insert!(m: Caseless("YMM4") => VPURegisterInfo { id: 4, size: Size::Yword });
+        insert!(m: Caseless("YMM5") => VPURegisterInfo { id: 5, size: Size::Yword });
+        insert!(m: Caseless("YMM6") => VPURegisterInfo { id: 6, size: Size::Yword });
+        insert!(m: Caseless("YMM7") => VPURegisterInfo { id: 7, size: Size::Yword });
+        insert!(m: Caseless("YMM8") => VPURegisterInfo { id: 8, size: Size::Yword });
+        insert!(m: Caseless("YMM9") => VPURegisterInfo { id: 9, size: Size::Yword });
+        insert!(m: Caseless("YMM10") => VPURegisterInfo { id: 10, size: Size::Yword });
+        insert!(m: Caseless("YMM11") => VPURegisterInfo { id: 11, size: Size::Yword });
+        insert!(m: Caseless("YMM12") => VPURegisterInfo { id: 12, size: Size::Yword });
+        insert!(m: Caseless("YMM13") => VPURegisterInfo { id: 13, size: Size::Yword });
+        insert!(m: Caseless("YMM14") => VPURegisterInfo { id: 14, size: Size::Yword });
+        insert!(m: Caseless("YMM15") => VPURegisterInfo { id: 15, size: Size::Yword });
 
-        insert!(m: Caseless("ZMM0") => VPURegisterInfo { id: 0, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM1") => VPURegisterInfo { id: 1, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM2") => VPURegisterInfo { id: 2, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM3") => VPURegisterInfo { id: 3, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM4") => VPURegisterInfo { id: 4, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM5") => VPURegisterInfo { id: 5, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM6") => VPURegisterInfo { id: 6, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM7") => VPURegisterInfo { id: 7, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM8") => VPURegisterInfo { id: 8, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM9") => VPURegisterInfo { id: 9, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM10") => VPURegisterInfo { id: 10, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM11") => VPURegisterInfo { id: 11, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM12") => VPURegisterInfo { id: 12, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM13") => VPURegisterInfo { id: 13, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM14") => VPURegisterInfo { id: 14, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM15") => VPURegisterInfo { id: 15, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM16") => VPURegisterInfo { id: 16, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM17") => VPURegisterInfo { id: 17, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM18") => VPURegisterInfo { id: 18, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM19") => VPURegisterInfo { id: 19, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM20") => VPURegisterInfo { id: 20, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM21") => VPURegisterInfo { id: 21, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM22") => VPURegisterInfo { id: 22, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM23") => VPURegisterInfo { id: 23, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM24") => VPURegisterInfo { id: 24, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM25") => VPURegisterInfo { id: 25, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM26") => VPURegisterInfo { id: 26, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM27") => VPURegisterInfo { id: 27, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM28") => VPURegisterInfo { id: 28, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM29") => VPURegisterInfo { id: 29, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM30") => VPURegisterInfo { id: 30, size: Size::Zmmword });
-        insert!(m: Caseless("ZMM31") => VPURegisterInfo { id: 31, size: Size::Zmmword });
+        insert!(m: Caseless("ZMM0") => VPURegisterInfo { id: 0, size: Size::Zword });
+        insert!(m: Caseless("ZMM1") => VPURegisterInfo { id: 1, size: Size::Zword });
+        insert!(m: Caseless("ZMM2") => VPURegisterInfo { id: 2, size: Size::Zword });
+        insert!(m: Caseless("ZMM3") => VPURegisterInfo { id: 3, size: Size::Zword });
+        insert!(m: Caseless("ZMM4") => VPURegisterInfo { id: 4, size: Size::Zword });
+        insert!(m: Caseless("ZMM5") => VPURegisterInfo { id: 5, size: Size::Zword });
+        insert!(m: Caseless("ZMM6") => VPURegisterInfo { id: 6, size: Size::Zword });
+        insert!(m: Caseless("ZMM7") => VPURegisterInfo { id: 7, size: Size::Zword });
+        insert!(m: Caseless("ZMM8") => VPURegisterInfo { id: 8, size: Size::Zword });
+        insert!(m: Caseless("ZMM9") => VPURegisterInfo { id: 9, size: Size::Zword });
+        insert!(m: Caseless("ZMM10") => VPURegisterInfo { id: 10, size: Size::Zword });
+        insert!(m: Caseless("ZMM11") => VPURegisterInfo { id: 11, size: Size::Zword });
+        insert!(m: Caseless("ZMM12") => VPURegisterInfo { id: 12, size: Size::Zword });
+        insert!(m: Caseless("ZMM13") => VPURegisterInfo { id: 13, size: Size::Zword });
+        insert!(m: Caseless("ZMM14") => VPURegisterInfo { id: 14, size: Size::Zword });
+        insert!(m: Caseless("ZMM15") => VPURegisterInfo { id: 15, size: Size::Zword });
+        insert!(m: Caseless("ZMM16") => VPURegisterInfo { id: 16, size: Size::Zword });
+        insert!(m: Caseless("ZMM17") => VPURegisterInfo { id: 17, size: Size::Zword });
+        insert!(m: Caseless("ZMM18") => VPURegisterInfo { id: 18, size: Size::Zword });
+        insert!(m: Caseless("ZMM19") => VPURegisterInfo { id: 19, size: Size::Zword });
+        insert!(m: Caseless("ZMM20") => VPURegisterInfo { id: 20, size: Size::Zword });
+        insert!(m: Caseless("ZMM21") => VPURegisterInfo { id: 21, size: Size::Zword });
+        insert!(m: Caseless("ZMM22") => VPURegisterInfo { id: 22, size: Size::Zword });
+        insert!(m: Caseless("ZMM23") => VPURegisterInfo { id: 23, size: Size::Zword });
+        insert!(m: Caseless("ZMM24") => VPURegisterInfo { id: 24, size: Size::Zword });
+        insert!(m: Caseless("ZMM25") => VPURegisterInfo { id: 25, size: Size::Zword });
+        insert!(m: Caseless("ZMM26") => VPURegisterInfo { id: 26, size: Size::Zword });
+        insert!(m: Caseless("ZMM27") => VPURegisterInfo { id: 27, size: Size::Zword });
+        insert!(m: Caseless("ZMM28") => VPURegisterInfo { id: 28, size: Size::Zword });
+        insert!(m: Caseless("ZMM29") => VPURegisterInfo { id: 29, size: Size::Zword });
+        insert!(m: Caseless("ZMM30") => VPURegisterInfo { id: 30, size: Size::Zword });
+        insert!(m: Caseless("ZMM31") => VPURegisterInfo { id: 31, size: Size::Zword });
 
         m
     };
@@ -331,7 +333,12 @@ lazy_static! {
 pub(super) enum Instruction {
     EQU,
     SEGMENT,
-    NOP,
+    GLOBAL, EXTERN,
+    ALIGN,
+    ASSERT,
+    DECLARE(Size), RESERVE(Size),
+    NOP, HLT, SYSCALL,
+    LFENCE, SFENCE, MFENCE,
     MOV, MOVZ, MOVNZ, MOVS, MOVNS, MOVP, MOVNP, MOVO, MOVNO, MOVC, MOVNC, MOVB, MOVBE, MOVA, MOVAE, MOVL, MOVLE, MOVG, MOVGE,
 }
 
@@ -341,8 +348,41 @@ lazy_static! {
         
         insert!(m: Caseless("EQU") => Instruction::EQU);
         insert!(m: Caseless("SEGMENT") => Instruction::SEGMENT);
-        insert!(m: Caseless("NOP") => Instruction::NOP);
 
+        insert!(m: Caseless("GLOBAL") => Instruction::GLOBAL);
+        insert!(m: Caseless("EXTERN") => Instruction::EXTERN);
+
+        insert!(m: Caseless("ALIGN") => Instruction::ALIGN);
+
+        insert!(m: Caseless("STATIC_ASSERT") => Instruction::ASSERT);
+        
+        insert!(m: Caseless("DB") => Instruction::DECLARE(Size::Byte));
+        insert!(m: Caseless("DW") => Instruction::DECLARE(Size::Word));
+        insert!(m: Caseless("DD") => Instruction::DECLARE(Size::Dword));
+        insert!(m: Caseless("DQ") => Instruction::DECLARE(Size::Qword));
+        insert!(m: Caseless("DX") => Instruction::DECLARE(Size::Xword));
+        insert!(m: Caseless("DY") => Instruction::DECLARE(Size::Yword));
+        insert!(m: Caseless("DZ") => Instruction::DECLARE(Size::Zword));
+        insert!(m: Caseless("DT") => Instruction::DECLARE(Size::Tword));
+
+        insert!(m: Caseless("RESB") => Instruction::RESERVE(Size::Byte));
+        insert!(m: Caseless("RESW") => Instruction::RESERVE(Size::Word));
+        insert!(m: Caseless("RESD") => Instruction::RESERVE(Size::Dword));
+        insert!(m: Caseless("RESQ") => Instruction::RESERVE(Size::Qword));
+        insert!(m: Caseless("RESX") => Instruction::RESERVE(Size::Xword));
+        insert!(m: Caseless("RESY") => Instruction::RESERVE(Size::Yword));
+        insert!(m: Caseless("RESZ") => Instruction::RESERVE(Size::Zword));
+        insert!(m: Caseless("REST") => Instruction::RESERVE(Size::Tword));
+
+        insert!(m: Caseless("NOP") => Instruction::NOP);
+        insert!(m: Caseless("HLT") => Instruction::HLT);
+        insert!(m: Caseless("PAUSE") => Instruction::HLT); // PAUSE is just an alias for HLT
+        insert!(m: Caseless("SYSCALL") => Instruction::SYSCALL);
+
+        insert!(m: Caseless("LFENCE") => Instruction::LFENCE);
+        insert!(m: Caseless("SFENCE") => Instruction::SFENCE);
+        insert!(m: Caseless("MFENCE") => Instruction::MFENCE);
+        
         insert!(m: Caseless("MOV") => Instruction::MOV);
         insert!(m: Caseless("MOVZ") => Instruction::MOVZ);
         insert!(m: Caseless("MOVE") => Instruction::MOVZ);
@@ -405,12 +445,12 @@ lazy_static! {
 
         insert!(s: Caseless("PTR"));
 
-        for (siz, _) in SIZE_KEYWORDS.iter() { insert!(s: *siz); }
-        for (reg, _) in CPU_REGISTER_INFO.iter() { insert!(s: *reg); }
-        for (reg, _) in FPU_REGISTER_INFO.iter() { insert!(s: *reg); }
-        for (reg, _) in VPU_REGISTER_INFO.iter() { insert!(s: *reg); }
-        for (seg, _) in SEGMENTS.iter() { insert!(s: *seg); }
-        for (ins, _) in INSTRUCTIONS.iter() { insert!(s: *ins); }
+        s.extend(SIZE_KEYWORDS.keys().copied());
+        s.extend(CPU_REGISTER_INFO.keys().copied());
+        s.extend(FPU_REGISTER_INFO.keys().copied());
+        s.extend(VPU_REGISTER_INFO.keys().copied());
+        s.extend(SEGMENTS.keys().copied());
+        s.extend(INSTRUCTIONS.keys().copied());
 
         s
     };

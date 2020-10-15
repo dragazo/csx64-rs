@@ -20,3 +20,6 @@
 pub mod exec;
 pub mod asm;
 pub mod common;
+
+#[cfg(test)]
+mod test;

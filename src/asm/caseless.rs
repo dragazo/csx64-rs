@@ -58,6 +58,9 @@ fn test_caseless() {
     assert!(Caseless("ABCDE") > Caseless("abcd"));
     assert!(Caseless("abcde") > Caseless("ABCD"));
 
+    assert!(Caseless("DQ") != Caseless("DX"));
+    assert!(Caseless("DQ") < Caseless("DX"));
+
     {
         let mut s = BTreeSet::new();
         s.insert(Caseless("hello"));

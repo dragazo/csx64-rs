@@ -188,7 +188,7 @@ impl From<Vec<u8>> for Value {
     }
 }
 impl Value {
-    fn get_type(&self) -> ValueType {
+    pub fn get_type(&self) -> ValueType {
         match self {
             Value::Logical(_) => ValueType::Logical,
             Value::Signed(_) => ValueType::Signed,
@@ -407,16 +407,16 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 /// Best practice has that there should be only one symbol table, which is what the assembly and linking functions included in this crate do implicitly.
 #[derive(Default, Clone)]
 pub struct SymbolTable {
-    symbols: HashMap<String, Expr>,
+    pub(super) raw: HashMap<String, Expr>,
 }
 impl BinaryWrite for SymbolTable {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        self.symbols.bin_write(f)
+        self.raw.bin_write(f)
     }
 }
 impl BinaryRead for SymbolTable {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<SymbolTable> {
-        Ok(SymbolTable { symbols: BinaryRead::bin_read(f)? })
+        Ok(SymbolTable { raw: BinaryRead::bin_read(f)? })
     }
 }
 impl std::fmt::Debug for SymbolTable {
@@ -429,7 +429,7 @@ impl std::fmt::Debug for SymbolTable {
 }
 
 /// The specific reason why an illegal operation failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IllegalReason {
     IllFormed,
     IncompatibleTypes(OP, ValueType, ValueType),
@@ -498,14 +498,14 @@ impl SymbolTable {
 
     /// Checks if a symbol with the given name has already been defined.
     pub fn is_defined(&self, symbol: &str) -> bool {
-        self.symbols.contains_key(symbol)
+        self.raw.contains_key(symbol)
     }
     /// Introduces a new symbol.
     /// If not already defined, defines it and returns `Ok(())`.
     /// Otherwise, returns `Err(symbol)`.
     pub fn define(&mut self, symbol: String, value: Expr) -> Result<(), String> {
         if !self.is_defined(&symbol) {
-            self.symbols.insert(symbol, value);
+            self.raw.insert(symbol, value);
             Ok(())
         }
         else {
@@ -515,26 +515,26 @@ impl SymbolTable {
 
     /// Gets the value of the given symbol if defined.
     pub fn get(&self, symbol: &str) -> Option<&Expr> {
-        self.symbols.get(symbol)
+        self.raw.get(symbol)
     }
 
     /// Checks if the symbol table is empty.
     pub fn is_empty(&self) -> bool {
-        self.symbols.is_empty()
+        self.raw.is_empty()
     }
     /// Undefines all symbols, effectively restoring the newly-constructed state.
     /// This is meant to support resource reuse, and should not be used to remove or modify defined symbols.
     pub fn clear(&mut self) {
-        self.symbols.clear();
+        self.raw.clear();
     }
     /// Gets the number of defined symbols.
     pub fn len(&self) -> usize {
-        self.symbols.len()
+        self.raw.len()
     }
 
     /// Iterates over the defined symbols and their values.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Expr)> {
-        self.symbols.iter()
+        self.raw.iter()
     }
 }
 #[test]
@@ -608,7 +608,7 @@ impl Expr {
         // decide how to approach evaluation
         let res: Value = match &*root {
             ExprData::Value(_) => return Ok(ValueRef::mine(root)), // if we're a value node, we already have the value - skip caching
-            ExprData::Ident(ident) => match symbols.symbols.get(ident) { // if it's an identifier, look it up
+            ExprData::Ident(ident) => match symbols.get(ident) { // if it's an identifier, look it up
                 None => return Err(EvalError::UndefinedSymbol(ident.clone())),
                 Some(entry) => match entry.data.try_borrow_mut() { // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
                     Err(_) => return Err(EvalError::Illegal(IllegalReason::CyclicDependency)),

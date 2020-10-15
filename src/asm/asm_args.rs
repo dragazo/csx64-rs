@@ -9,12 +9,6 @@ use super::caseless::Caseless;
 #[cfg(test)]
 use std::borrow::Cow;
 
-macro_rules! err {
-    ($self:ident, $pos:expr, $kind:expr) => {
-        Err(InternalAsmError { line_num: $self.line_num, pos: $pos, kind: $kind })
-    };
-}
-
 // advances the cursor iterator to the specified character index.
 // end_pos is the exclusive upper bound index of cursor.
 fn advance_cursor(cursor: &mut Peekable<CharIndices>, to: usize, end_pos: usize) {
@@ -45,55 +39,6 @@ fn test_advance_cursor() {
     assert_eq!(cursor.peek(), None);
 }
 
-fn is_valid_symbol_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        None => return false, // empty symbol name not allowed
-        Some(c) => match c {
-            '_' | 'a'..='z' | 'A'..='Z' => (), // first char
-            _ => return false,
-        }
-    }
-    for c in chars {
-        match c {
-            '_' | '.' | 'a'..='z' | 'A'..='Z' | '0'..='9' => (), // other chars
-            _ => return false,
-        }
-    }
-    true
-}
-#[test]
-fn test_valid_symname() {
-    assert!(is_valid_symbol_name("foo"));
-    assert!(is_valid_symbol_name("Foo"));
-    assert!(!is_valid_symbol_name(".foo"));
-    assert!(is_valid_symbol_name("_foo"));
-    assert!(!is_valid_symbol_name("._foo"));
-    assert!(!is_valid_symbol_name(".7_foo"));
-    assert!(!is_valid_symbol_name("12"));
-    assert!(!is_valid_symbol_name("12.4"));
-    assert!(!is_valid_symbol_name("7up"));
-    assert!(is_valid_symbol_name("_7up"));
-    assert!(!is_valid_symbol_name(" _7up"));
-    assert!(!is_valid_symbol_name("_7up "));
-    assert!(!is_valid_symbol_name("_7u p"));
-    assert!(!is_valid_symbol_name("$foo"));
-}
-
-fn is_reserved_symbol_name(name: &str) -> bool {
-    RESERVED_SYMBOLS.contains(&Caseless(name))
-}
-#[test]
-fn test_reserved_symname() {
-    assert!(!is_reserved_symbol_name("foo"));
-    assert!(is_reserved_symbol_name("rax"));
-    assert!(is_reserved_symbol_name("RaX"));
-    assert!(is_reserved_symbol_name("truE"));
-    assert!(is_reserved_symbol_name("False"));
-    assert!(is_reserved_symbol_name("nUll"));
-    assert!(is_reserved_symbol_name("pTr"));
-}
-
 fn parse_size_str(val: &str, success: usize, failure: usize) -> (Option<Size>, usize) {
     match SIZE_KEYWORDS.get(&Caseless(val)) {
         Some(size) => (Some(*size), success),
@@ -113,7 +58,8 @@ pub(super) enum Locality {
     Nonlocal,
 }
 
-pub(super) struct AssembleArgs {
+pub(super) struct AssembleArgs<'a> {
+    pub(super) file_name: &'a str,
     pub(super) file: ObjectFile,
     
     pub(super) current_seg: Option<AsmSegment>,
@@ -127,23 +73,35 @@ pub(super) struct AssembleArgs {
 
     pub(super) times: Option<TimesInfo>,
 }
-impl AssembleArgs {
+impl AssembleArgs<'_> {
+    /// Updates the segment positioning info.
+    /// This must be called prior to parsing a line (includingthe header), and once before each first-order assembly action (times iter).
+    pub(super) fn update_line_pos_in_seg(&mut self) {
+        match self.current_seg {
+            None => (),
+            Some(AsmSegment::Text) => self.line_pos_in_seg = self.file.text.len(),
+            Some(AsmSegment::Rodata) => self.line_pos_in_seg = self.file.rodata.len(),
+            Some(AsmSegment::Data) => self.line_pos_in_seg = self.file.data.len(),
+            Some(AsmSegment::Bss) => self.line_pos_in_seg = self.file.bss_len,
+        }
+    }
+
     // attempt to mutate a symbol name from the line, transforming local symbols names to their full name.
-    fn mutate_name(&self, name: &str, err_pos: usize) -> Result<(String, Locality), InternalAsmError> {
+    fn mutate_name(&self, name: &str, err_pos: usize) -> Result<(String, Locality), AsmError> {
         if name.starts_with('.') {
             // local can't be empty after dot or be followed by a digit (ambig floating point)
-            if name.len() <= 1 || name.chars().nth(1).unwrap().is_digit(10) { return err!(self, err_pos, AsmErrorKind::InvalidSymbolName); }
+            if name.len() <= 1 || name.chars().nth(1).unwrap().is_digit(10) { return Err(AsmError { kind: AsmErrorKind::InvalidSymbolName, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
             match &self.last_nonlocal_label {
-                None => return err!(self, err_pos, AsmErrorKind::LocalSymbolBeforeNonlocal),
+                None => return Err(AsmError { kind: AsmErrorKind::LocalSymbolBeforeNonlocal, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                 Some(nonlocal) => {
                     let mutated = format!("{}{}", nonlocal, name);
-                    if !is_valid_symbol_name(&mutated) { return err!(self, err_pos, AsmErrorKind::InvalidSymbolName); }
+                    if !is_valid_symbol_name(&mutated) { return Err(AsmError { kind: AsmErrorKind::InvalidSymbolName, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
                     Ok((mutated, Locality::Local))
                 }
             }
         }
         else {
-            if !is_valid_symbol_name(name) { return err!(self, err_pos, AsmErrorKind::InvalidSymbolName); }
+            if !is_valid_symbol_name(name) { return Err(AsmError { kind: AsmErrorKind::InvalidSymbolName, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
             Ok((name.into(), Locality::Nonlocal))
         }
     }
@@ -173,18 +131,18 @@ impl AssembleArgs {
 
     // attempts to read a delimited string literal from the string, allowing leading whitespace.
     // if a string is present, returns Ok with the binary string contents and the character index just after its ending quote, otherwise returns Err.
-    fn extract_string(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Vec<u8>, usize), InternalAsmError> {
+    fn extract_string(&self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Vec<u8>, usize), AsmError> {
         // find the next starting quote char
         let mut pos = raw_line[raw_start..raw_stop].char_indices();
         let (quote_pos, quote_char) = loop {
             match pos.next() {
-                None => return err!(self, raw_stop, AsmErrorKind::ExpectedString),
+                None => return Err(AsmError { kind: AsmErrorKind::ExpectedString, line_num: self.line_num, pos: Some(raw_stop), inner_err: None }),
                 Some((p, ch)) => {
                     if ['\'', '"'].contains(&ch) {
                         break (p, ch);
                     }
                     else if !ch.is_whitespace() {
-                        return err!(self, raw_start + p, AsmErrorKind::ExpectedString);
+                        return Err(AsmError { kind: AsmErrorKind::ExpectedString, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None });
                     }
                 }
             }
@@ -196,14 +154,14 @@ impl AssembleArgs {
         // consume the entire string, applying escape sequences as needed
         loop {
             match pos.next() {
-                None => return err!(self, raw_start + quote_pos, AsmErrorKind::IncompleteString),
+                None => return Err(AsmError { kind: AsmErrorKind::IncompleteString, line_num: self.line_num, pos: Some(raw_start + quote_pos), inner_err: None }),
                 Some((p, ch)) => {
                     if ch == quote_char {
                         return Ok((res, raw_start + p + 1));
                     }
                     else if ch == '\\' {
                         match pos.next() {
-                            None => return err!(self, raw_start + p, AsmErrorKind::IncompleteEscape),
+                            None => return Err(AsmError { kind: AsmErrorKind::IncompleteEscape, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None }),
                             Some((_, esc)) => {
                                 if let Some(mapped) = match esc {
                                     '\\' => Some('\\'),
@@ -217,7 +175,7 @@ impl AssembleArgs {
                                         let mut vals = [0; 2];
                                         for val in vals.iter_mut() {
                                             *val = match pos.next().map(|(_, x)| x.to_digit(16)).flatten() {
-                                                None => return err!(self, raw_start + p, AsmErrorKind::IncompleteEscape),
+                                                None => return Err(AsmError { kind: AsmErrorKind::IncompleteEscape, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None }),
                                                 Some(v) => v,
                                             };
                                         }
@@ -225,7 +183,7 @@ impl AssembleArgs {
                                         res.push(val as u8);
                                         None
                                     }
-                                    _ => return err!(self, raw_start + p, AsmErrorKind::InvalidEscape),
+                                    _ => return Err(AsmError { kind: AsmErrorKind::InvalidEscape, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None }),
                                 } {
                                     res.extend(mapped.encode_utf8(&mut buf).as_bytes());
                                 }
@@ -241,7 +199,7 @@ impl AssembleArgs {
     }
 
     // attempts to parse a sequence of 1+ comma-separated expressions.
-    fn parse_comma_sep_exprs(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<Vec<Expr>, InternalAsmError> {
+    fn parse_comma_sep_exprs(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<Vec<Expr>, AsmError> {
         let mut args = vec![];
         
         let mut pos = raw_start;
@@ -258,7 +216,7 @@ impl AssembleArgs {
                     Some((p, c)) => {
                         if c.is_whitespace() { continue; } // skip whitespace
                         else if c == ',' { pos = aft + p + 1; break; } // if we have a comma, we expect another arg
-                        else { return err!(self, aft + p, AsmErrorKind::ExpectedCommaBeforeToken); }
+                        else { return Err(AsmError { kind: AsmErrorKind::ExpectedCommaBeforeToken, line_num: self.line_num, pos: Some(aft + p, ), inner_err: None }); }
                     }
                 }
             }
@@ -267,7 +225,7 @@ impl AssembleArgs {
 
     // attempts to extract an expression from the string, allowing leading whitespace.
     // if a well-formed expression is found, returns Ok with it and the character index just after it, otherwise returns Err.
-    fn extract_expr(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Expr, usize), InternalAsmError> {
+    fn extract_expr(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Expr, usize), AsmError> {
         let mut parsing_pos = raw_start;
 
         let mut unary_stack: Vec<OP> = Vec::with_capacity(8);
@@ -282,7 +240,7 @@ impl AssembleArgs {
             debug_assert!(unary_stack.is_empty());
             let (term_start, numeric) = loop {
                 match chars.peek().copied() {
-                    None => return err!(self, raw_stop, AsmErrorKind::ExpectedExprTerm),
+                    None => return Err(AsmError { kind: AsmErrorKind::ExpectedExprTerm, line_num: self.line_num, pos: Some(raw_stop), inner_err: None }),
                     Some((_, x)) if x.is_whitespace() || x == '+' => (), // whitespace and unary plus do nothing
                     Some((_, '-')) => unary_stack.push(OP::Neg),         // push unary ops onto the stack
                     Some((_, '!')) => unary_stack.push(OP::Not),
@@ -300,18 +258,16 @@ impl AssembleArgs {
                     // if there's not a next character we're either done (depth 0), or failed
                     None => {
                         if paren_depth == 0 { break (raw_stop, None); }
-                        else { return err!(self, raw_stop, AsmErrorKind::MissingCloseParen); }
+                        else { return Err(AsmError { kind: AsmErrorKind::MissingCloseParen, line_num: self.line_num, pos: Some(raw_stop), inner_err: None }); }
                     }
                     // otherwise account for important characters
                     Some((p, ch)) => match ch {
                         '(' => {
-                            if numeric {
-                                return err!(self, p, AsmErrorKind::UnexpectedOpenParen);
-                            }
+                            if numeric { return Err(AsmError { kind: AsmErrorKind::UnexpectedOpenParen, line_num: self.line_num, pos: Some(p), inner_err: None }); }
                             paren_depth += 1;
                         }
                         ')' => match paren_depth {
-                            0 => return err!(self, p, AsmErrorKind::UnexpectedCloseParen),
+                            0 => return Err(AsmError { kind: AsmErrorKind::UnexpectedCloseParen, line_num: self.line_num, pos: Some(p), inner_err: None }),
                             1 => match self.extract_binary_op(raw_line, parsing_pos + p + 1, raw_stop) { // this would drop down to level 0, so end of term
                                 Some((op, aft)) => break (parsing_pos + p + 1, Some((op, aft))),
                                 None => break (parsing_pos + p + 1, None),
@@ -319,10 +275,7 @@ impl AssembleArgs {
                             _ => paren_depth -= 1,
                         }
                         '"' | '\'' => {
-                            if numeric {
-                                return err!(self, p, AsmErrorKind::UnexpectedString);
-                            }
-
+                            if numeric { return Err(AsmError { kind: AsmErrorKind::UnexpectedString, line_num: self.line_num, pos: Some(p), inner_err: None }); }
                             let (_, aft) = self.extract_string(raw_line, p, raw_stop)?;  // if we run into a string, refer to the string extractor to get aft
                             advance_cursor(&mut chars, aft - 1 - raw_start, raw_stop); // jump to just before aft position (the end quote) (account for base index change)
                             debug_assert_ne!(chars.peek().unwrap().0, p);
@@ -352,9 +305,7 @@ impl AssembleArgs {
             // grab the term we just found
             let term = &raw_line[term_start..term_stop];
             debug_assert_eq!(term, term.trim());
-            if term.is_empty() {
-                return err!(self, term_start, AsmErrorKind::ExpectedExprTerm);
-            }
+            if term.is_empty() { return Err(AsmError { kind: AsmErrorKind::ExpectedExprTerm, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
 
             let term_expr = match term.chars().next().unwrap() {
                 '(' => { // if it's a sub-expression (paren grouped expr)
@@ -362,50 +313,47 @@ impl AssembleArgs {
                     let (expr, aft) = self.extract_expr(raw_line, term_start + 1, term_stop - 1)?; // parse interior as an expr
                     match raw_line[aft..term_stop-1].trim_start().chars().next() {
                         None => (),
-                        Some(x) if x == COMMENT_CHAR => return err!(self, aft, AsmErrorKind::MissingCloseParen),
-                        Some(_) => return err!(self, term_start, AsmErrorKind::ParenInteriorNotExpr), // we should be able to consume the whole interior
+                        Some(x) if x == COMMENT_CHAR => return Err(AsmError { kind: AsmErrorKind::MissingCloseParen, line_num: self.line_num, pos: Some(aft), inner_err: None }),
+                        Some(_) => return Err(AsmError { kind: AsmErrorKind::ParenInteriorNotExpr, line_num: self.line_num, pos: Some(term_start), inner_err: None }), // we should be able to consume the whole interior
                     }
                     expr
                 }
                 '$' => match term { // if it's a user-level macro
                     "$" => match self.current_seg { // current line macro
-                        None => return err!(self, term_start, AsmErrorKind::IllegalInCurrentSegment),
+                        None => return Err(AsmError { kind: AsmErrorKind::IllegalInCurrentSegment, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                         Some(seg) => (OP::Add, ExprData::Ident(get_seg_offset_str(seg).into()), self.line_pos_in_seg as i64).into(),
                     }
                     "$$" => match self.current_seg { // start of seg macro
-                        None => return err!(self, term_start, AsmErrorKind::IllegalInCurrentSegment),
+                        None => return Err(AsmError { kind: AsmErrorKind::IllegalInCurrentSegment, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                         Some(seg) => ExprData::Ident(get_seg_origin_str(seg).into()).into(),
                     }
+                    "$file" => Value::Binary(self.file_name.as_bytes().into()).into(),
                     "$i" => match &self.times { // times iter macro
-                        None => return err!(self, term_start, AsmErrorKind::TimesIterOutisideOfTimes),
+                        None => return Err(AsmError { kind: AsmErrorKind::TimesIterOutisideOfTimes, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                         Some(info) => (info.current as u64).into(),
                     }
                     _ => { // otherwise it is either invalid or function-like - assume it's function-like
                         let paren_pos = match term.find('(') {
-                            None => return err!(self, term_start, AsmErrorKind::UnrecognizedMacroInvocation),
+                            None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedMacroInvocation, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                             Some(p) => p,
                         };
                         if term.chars().rev().next() != Some(')') {
-                            return err!(self, term_start, AsmErrorKind::UnrecognizedMacroInvocation);
+                            return Err(AsmError { kind: AsmErrorKind::UnrecognizedMacroInvocation, line_num: self.line_num, pos: Some(term_start), inner_err: None });
                         }
                         let func = &term[..paren_pos];
                         let args = self.parse_comma_sep_exprs(raw_line, term_start + paren_pos + 1, term_stop - 1)?;
 
                         match func {
                             "$ptr" => { // pointer macro - interns a binary value in the rodata segment and returns a pointer to its eventual location
-                                if args.len() != 1 {
-                                    return err!(self, term_start, AsmErrorKind::IncorrectArgCount(1));
-                                }
+                                if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let arg = args.into_iter().next().unwrap();
 
                                 let x = match arg.eval(&self.file.symbols) {
-                                    Err(_) => return err!(self, term_start, AsmErrorKind::FailedCriticalExpression),
+                                    Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                                     Ok(mut val) => match val.take_or_borrow().binary() {
-                                        None => return err!(self, term_start, AsmErrorKind::ExpectedBinaryValue),
+                                        None => return Err(AsmError { kind: AsmErrorKind::ExpectedBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                                         Some(content) => {
-                                            if content.is_empty() {
-                                                return err!(self, term_start, AsmErrorKind::EmptyBinaryValue);
-                                            }
+                                            if content.is_empty() { return Err(AsmError { kind: AsmErrorKind::EmptyBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                             let idx = self.file.binary_set.add(content);
                                             ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)).into()
                                         }
@@ -414,9 +362,7 @@ impl AssembleArgs {
                                 x
                             }
                             "$if" => {
-                                if args.len() != 3 {
-                                    return err!(self, term_start, AsmErrorKind::IncorrectArgCount(3));
-                                }
+                                if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(3), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let mut args = args.into_iter();
                                 let cond = args.next().unwrap();
                                 let left = args.next().unwrap();
@@ -425,14 +371,10 @@ impl AssembleArgs {
                             }
                             _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
                                 Some(op) => {
-                                    if args.len() != 1 {
-                                        return err!(self, term_start, AsmErrorKind::IncorrectArgCount(1));
-                                    }
+                                    if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                     (op, args.into_iter().next().unwrap()).into()
                                 }
-                                None => {
-                                    return err!(self, term_start, AsmErrorKind::UnrecognizedMacroInvocation);
-                                }
+                                None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedMacroInvocation, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                             }
                         }
                     }
@@ -453,7 +395,7 @@ impl AssembleArgs {
                         x if x.starts_with("0b") => (&x[2..], 2),
                         x => {
                             if x.len() > 1 && x.starts_with('0') { // disambig from C-style octal literals, which we do not support
-                                return err!(self, term_start, AsmErrorKind::NumericLiteralWithZeroPrefix);
+                                return Err(AsmError { kind: AsmErrorKind::NumericLiteralWithZeroPrefix, line_num: self.line_num, pos: Some(term_start), inner_err: None });
                             }
                             (x, 10)
                         }
@@ -462,18 +404,18 @@ impl AssembleArgs {
 
                     // terms should not have signs - this is handled by unary ops (and prevents e.g. 0x-5 instead of proper -0x5)
                     if term_fix.starts_with('+') || term_fix.starts_with('-') {
-                        return err!(self, term_start, AsmErrorKind::IllFormedNumericLiteral);
+                        return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None });
                     }
 
                     // parse it as correct type and propagate any errors
                     match signed {
                         false => match u64::from_str_radix(&term_fix, radix) {
-                            Err(_) => return err!(self, term_start, AsmErrorKind::IllFormedNumericLiteral), // failed unsigned is failure
+                            Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }), // failed unsigned is failure
                             Ok(v) => v.into(),
                         }
                         true => match i64::from_str_radix(&term_fix, radix) {
                             Err(_) => match Float::parse(term_fix) { // failed signed (int) could just mean that it's (signed) float
-                                Err(_) => return err!(self, term_start, AsmErrorKind::IllFormedNumericLiteral), // but if that fails too, it's a bust
+                                Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }), // but if that fails too, it's a bust
                                 Ok(v) => Float::with_val(PRECISION, v).into(),
                             }
                             Ok(v) => v.into(),
@@ -604,7 +546,7 @@ impl AssembleArgs {
         Expr::chain_add_sub(add, sub).unwrap() // assemble the result
     }
 
-    fn extract_imm(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Imm, usize), InternalAsmError> {
+    fn extract_imm(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Imm, usize), AsmError> {
         // check if we had an explicit size and get the expr start position (after size if present)
         let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
         let (size, expr_start) = parse_size_str(token, token_stop, raw_start);
@@ -613,28 +555,28 @@ impl AssembleArgs {
         let (expr, aft) = self.extract_expr(raw_line, expr_start, raw_stop)?;
         Ok((Imm { expr, size }, aft))
     }
-    fn extract_address(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Address, usize), InternalAsmError> {
+    fn extract_address(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Address, usize), AsmError> {
         // check if we had an explicit size and get the expr start position (after size if present)
         let (token, token_stop) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
         if token.is_empty() {
-            return err!(self, raw_stop, AsmErrorKind::ExpectedAddress);
+            return Err(AsmError { kind: AsmErrorKind::ExpectedAddress, line_num: self.line_num, pos: Some(raw_stop), inner_err: None });
         }
         if let Some(p) = token.find('[') {
             let token_fix = &token[..p];
             if Caseless(token_fix) == Caseless("PTR") {
-                return err!(self, token_stop - token.len(), AsmErrorKind::AddressPtrSpecWithoutSize);
+                return Err(AsmError { kind: AsmErrorKind::AddressPtrSpecWithoutSize, line_num: self.line_num, pos: Some(token_stop - token.len()), inner_err: None });
             }
             if p != 0 { // if token has an open bracket that's not the first char then we have something bad
                 if parse_size_str(token_fix, 0, 0).0.is_some() { // if we can parse it as a size, then we're missing ptr spec
-                    return err!(self, token_stop - token.len() + p, AsmErrorKind::AddressSizeMissingPtr);
+                    return Err(AsmError { kind: AsmErrorKind::AddressSizeMissingPtr, line_num: self.line_num, pos: Some(token_stop - token.len() + p), inner_err: None });
                 }
                 else { // otherwise we have an unknown size
-                    return err!(self, token_stop - token.len(), AsmErrorKind::AddressSizeNotRecognized);
+                    return Err(AsmError { kind: AsmErrorKind::AddressSizeNotRecognized, line_num: self.line_num, pos: Some(token_stop - token.len()), inner_err: None });
                 }
             }
         }
         if Caseless(token) == Caseless("PTR") {
-            return err!(self, token_stop - token.len(), AsmErrorKind::AddressPtrSpecWithoutSize);
+            return Err(AsmError { kind: AsmErrorKind::AddressPtrSpecWithoutSize, line_num: self.line_num, pos: Some(token_stop - token.len()), inner_err: None });
         }
         let (pointed_size, mut next_start) = parse_size_str(token, token_stop, raw_start);
         match pointed_size {
@@ -645,35 +587,34 @@ impl AssembleArgs {
                     token = &token[..p];
                 }
                 if Caseless(token) == Caseless("PTR") { next_start = token_stop; }
-                else { return err!(self, token_stop - token.len(), AsmErrorKind::AddressSizeMissingPtr); }
+                else { return Err(AsmError { kind: AsmErrorKind::AddressSizeMissingPtr, line_num: self.line_num, pos: Some(token_stop - token.len()), inner_err: None }); }
             }
             None => { // if we failed to parse the size, we must start with an open bracket (just the address component)
                 if token.chars().next() != Some('[') {
-                    return err!(self, token_stop - token.len(), AsmErrorKind::AddressSizeNotRecognized);
+                    return Err(AsmError { kind: AsmErrorKind::AddressSizeNotRecognized, line_num: self.line_num, pos: Some(token_stop - token.len()), inner_err: None });
                 }
             }
         }
 
         // after the size part, we need to find the start of the core address component [expr]
         let address_start = match raw_line[next_start..raw_stop].find(|c: char| !c.is_whitespace()) {
-            None => return err!(self, raw_stop, AsmErrorKind::ExpectedAddress),
+            None => return Err(AsmError { kind: AsmErrorKind::ExpectedAddress, line_num: self.line_num, pos: Some(raw_stop), inner_err: None }),
             Some(p) => next_start + p,
         };
         if raw_line[address_start..].chars().next().unwrap() != '[' {
-            return err!(self, address_start, AsmErrorKind::ExpectedAddress);
+            return Err(AsmError { kind: AsmErrorKind::ExpectedAddress, line_num: self.line_num, pos: Some(address_start), inner_err: None });
         }
         let (mut imm, imm_aft) = self.extract_imm(raw_line, address_start + 1, raw_stop)?;
         let (tail, tail_start) = trim_start_with_pos(raw_line, imm_aft, raw_stop);
         match tail.chars().next() {
             Some(']') => (),
-            Some(x) if x == COMMENT_CHAR => return err!(self, tail_start, AsmErrorKind::UnterminatedAddress),
-            None => return err!(self, raw_stop, AsmErrorKind::UnterminatedAddress),
-            Some(_) => return err!(self, tail_start, AsmErrorKind::AddressInteriorNotSingleExpr),
+            None => return Err(AsmError { kind: AsmErrorKind::UnterminatedAddress, line_num: self.line_num, pos: Some(tail_start), inner_err: None }),
+            Some(_) => return Err(AsmError { kind: AsmErrorKind::AddressInteriorNotSingleExpr, line_num: self.line_num, pos: Some(tail_start), inner_err: None }),
         }
         if let Some(size) = imm.size {
             match size {
                 Size::Word | Size::Dword | Size::Qword => (),
-                _ => return err!(self, address_start, AsmErrorKind::AddressSizeUnsupported),
+                _ => return Err(AsmError { kind: AsmErrorKind::AddressSizeUnsupported, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
             }
         }
 
@@ -683,22 +624,22 @@ impl AssembleArgs {
         for reg in CPU_REGISTER_INFO.iter() {
             if let Some(mult) = self.get_reg_mult(*reg.0, &imm.expr, raw_line, address_start)? { // see if this register is present in the expression
                 if reg.1.high { // first of all, high registers are not allowed (this is just for better error messages)
-                    return err!(self, address_start, AsmErrorKind::AddressUseOfHighRegister);
+                    return Err(AsmError { kind: AsmErrorKind::AddressUseOfHighRegister, line_num: self.line_num, pos: Some(address_start), inner_err: None });
                 }
 
                 let mut mult = match mult.eval(&self.file.symbols) { // if it is then it must be a critical expression
                     Ok(mut val) => match &*val.take_or_borrow() {
                         Value::Signed(v) => *v,
-                        _ => return err!(self, address_start, AsmErrorKind::AddressRegMultNotSignedInt),
+                        _ => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotSignedInt, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                     },
-                    Err(_) => return err!(self, address_start, AsmErrorKind::AddressRegMultNotCriticalExpr),
+                    Err(_) => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotCriticalExpr, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                 };
                 if mult == 0 { continue; } // if it's zero then it canceled out and we don't need it
 
                 match imm.size { 
                     None => imm.size = Some(reg.1.size), // if we don't already have a required size, set it to this register size
                     Some(size) => if size != reg.1.size { // otherwise enforce pre-existing value
-                        return err!(self, address_start, AsmErrorKind::AddressConflictingSizes);
+                        return Err(AsmError { kind: AsmErrorKind::AddressConflictingSizes, line_num: self.line_num, pos: Some(address_start), inner_err: None });
                     }
                 }
 
@@ -707,7 +648,7 @@ impl AssembleArgs {
                     mult &= !1; // remove the trivial component
                     if r2.is_none() { r2 = Some(reg.1.id); } // prioritize putting it in r2 since r2 can't have a multiplier (other than 1)
                     else if r1.is_none() { r1 = Some((reg.1.id, 0)); } // otherwise we have to put it in r1 and give it a multiplier of 1 (mult code 0)
-                    else { return err!(self, address_start, AsmErrorKind::AddressTooManyRegs); } // if we don't have anywhere to put it, failure
+                    else { return Err(AsmError { kind: AsmErrorKind::AddressTooManyRegs, line_num: self.line_num, pos: Some(address_start), inner_err: None }); } // if we don't have anywhere to put it, failure
                 }
                 // now, if a (non-trivial) component is present
                 if mult != 0 {
@@ -716,11 +657,11 @@ impl AssembleArgs {
                         2 => 1,
                         4 => 2,
                         8 => 3,
-                        _ => return err!(self, address_start, AsmErrorKind::AddressRegInvalidMult),
+                        _ => return Err(AsmError { kind: AsmErrorKind::AddressRegInvalidMult, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                     };
 
                     if r1.is_none() { r1 = Some((reg.1.id, multcode)); }
-                    else { return err!(self, address_start, AsmErrorKind::AddressTooManyRegs); }
+                    else { return Err(AsmError { kind: AsmErrorKind::AddressTooManyRegs, line_num: self.line_num, pos: Some(address_start), inner_err: None }); }
                 }
             }
         }
@@ -729,14 +670,14 @@ impl AssembleArgs {
             None => Size::Qword, // if we still don't have an explicit address size, use 64-bit
             Some(size) => match size {
                 Size::Word | Size::Dword | Size::Qword => size,
-                _ => return err!(self, address_start, AsmErrorKind::AddressSizeUnsupported), // unsupported addressing modes
+                _ => return Err(AsmError { kind: AsmErrorKind::AddressSizeUnsupported, line_num: self.line_num, pos: Some(address_start), inner_err: None }), // unsupported addressing modes
             }
         };
         let base = {
             let present = match imm.expr.eval(&self.file.symbols) {
                 Ok(v) => match &*v {
                     Value::Signed(v) => *v != 0, // if it's nonzero we have to keep it
-                    _ => return err!(self, address_start, AsmErrorKind::AddressTypeUnsupported), // if it's some other type it's invalid
+                    _ => return Err(AsmError { kind: AsmErrorKind::AddressTypeUnsupported, line_num: self.line_num, pos: Some(address_start), inner_err: None }), // if it's some other type it's invalid
                 }
                 Err(_) => true, // failure to evaluate means we can't statically elide it, so we assume it's present
             };
@@ -745,7 +686,7 @@ impl AssembleArgs {
 
         Ok((Address { address_size, r1, r2, base, pointed_size }, imm_aft + 1))
     }
-    fn get_reg_mult(&self, reg: Caseless, expr: &Expr, raw_line: &str, err_pos: usize) -> Result<Option<Expr>, InternalAsmError> {
+    fn get_reg_mult(&self, reg: Caseless, expr: &Expr, raw_line: &str, err_pos: usize) -> Result<Option<Expr>, AsmError> {
         let handle = &mut *expr.data.borrow_mut();
         match handle {
             ExprData::Value(_) => Ok(None),
@@ -760,17 +701,17 @@ impl AssembleArgs {
             }
             ExprData::Uneval { op, left, right } => {
                 let a = match left.as_ref() {
-                    None => return err!(self, err_pos, AsmErrorKind::IllFormedExpr),
+                    None => return Err(AsmError { kind: AsmErrorKind::IllFormedExpr, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                     Some(x) => self.get_reg_mult(reg, x, raw_line, err_pos)?,
                 };
                 match op {
                     OP::Neg => {
-                        if let Some(_) = right.as_ref() { return err!(self, err_pos, AsmErrorKind::IllFormedExpr); }
+                        if let Some(_) = right.as_ref() { return Err(AsmError { kind: AsmErrorKind::IllFormedExpr, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
                         Ok(a.map(|t| (OP::Neg, t).into())) // just return the negative if we had something
                     }
                     OP::Add | OP::Sub => {
                         let b = match right.as_ref() {
-                            None => return err!(self, err_pos, AsmErrorKind::IllFormedExpr),
+                            None => return Err(AsmError { kind: AsmErrorKind::IllFormedExpr, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                             Some(x) => self.get_reg_mult(reg, x, raw_line, err_pos)?,
                         };
                         
@@ -782,7 +723,7 @@ impl AssembleArgs {
                         Some(a) => Ok(Some((OP::Mul, a, (**right.as_ref().unwrap()).clone()).into())), // return what we got times the other side (currently unmodified due to not recursing to it)
                         None => {
                             let b = match right.as_ref() {
-                                None => return err!(self, err_pos, AsmErrorKind::IllFormedExpr),
+                                None => return Err(AsmError { kind: AsmErrorKind::IllFormedExpr, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                                 Some(x) => self.get_reg_mult(reg, x, raw_line, err_pos)?,
                             };
                             match b {
@@ -793,11 +734,11 @@ impl AssembleArgs {
                     }
                     _ => { // for any other (unsuported) operation, just ensure that the register was not present
                         if let Some(_) = a {
-                            return err!(self, err_pos, AsmErrorKind::AddressRegIllegalOp);
+                            return Err(AsmError { kind: AsmErrorKind::AddressRegIllegalOp, line_num: self.line_num, pos: Some(err_pos), inner_err: None });
                         }
                         if let Some(v) = right.as_ref() {
                             if let Some(_) = self.get_reg_mult(reg, v, raw_line, err_pos)? {
-                                return err!(self, err_pos, AsmErrorKind::AddressRegIllegalOp);
+                                return Err(AsmError { kind: AsmErrorKind::AddressRegIllegalOp, line_num: self.line_num, pos: Some(err_pos), inner_err: None });
                             }
                         }
                         Ok(None)
@@ -810,12 +751,13 @@ impl AssembleArgs {
     /// Attempts to extract an argument from the string, be it a register, address, or imm.
     /// On success, returns the extracted argument and the index just after it.
     /// On failure, the returned error is from imm extraction due to being the most general.
-    fn extract_arg(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Argument, usize), InternalAsmError> {
-        // first try registers since we can do this without copying anything
-        let (token, token_aft) = grab_whitespace_sep_token(raw_line, raw_start, raw_stop);
+    fn extract_arg(&mut self, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Argument, usize), AsmError> {
+        // first try named items since we can do this without copying anything
+        let (token, token_aft) = grab_alnum_token(raw_line, raw_start, raw_stop);
         if let Some(reg) = CPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::CPURegister(*reg), token_aft)); }
         if let Some(reg) = FPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::FPURegister(*reg), token_aft)); }
         if let Some(reg) = VPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::VPURegister(*reg), token_aft)); }
+        if let Some(seg) = SEGMENTS.get(&Caseless(token)) { return Ok((Argument::Segment(*seg), token_aft)); }
 
         // next, try address, since it could parse as an expr if given explicit size
         if let Ok((addr, aft)) = self.extract_address(raw_line, raw_start, raw_stop) { return Ok((Argument::Address(addr), aft)); }
@@ -828,7 +770,7 @@ impl AssembleArgs {
     /// Attempts to extract the header of the given line.
     /// This includes label_def, times, and instruction.
     /// On success, returns the parsed instruction (if present) and one past the index of the last character extracted.
-    pub(super) fn extract_header(&mut self, raw_line: &str) -> Result<(Option<Instruction>, usize), InternalAsmError> {
+    pub(super) fn extract_header(&mut self, raw_line: &str) -> Result<(Option<Instruction>, usize), AsmError> {
         self.label_def = None;
         self.times = None;
 
@@ -837,7 +779,7 @@ impl AssembleArgs {
         if token.0.is_empty() { return Ok((None, 0)); }
         if token.0.ends_with(LABEL_DEF_CHAR) { // if we got a label, set it and grab another token
             let mutated = self.mutate_name(&token.0[..token.0.len()-1], token.1 - token.0.len())?;
-            if is_reserved_symbol_name(&mutated.0) { return err!(self, token.1 - token.0.len(), AsmErrorKind::ReservedSymbolName); }
+            if is_reserved_symbol_name(&mutated.0) { return Err(AsmError { kind: AsmErrorKind::ReservedSymbolName, line_num: self.line_num, pos: Some(token.1 - token.0.len()), inner_err: None }); }
             self.label_def = Some(mutated);
 
             let new_token = grab_whitespace_sep_token(raw_line, token.1, raw_line.len());
@@ -847,76 +789,83 @@ impl AssembleArgs {
         if Caseless(token.0) == Caseless("TIMES") { // if we got a TIMES prefix, extract its part and grab another token
             let err_pos = token.1 - token.0.len();
             let (arg, aft) = match self.extract_arg(raw_line, token.1, raw_line.len()) {
-                Err(e) => return err!(self, e.pos, AsmErrorKind::TimesMissingCount),
+                Err(e) => return Err(AsmError { kind: AsmErrorKind::TimesMissingCount, line_num: self.line_num, pos: e.pos, inner_err: None }),
                 Ok(x) => x,
             };
             let count = match arg {
                 Argument::Imm(imm) => {
-                    if imm.size.is_some() { return err!(self, err_pos, AsmErrorKind::TimesCountHadSizeSpec); }
+                    if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::TimesCountHadSizeSpec, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
                     match imm.expr.eval(&self.file.symbols) {
-                        Err(_) => return err!(self, err_pos, AsmErrorKind::TimesCountNotCriticalExpression),
+                        Err(_) => return Err(AsmError { kind: AsmErrorKind::TimesCountNotCriticalExpression, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         Ok(val) => match &*val {
                             Value::Signed(v) => {
-                                if *v < 0 { return err!(self, err_pos, AsmErrorKind::TimesCountWasNegative); }
+                                if *v < 0 { return Err(AsmError { kind: AsmErrorKind::TimesCountWasNegative, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
                                 *v as u64
                             }
                             Value::Unsigned(v) => *v,
-                            _ => return err!(self, err_pos, AsmErrorKind::TimesCountNotInteger),
+                            _ => return Err(AsmError { kind: AsmErrorKind::TimesCountNotInteger, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         }
                     }
                 }
-                _ => return err!(self, err_pos, AsmErrorKind::TimesCountNotImm),
+                _ => return Err(AsmError { kind: AsmErrorKind::TimesCountNotImm, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
             };
             self.times = Some(TimesInfo { total_count: count, current: 0 });
 
             token = grab_whitespace_sep_token(raw_line, aft, raw_line.len());
-            if token.0.is_empty() { return err!(self, err_pos, AsmErrorKind::TimesUsedOnEmptyLine); }
+            if token.0.is_empty() { return Err(AsmError { kind: AsmErrorKind::TimesUsedOnEmptyLine, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
         }
         else if Caseless(token.0) == Caseless("IF") { // if we got an IF prefix, extract its part and grab another token
             let err_pos = token.1 - token.0.len();
             let (arg, aft) = match self.extract_arg(raw_line, token.1, raw_line.len()) {
-                Err(e) => return err!(self, e.pos, AsmErrorKind::IfMissingExpr),
+                Err(e) => return Err(AsmError { kind: AsmErrorKind::IfMissingExpr, line_num: self.line_num, pos: e.pos, inner_err: None }),
                 Ok(x) => x,
             };
             let cond = match arg {
                 Argument::Imm(imm) => {
-                    if imm.size.is_some() { return err!(self, err_pos, AsmErrorKind::IfExprHadSizeSpec); }
+                    if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::IfExprHadSizeSpec, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
                     match imm.expr.eval(&self.file.symbols) {
-                        Err(_) => return err!(self, err_pos, AsmErrorKind::IfExprNotCriticalExpression),
+                        Err(_) => return Err(AsmError { kind: AsmErrorKind::IfExprNotCriticalExpression, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         Ok(val) => match &*val {
                             Value::Logical(v) => *v,
-                            _ => return err!(self, err_pos, AsmErrorKind::IfExprNotLogical),
+                            _ => return Err(AsmError { kind: AsmErrorKind::IfExprNotLogical, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         }
                     }
                 }
-                _ => return err!(self, err_pos, AsmErrorKind::IfExprNotImm),
+                _ => return Err(AsmError { kind: AsmErrorKind::IfExprNotImm, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
             };
             self.times = Some(TimesInfo { total_count: if cond { 1 } else { 0 }, current: 0 });
 
             token = grab_whitespace_sep_token(raw_line, aft, raw_line.len());
-            if token.0.is_empty() { return err!(self, err_pos, AsmErrorKind::IfUsedOnEmptyLine); }
+            if token.0.is_empty() { return Err(AsmError { kind: AsmErrorKind::IfUsedOnEmptyLine, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
         }
 
         // the token we have at this point should be the instruction - parse it
         match INSTRUCTIONS.get(&Caseless(token.0)) {
-            None => return err!(self, token.1 - token.0.len(), AsmErrorKind::UnrecognizedInstruction),
+            None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedInstruction, line_num: self.line_num, pos: Some(token.1 - token.0.len()), inner_err: None }),
             Some(ins) => Ok((Some(*ins), token.1)),
         }
     }
-    pub(super) fn extract_arguments(&mut self, raw_line: &str, raw_start: usize) -> Result<Vec<Argument>, InternalAsmError> {
+    pub(super) fn extract_arguments(&mut self, raw_line: &str, raw_start: usize) -> Result<Vec<Argument>, AsmError> {
         let mut args = vec![];
 
         // parse the rest of the line as comma-separated arguments
         let (tail, mut pos) = trim_start_with_pos(raw_line, raw_start, raw_line.len());
-        if !tail.is_empty() && !tail.starts_with(COMMENT_CHAR) { // check if we're done with line or entering a comment section (no args)
+        if !tail.is_empty() { // check if we're done with line or entering a comment section (no args)
             loop { // parse one or more comma-separated arguments
                 let (arg, aft) = self.extract_arg(raw_line, pos, raw_line.len())?;
                 args.push(arg);
 
                 let (tail, tail_pos) = trim_start_with_pos(raw_line, aft, raw_line.len());
-                if tail.chars().next() != Some(',') { break; } // if we're not followed by a comma we're done
+                if tail.chars().next() != Some(',') { // if we're not followed by a comma we're done
+                    pos = aft;
+                    break;
+                } 
                 pos = tail_pos + 1;
             }
+
+            // make sure we consumed the entire line
+            let (tail, tail_pos) = trim_start_with_pos(raw_line, pos, raw_line.len());
+            if !tail.is_empty() { return Err(AsmError { kind: AsmErrorKind::ExtraContentAfterArgs, line_num: self.line_num, pos: Some(tail_pos), inner_err: None }); }
         }
 
         Ok(args)
@@ -924,26 +873,26 @@ impl AssembleArgs {
 
     /// Gets the current segment for writing. Returns the segment, the symbol table, and the set of holes.
     /// Fails if not currently in a segment or if in a non-writable segment (like bss).
-    fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &SymbolTable, &mut Vec<Hole>), InternalAsmError> {
+    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &SymbolTable, &mut Vec<Hole>), AsmError> {
         Ok(match self.current_seg {
-            None => return err!(self, 0, AsmErrorKind::WriteOutsideOfSegment),
+            None => return Err(AsmError { kind: AsmErrorKind::WriteOutsideOfSegment, line_num: self.line_num, pos: None, inner_err: None }),
             Some(seg) => match seg {
                 AsmSegment::Text => (&mut self.file.text, &self.file.symbols, &mut self.file.text_holes),
                 AsmSegment::Rodata => (&mut self.file.rodata, &self.file.symbols, &mut self.file.rodata_holes),
                 AsmSegment::Data => (&mut self.file.data, &self.file.symbols, &mut self.file.data_holes),
-                AsmSegment::Bss => return err!(self, 0, AsmErrorKind::WriteInBssSegment),
+                AsmSegment::Bss => return Err(AsmError { kind: AsmErrorKind::WriteInBssSegment, line_num: self.line_num, pos: None, inner_err: None }),
             }
         })
     }
     /// Appends a byte to the current segment, if valid.
-    fn append_byte(&mut self, val: u8) -> Result<(), InternalAsmError> {
+    pub(super) fn append_byte(&mut self, val: u8) -> Result<(), AsmError> {
         let (seg, _, _) = self.get_current_segment_for_writing()?;
         seg.push(val);
         Ok(())
     }
     /// Appends a value to the current segment, if valid.
     /// If it is immediately evaluatable, appends the value, otherwise writes a placeholder and generates a hole entry to be patched later.
-    fn append_val(&mut self, size: Size, expr: Expr, allowed_type: HoleType) -> Result<(), InternalAsmError> {
+    pub(super) fn append_val(&mut self, size: Size, expr: Expr, allowed_type: HoleType) -> Result<(), AsmError> {
         let line_num = self.line_num;
         let (seg, symbols, holes) = self.get_current_segment_for_writing()?;
         let hole = Hole { // generate the hole info
@@ -951,15 +900,18 @@ impl AssembleArgs {
             size, expr, allowed_type, line_num,
         };
         seg.extend(iter::once(0xffu8).cycle().take(size.size())); // make room for the value (all 1's is arbitrary)
-        match patch_hole(seg, symbols, &hole) {
+        match patch_hole(seg, &hole, symbols) {
             Ok(_) => (), // on success we're golden - hole was patched immediately
-            Err(PatchError::Illegal(e)) => return Err(e), // anything illegal is a hard pass
-            Err(PatchError::NotPatched(_)) => holes.push(hole), // an eval error just means we need to add it to the list of holes for this segment
+            Err(e) => match e.kind {
+                PatchErrorKind::Illegal(r) => return Err(AsmError { kind: AsmErrorKind::IllegalPatch(r), line_num: e.line_num, pos: None, inner_err: None }), // anything illegal is a hard pass
+                PatchErrorKind::NotPatched(_) => holes.push(hole), // an eval error just means we need to add it to the list of holes for this segment
+                PatchErrorKind::BoundsError => panic!(), // if this happend we did something wrong
+            }
         }
         Ok(())
     }
     /// Appends an address to the current segment, if valid.
-    fn append_address(&mut self, addr: Address) -> Result<(), InternalAsmError> {
+    fn append_address(&mut self, addr: Address) -> Result<(), AsmError> {
         let a = (if addr.base.is_some() { 0x80 } else { 0 }) | (addr.r1.unwrap_or((0, 0)).1 << 4) | (addr.address_size.basic_sizecode().unwrap() << 2) | (if addr.r1.is_some() { 2 } else { 0 }) | (if addr.r2.is_some() { 1 } else { 0 });
         let b = (addr.r1.unwrap_or((0, 0)).0 << 4) | addr.r2.unwrap_or(0);
 
@@ -971,17 +923,18 @@ impl AssembleArgs {
 
     /// Handles instructions which take no arguments.
     /// Writes `op`, followed by `ext_op` (if valid).
-    pub(super) fn process_no_arg_op(&mut self, args: Vec<Argument>, op: Option<u8>, ext_op: Option<u8>) -> Result<(), InternalAsmError> {
-        if self.current_seg != Some(AsmSegment::Text) { return err!(self, 0, AsmErrorKind::InstructionOutsideOfTextSegment); }
-        if args.len() != 0 { return err!(self, 0, AsmErrorKind::IncorrectArgCount(0)); }
+    pub(super) fn process_no_arg_op(&mut self, args: Vec<Argument>, op: Option<u8>, ext_op: Option<u8>) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 0 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(0), line_num: self.line_num, pos: None, inner_err: None }); }
         if let Some(ext) = op { self.append_byte(ext)? }
         if let Some(ext) = ext_op { self.append_byte(ext)? }
         Ok(())
     }
     /// Attempts to assemble an operation which uses the binary op format.
     /// `force_b_imm_size` can be set to artificially force the size of an imm - e.g. the BTx series of instructions always have use imm8.
-    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_imm_size: Option<Size>) -> Result<(), InternalAsmError> {
-        if args.len() != 2 { return err!(self, 0, AsmErrorKind::IncorrectArgCount(2)); }
+    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_imm_size: Option<Size>) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
         let arg1 = args.next().unwrap();
         let arg2 = args.next().unwrap();
@@ -991,16 +944,16 @@ impl AssembleArgs {
 
         match (arg1, arg2) {
             (Argument::CPURegister(dest), Argument::CPURegister(src)) => {
-                if dest.size != src.size { return err!(self, 0, AsmErrorKind::OperandsHadDifferentSizes); }
-                if !allowed_sizes.contains(&dest.size) { return err!(self, 0, AsmErrorKind::UnsupportedOperandSize); }
+                if dest.size != src.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
+                if !allowed_sizes.contains(&dest.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }) | (if src.high { 1 } else { 0 }))?;
                 self.append_byte(src.id)?;
             }
             (Argument::CPURegister(dest), Argument::Address(src)) => {
                 if let Some(size) = src.pointed_size {
-                    if size != dest.size { return err!(self, 0, AsmErrorKind::OperandsHadDifferentSizes); }
+                    if size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
                 }
-                if !allowed_sizes.contains(&dest.size) { return err!(self, 0, AsmErrorKind::UnsupportedOperandSize); }
+                if !allowed_sizes.contains(&dest.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }))?;
                 self.append_byte(2 << 4)?;
                 self.append_address(src)?;
@@ -1008,24 +961,24 @@ impl AssembleArgs {
             (Argument::CPURegister(dest), Argument::Imm(mut src)) => {
                 match force_b_imm_size {
                     None => match src.size {
-                        Some(size) => if size != dest.size { return err!(self, 0, AsmErrorKind::OperandsHadDifferentSizes); },
+                        Some(size) => if size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); },
                         None => src.size = Some(dest.size),
                     }
                     Some(forced_size) => match src.size {
-                        Some(_) => return err!(self, 0, AsmErrorKind::SizeSpecOnForcedSize),
+                        Some(_) => return Err(AsmError { kind: AsmErrorKind::SizeSpecOnForcedSize, line_num: self.line_num, pos: None, inner_err: None }),
                         None => src.size = Some(forced_size),
                     }
                 }
-                if !allowed_sizes.contains(&dest.size) { return err!(self, 0, AsmErrorKind::UnsupportedOperandSize); }
+                if !allowed_sizes.contains(&dest.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }))?;
                 self.append_byte(1 << 4)?;
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
             (Argument::Address(dest), Argument::CPURegister(src)) => {
                 if let Some(size) = dest.pointed_size {
-                    if size != src.size { return err!(self, 0, AsmErrorKind::OperandsHadDifferentSizes); }
+                    if size != src.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
                 }
-                if !allowed_sizes.contains(&src.size) { return err!(self, 0, AsmErrorKind::UnsupportedOperandSize); }
+                if !allowed_sizes.contains(&src.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((src.size.basic_sizecode().unwrap() << 2) | (if src.high { 1 } else { 0 }))?;
                 self.append_byte((3 << 4) | src.id)?;
                 self.append_address(dest)?;
@@ -1033,33 +986,61 @@ impl AssembleArgs {
             (Argument::Address(mut dest), Argument::Imm(mut src)) => {
                 match force_b_imm_size {
                     None => match (dest.pointed_size, src.size) {
-                        (Some(a), Some(b)) => if a != b { return err!(self, 0, AsmErrorKind::OperandsHadDifferentSizes); },
+                        (Some(a), Some(b)) => if a != b { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); },
                         (None, Some(b)) => dest.pointed_size = Some(b),
                         (Some(a), None) => src.size = Some(a),
-                        (None, None) => return err!(self, 0, AsmErrorKind::CouldNotDeduceOperandSize),
+                        (None, None) => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     }
                     Some(forced_size) => {
-                        if src.size.is_some() { return err!(self, 0, AsmErrorKind::SizeSpecOnForcedSize); }
+                        if src.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecOnForcedSize, line_num: self.line_num, pos: None, inner_err: None }); }
                         src.size = Some(forced_size);
-                        if dest.pointed_size.is_none() { return err!(self, 0, AsmErrorKind::CouldNotDeduceOperandSize); }
+                        if dest.pointed_size.is_none() { return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                     }
                 }
-                if !allowed_sizes.contains(&dest.pointed_size.unwrap()) { return err!(self, 0, AsmErrorKind::UnsupportedOperandSize); }
+                if !allowed_sizes.contains(&dest.pointed_size.unwrap()) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte(dest.pointed_size.unwrap().basic_sizecode().unwrap() << 2)?;
                 self.append_byte(4 << 4)?;
                 self.append_address(dest)?;
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
-            _ => return err!(self, 0, AsmErrorKind::BinaryOpUnsupportedSrcDestTypes),
+            (x,y) => { println!("{:?} and {:?}", x, y); return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None });}
         }
 
         Ok(())
     }
+
+    fn verify_legal_expr(&self, expr: &Expr) -> Result<(), AsmError> {
+        match &*expr.data.borrow() {
+            ExprData::Value(_) => (),
+            ExprData::Ident(ident) => if !self.file.symbols.is_defined(ident) && !self.file.extern_symbols.contains(ident) && !ident.starts_with('#') {
+                return Err(AsmError { kind: AsmErrorKind::UnknownSymbol, line_num: self.line_num, pos: None, inner_err: None });
+            }
+            ExprData::Uneval { op: _, left, right } => {
+                self.verify_legal_expr(left.as_ref().unwrap())?;
+                if let Some(right) = right { self.verify_legal_expr(right)?; }
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn finalize(self) -> Result<ObjectFile, AsmError> {
+        for sym in self.file.global_symbols.iter() {
+            if !self.file.symbols.is_defined(sym) { return Err(AsmError { kind: AsmErrorKind::GlobalSymbolWasNotDefined, line_num: self.line_num, pos: None, inner_err: None }); }
+        }
+
+        for (_, expr) in self.file.symbols.iter() { self.verify_legal_expr(expr)?; }
+
+        for hole in self.file.text_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
+        for hole in self.file.rodata_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
+        for hole in self.file.data_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
+
+        Ok(self.file) // if we're ok, return the final result
+    }
 }
 
 #[cfg(test)]
-fn create_context() -> AssembleArgs {
+fn create_context() -> AssembleArgs<'static> {
     AssembleArgs {
+        file_name: "test.asm",
         file: ObjectFile {
             global_symbols: Default::default(),
             extern_symbols: Default::default(),
@@ -1141,29 +1122,29 @@ fn test_extr_string() {
     match c.extract_string("hello      ' wo rld' b ", 12, 22) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::ExpectedString);
-            assert_eq!(e.pos, 13);
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedString));
+            assert_eq!(e.pos, Some(13));
         }
     }
     match c.extract_string("hello      ' wo rld'y ", 5, 19) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteString);
-            assert_eq!(e.pos, 11);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteString));
+            assert_eq!(e.pos, Some(11));
         }
     }
     match c.extract_string("hello      ' wo rld'  ", 5, 11) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::ExpectedString);
-            assert_eq!(e.pos, 11);
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedString));
+            assert_eq!(e.pos, Some(11));
         }
     }
     match c.extract_string("hello      ' wo rld'  ", 5, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteString);
-            assert_eq!(e.pos, 11);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteString));
+            assert_eq!(e.pos, Some(11));
         }
     }
     match c.extract_string("\"\\\\\\'\\\"'\\n\\t\\r\\0\\x12\\xfe\"\t ", 0, 25) {
@@ -1197,57 +1178,57 @@ fn test_extr_string() {
     match c.extract_string("  '\\y'y", 2, 7) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::InvalidEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::InvalidEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x'", 1, 6) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x5'", 1, 7) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x5g'", 2, 8) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x", 2, 5) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x4", 1, 6) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
     match c.extract_string("  '\\x4b", 2, 7) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteString);
-            assert_eq!(e.pos, 2);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteString));
+            assert_eq!(e.pos, Some(2));
         }
     }
     match c.extract_string("  '\\", 1, 4) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.kind, AsmErrorKind::IncompleteEscape);
-            assert_eq!(e.pos, 3);
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteEscape));
+            assert_eq!(e.pos, Some(3));
         }
     }
 }
@@ -1298,8 +1279,8 @@ fn test_extr_expr() {
     match c.extract_expr("  010  ", 1, 7) {
         Ok(r) => panic!("{:?}", r),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix));
         }
     }
     match c.extract_expr("0", 0, 1) {
@@ -1335,8 +1316,8 @@ fn test_extr_expr() {
     match c.extract_expr("  .14  ", 1, 7) {
         Ok(v) => panic!("{:?}", v),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::InvalidSymbolName);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::InvalidSymbolName));
         }
     }
     match c.extract_expr("5+8", 0, 3) {
@@ -1372,8 +1353,8 @@ fn test_extr_expr() {
     match c.extract_expr("(5+1)*;(5-1) g", 0, 13) {
         Ok(r) => panic!("{:?}", r),
         Err(e) => {
-            assert_eq!(e.pos, 6);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+            assert_eq!(e.pos, Some(6));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
     match c.extract_expr("(5+1);*(5-1) g", 0, 13) {
@@ -1389,15 +1370,15 @@ fn test_extr_expr() {
     match c.extract_expr("(5;+1)", 0, 6) {
         Ok(r) => panic!("{:?}", r),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::MissingCloseParen);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::MissingCloseParen));
         }
     }
     match c.extract_expr(";(5;+1)", 0, 7) {
         Ok(r) => panic!("{:?}", r),
         Err(e) => {
-            assert_eq!(e.pos, 0);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+            assert_eq!(e.pos, Some(0));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
     match c.extract_expr("  (  5-3 )     *--+ -(5 -1)f  ", 1, 30) {
@@ -1433,8 +1414,8 @@ fn test_extr_expr() {
     match c.extract_expr("  'hello;world\"  ", 1, 17) {
         Ok(r) => panic!("{:?}", r),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::IncompleteString);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::IncompleteString));
         }
     }
     match c.extract_expr("$if(TrUe,6 / -2,3 << 2)", 0, 23) {
@@ -1669,13 +1650,13 @@ fn test_address_parser() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_address("   zmMword     ptr  [4*(r8d + 7)]   ", 2, 36) {
+    match c.extract_address("   zWord     ptr  [4*(r8d + 7)]   ", 2, 34) {
         Ok((addr, aft)) => {
-            assert_eq!(aft, 33);
+            assert_eq!(aft, 31);
             assert_eq!(addr.address_size, Size::Dword);
             assert_eq!(addr.r1, Some((8, 2)));
             assert_eq!(addr.r2, None);
-            assert_eq!(addr.pointed_size, Some(Size::Zmmword));
+            assert_eq!(addr.pointed_size, Some(Size::Zword));
             match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
                 Ok(v) => match &*v {
                     Value::Signed(v) => assert_eq!(*v, 28),
@@ -1717,36 +1698,36 @@ fn test_address_parser() {
     match c.extract_address("   5 * ax]  ", 2, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 3);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+            assert_eq!(e.pos, Some(3));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeNotRecognized));
         }
     }
     match c.extract_address("   [5 * ax  ", 2, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 12);
-            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+            assert_eq!(e.pos, Some(12));
+            assert!(matches!(e.kind, AsmErrorKind::UnterminatedAddress));
         }
     }
     match c.extract_address("   word [5 * ax  ", 2, 17) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 8);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
+            assert_eq!(e.pos, Some(8));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeMissingPtr));
         }
     }
     match c.extract_address("   wOrd[5 * ax  ", 2, 16) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 7);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeMissingPtr);
+            assert_eq!(e.pos, Some(7));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeMissingPtr));
         }
     }
     match c.extract_address("   WORD ptr[5 * ax  ", 2, 20) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 20);
-            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+            assert_eq!(e.pos, Some(20));
+            assert!(matches!(e.kind, AsmErrorKind::UnterminatedAddress));
         }
     }
     match c.extract_address("   word ptr[9 * ax]  ", 2, 21) {
@@ -1763,127 +1744,127 @@ fn test_address_parser() {
     match c.extract_address("  word pTr[   ]  ", 1, 17) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 14);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+            assert_eq!(e.pos, Some(14));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
     match c.extract_address("  word ptr[]  ", 1, 14) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 11);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+            assert_eq!(e.pos, Some(11));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
     match c.extract_address("  word ptr[a b]  ", 1, 17) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 13);
-            assert_eq!(e.kind, AsmErrorKind::AddressInteriorNotSingleExpr);
+            assert_eq!(e.pos, Some(13));
+            assert!(matches!(e.kind, AsmErrorKind::AddressInteriorNotSingleExpr));
         }
     }
     match c.extract_address("  ptr[45]  ", 1, 11) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize));
         }
     }
     match c.extract_address("  ptr [45]  ", 1, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressPtrSpecWithoutSize));
         }
     }
     match c.extract_address("  sefsfsd[45]  ", 1, 11) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeNotRecognized));
         }
     }
     match c.extract_address("  sefsfsd [45]  ", 1, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeNotRecognized);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeNotRecognized));
         }
     }
     match c.extract_address("          ", 1, 10) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 10);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedAddress);
+            assert_eq!(e.pos, Some(10));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedAddress));
         }
     }
     match c.extract_address("  [  byte 45]   ", 1, 16) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
     match c.extract_address("  [tword 45]   ", 1, 15) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
-    match c.extract_address("  [ xmmword 45]   ", 1, 18) {
+    match c.extract_address("  [ xwoRd 45]   ", 1, 16) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
-    match c.extract_address("  [ ymmword 45]   ", 1, 18) {
+    match c.extract_address("  [ yword 45]   ", 1, 16) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
-    match c.extract_address("  [ zmmword 45]   ", 1, 18) {
+    match c.extract_address("  [ ZWORD 45]   ", 1, 16) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
     match c.extract_address("  word ptr [al]   ", 1, 18) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 11);
-            assert_eq!(e.kind, AsmErrorKind::AddressSizeUnsupported);
+            assert_eq!(e.pos, Some(11));
+            assert!(matches!(e.kind, AsmErrorKind::AddressSizeUnsupported));
         }
     }
     match c.extract_address("  [ah]   ", 1, 9) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressUseOfHighRegister);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressUseOfHighRegister));
         }
     }
     match c.extract_address("  [ax*bx]   ", 1, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr));
         }
     }
     match c.extract_address("  [ax*ax]   ", 1, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::AddressRegMultNotCriticalExpr));
         }
     }
     match c.extract_address("  [ax;*ax]   ", 1, 12) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 5);
-            assert_eq!(e.kind, AsmErrorKind::UnterminatedAddress);
+            assert!(matches!(e.kind, AsmErrorKind::UnterminatedAddress));
+            assert_eq!(e.pos, Some(5));
         }
     }
 }
@@ -1899,7 +1880,7 @@ fn test_parse_arg() {
         e => panic!("wrong value: {:?}", e),
     }
     match c.extract_arg("g XmM0 g", 1, 8).unwrap() {
-        (Argument::VPURegister(VPURegisterInfo { id: 0, size: Size::Xmmword }), 6) => (),
+        (Argument::VPURegister(VPURegisterInfo { id: 0, size: Size::Xword }), 6) => (),
         e => panic!("wrong value: {:?}", e),
     }
     match c.extract_arg("g bYte PtR [20+rax] g", 1, 21).unwrap() {
@@ -1913,8 +1894,8 @@ fn test_parse_arg() {
     match c.extract_arg("       ", 1, 7) {
         Ok(x) => panic!("{:?}", x),
         Err(e) => {
-            assert_eq!(e.pos, 7);
-            assert_eq!(e.kind, AsmErrorKind::ExpectedExprTerm);
+            assert_eq!(e.pos, Some(7));
+            assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
 }
@@ -1942,16 +1923,16 @@ fn test_extract_header() {
     match c.extract_header("  label%^:    ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::InvalidSymbolName);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::InvalidSymbolName));
         }
     }
 
     match c.extract_header("  .top:    ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::LocalSymbolBeforeNonlocal);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::LocalSymbolBeforeNonlocal));
         }
     }
     c.last_nonlocal_label = Some("thingy".into());
@@ -1967,37 +1948,37 @@ fn test_extract_header() {
     match c.extract_header("  times 45     ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::TimesUsedOnEmptyLine);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::TimesUsedOnEmptyLine));
         }
     }
     match c.extract_header("  times abc     ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::TimesCountNotCriticalExpression);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::TimesCountNotCriticalExpression));
         }
     }
     match c.extract_header("  times -45     ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 2);
-            assert_eq!(e.kind, AsmErrorKind::TimesCountWasNegative);
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::TimesCountWasNegative));
         }
     }
 
     match c.extract_header("  times 5 UNKNOWN_COMMAND    ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 10);
-            assert_eq!(e.kind, AsmErrorKind::UnrecognizedInstruction);
+            assert_eq!(e.pos, Some(10));
+            assert!(matches!(e.kind, AsmErrorKind::UnrecognizedInstruction));
         }
     }
     match c.extract_header("   UNKNOWN_COMMAND    ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 3);
-            assert_eq!(e.kind, AsmErrorKind::UnrecognizedInstruction);
+            assert_eq!(e.pos, Some(3));
+            assert!(matches!(e.kind, AsmErrorKind::UnrecognizedInstruction));
         }
     }
 
@@ -2037,8 +2018,8 @@ fn test_extract_header() {
     match c.extract_header("   rax:    ; this is a comment ") {
         Ok(_) => panic!(),
         Err(e) => {
-            assert_eq!(e.pos, 3);
-            assert_eq!(e.kind, AsmErrorKind::ReservedSymbolName);
+            assert_eq!(e.pos, Some(3));
+            assert!(matches!(e.kind, AsmErrorKind::ReservedSymbolName));
         }
     }
 }
