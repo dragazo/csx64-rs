@@ -93,11 +93,11 @@ pub enum OPCode
 }
 
 pub struct Executable {
-    text_seglen: u64,
-    rodata_seglen: u64,
-    data_seglen: u64,
-    bss_seglen: u64,
-    content: Vec<u8>,
+    pub(crate) text_seglen: usize,
+    pub(crate) rodata_seglen: usize,
+    pub(crate) data_seglen: usize,
+    pub(crate) bss_seglen: usize,
+    pub(crate) content: Vec<u8>,
 }
 const EXE_PREFIX: &[u8] = "csx64-exe\0".as_bytes();
 impl BinaryWrite for Executable {

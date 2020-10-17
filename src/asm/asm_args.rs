@@ -500,10 +500,10 @@ impl AssembleArgs<'_> {
                 if ident == base { return Some(Value::Signed(0).into()); } // if this is the base itself, offset is zero (signed because we want the offset value)
                 match self.file.symbols.get(ident) {
                     None => return None,
-                    Some(symbol) => symbol,
+                    Some((symbol, _)) => symbol,
                 }
             }
-            ExprData::Uneval { op: _, left: _, right: _ } => expr,
+            ExprData::Uneval { .. } => expr,
         };
         match &*target.data.borrow() {
             ExprData::Uneval { op: OP::Add, left, right } => match &*left.as_ref().unwrap().data.borrow() { // unwraps are ok cause we know we generated the value just before
@@ -770,7 +770,7 @@ impl AssembleArgs<'_> {
     /// Attempts to extract the header of the given line.
     /// This includes label_def, times, and instruction.
     /// On success, returns the parsed instruction (if present) and one past the index of the last character extracted.
-    pub(super) fn extract_header(&mut self, raw_line: &str) -> Result<(Option<Instruction>, usize), AsmError> {
+    pub(super) fn extract_header(&mut self, raw_line: &str) -> Result<(Option<(Option<(Prefix, usize)>, (Instruction, usize))>, usize), AsmError> {
         self.label_def = None;
         self.times = None;
 
@@ -839,10 +839,22 @@ impl AssembleArgs<'_> {
             if token.0.is_empty() { return Err(AsmError { kind: AsmErrorKind::IfUsedOnEmptyLine, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
         }
 
+        // check if we got a prefix
+        let prefix = match PREFIXES.get(&Caseless(token.0)) {
+            None => None,
+            Some(prefix) => {
+                let err_pos = token.1 - token.0.len();
+                token = grab_whitespace_sep_token(raw_line, token.1, raw_line.len());
+                if token.0.is_empty() { return Err(AsmError { kind: AsmErrorKind::PrefixWithoutInstruction, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
+                Some((*prefix, err_pos))
+            }
+        };
+
         // the token we have at this point should be the instruction - parse it
+        let ins_pos = token.1 - token.0.len();
         match INSTRUCTIONS.get(&Caseless(token.0)) {
-            None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedInstruction, line_num: self.line_num, pos: Some(token.1 - token.0.len()), inner_err: None }),
-            Some(ins) => Ok((Some(*ins), token.1)),
+            None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedInstruction, line_num: self.line_num, pos: Some(ins_pos), inner_err: None }),
+            Some(ins) => Ok((Some((prefix, (*ins, ins_pos))), token.1)),
         }
     }
     pub(super) fn extract_arguments(&mut self, raw_line: &str, raw_start: usize) -> Result<Vec<Argument>, AsmError> {
@@ -873,7 +885,7 @@ impl AssembleArgs<'_> {
 
     /// Gets the current segment for writing. Returns the segment, the symbol table, and the set of holes.
     /// Fails if not currently in a segment or if in a non-writable segment (like bss).
-    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &SymbolTable, &mut Vec<Hole>), AsmError> {
+    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &dyn SymbolTableCore, &mut Vec<Hole>), AsmError> {
         Ok(match self.current_seg {
             None => return Err(AsmError { kind: AsmErrorKind::WriteOutsideOfSegment, line_num: self.line_num, pos: None, inner_err: None }),
             Some(seg) => match seg {
@@ -905,7 +917,6 @@ impl AssembleArgs<'_> {
             Err(e) => match e.kind {
                 PatchErrorKind::Illegal(r) => return Err(AsmError { kind: AsmErrorKind::IllegalPatch(r), line_num: e.line_num, pos: None, inner_err: None }), // anything illegal is a hard pass
                 PatchErrorKind::NotPatched(_) => holes.push(hole), // an eval error just means we need to add it to the list of holes for this segment
-                PatchErrorKind::BoundsError => panic!(), // if this happend we did something wrong
             }
         }
         Ok(())
@@ -1003,35 +1014,56 @@ impl AssembleArgs<'_> {
                 self.append_address(dest)?;
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
-            (x,y) => { println!("{:?} and {:?}", x, y); return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None });}
+            _ => return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None }),
         }
 
         Ok(())
     }
 
-    fn verify_legal_expr(&self, expr: &Expr) -> Result<(), AsmError> {
+    fn verify_legal_expr(&self, expr: &Expr, line_num: usize) -> Result<(), AsmError> {
         match &*expr.data.borrow() {
             ExprData::Value(_) => (),
-            ExprData::Ident(ident) => if !self.file.symbols.is_defined(ident) && !self.file.extern_symbols.contains(ident) && !ident.starts_with('#') {
-                return Err(AsmError { kind: AsmErrorKind::UnknownSymbol, line_num: self.line_num, pos: None, inner_err: None });
+            ExprData::Ident(ident) => if !self.file.symbols.is_defined(ident) && !self.file.extern_symbols.contains_key(ident) && !ident.starts_with('#') {
+                return Err(AsmError { kind: AsmErrorKind::UnknownSymbol, line_num, pos: None, inner_err: None });
             }
             ExprData::Uneval { op: _, left, right } => {
-                self.verify_legal_expr(left.as_ref().unwrap())?;
-                if let Some(right) = right { self.verify_legal_expr(right)?; }
+                self.verify_legal_expr(left.as_ref().unwrap(), line_num)?;
+                if let Some(right) = right { self.verify_legal_expr(right, line_num)?; }
+            }
+        }
+        Ok(())
+    }
+    fn verify_legal_global(&self, expr: &Expr, line_num: usize) -> Result<(), AsmError> {
+        match &*expr.data.borrow() {
+            ExprData::Value(_) => (),
+            ExprData::Ident(ident) => if let Some(_) = self.file.extern_symbols.get(ident) {
+                return Err(AsmError { kind: AsmErrorKind::GlobalUsesExtern { extern_sym: ident.to_owned() }, line_num, pos: None, inner_err: None });
+            }
+            ExprData::Uneval { left, right, .. } => {
+                if let Some(left) = left { self.verify_legal_global(left, line_num)? } // although children might not be globals themselves, same logic applies
+                if let Some(right) = right { self.verify_legal_global(right, line_num)? }
             }
         }
         Ok(())
     }
     pub(super) fn finalize(self) -> Result<ObjectFile, AsmError> {
-        for sym in self.file.global_symbols.iter() {
-            if !self.file.symbols.is_defined(sym) { return Err(AsmError { kind: AsmErrorKind::GlobalSymbolWasNotDefined, line_num: self.line_num, pos: None, inner_err: None }); }
+        // make sure all globals are defined
+        for (global, &line_num) in self.file.global_symbols.iter() {
+            if !self.file.symbols.is_defined(global) {
+                return Err(AsmError { kind: AsmErrorKind::GlobalSymbolWasNotDefined, line_num, pos: None, inner_err: None });
+            }
+        }
+        // this has to happen after the previous because it assumes globals are defined
+        for (global, _) in self.file.global_symbols.iter() {
+            let line_num = self.file.symbols.get(global).unwrap().1; // error message point to definition, not declaration
+            self.verify_legal_global(&self.file.symbols.get(global).unwrap().0, line_num)?;
         }
 
-        for (_, expr) in self.file.symbols.iter() { self.verify_legal_expr(expr)?; }
+        for (_, (expr, line_num)) in self.file.symbols.iter() { self.verify_legal_expr(expr, *line_num)?; }
 
-        for hole in self.file.text_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
-        for hole in self.file.rodata_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
-        for hole in self.file.data_holes.iter() { self.verify_legal_expr(&hole.expr)?; }
+        for hole in self.file.text_holes.iter() { self.verify_legal_expr(&hole.expr, hole.line_num)?; }
+        for hole in self.file.rodata_holes.iter() { self.verify_legal_expr(&hole.expr, hole.line_num)?; }
+        for hole in self.file.data_holes.iter() { self.verify_legal_expr(&hole.expr, hole.line_num)?; }
 
         Ok(self.file) // if we're ok, return the final result
     }
@@ -1442,8 +1474,8 @@ fn test_extr_expr() {
 #[test]
 fn test_ptriff() {
     let mut c = create_context();
-    c.file.symbols.define("foo".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 10i64).into()).unwrap();
-    c.file.symbols.define("bar".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 14i64).into()).unwrap();
+    c.file.symbols.define("foo".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 10i64).into(), 0).unwrap();
+    c.file.symbols.define("bar".into(), (OP::Add, Expr::from(ExprData::Ident("#t".into())), 14i64).into(), 0).unwrap();
     match c.extract_expr("$-$", 0, 3) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 3);
@@ -1941,7 +1973,7 @@ fn test_extract_header() {
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Local);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  times 45 nop  ; this is a comment ").unwrap(), (Some(Instruction::NOP), 14));
+    assert_eq!(c.extract_header("  times 45 nop  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 11))), 14));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, Some(TimesInfo { total_count: 45, current: 0 }));
 
@@ -1982,35 +2014,35 @@ fn test_extract_header() {
         }
     }
 
-    assert_eq!(c.extract_header("  label: tiMEs 5 NoP  ; this is a comment ").unwrap(), (Some(Instruction::NOP), 20));
+    assert_eq!(c.extract_header("  label: tiMEs 5 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "label");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 5, current: 0 }));
 
-    assert_eq!(c.extract_header("  label: tiMEs 0 NoP  ; this is a comment ").unwrap(), (Some(Instruction::NOP), 20));
+    assert_eq!(c.extract_header("  label: tiMEs 0 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "label");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 0, current: 0 }));
 
-    assert_eq!(c.extract_header("  merp: NoP  ; this is a comment ").unwrap(), (Some(Instruction::NOP), 11));
+    assert_eq!(c.extract_header("  merp: NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 8))), 11));
     assert_eq!(c.label_def.as_ref().unwrap().0, "merp");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  NoP  ; this is a comment ").unwrap(), (Some(Instruction::NOP), 5));
+    assert_eq!(c.extract_header("  NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 2))), 5));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  NoP; this is a comment ").unwrap(), (Some(Instruction::NOP), 5));
+    assert_eq!(c.extract_header("  NoP; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 2))), 5));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header(" lab: if true nop ' ; this is a comment ").unwrap(), (Some(Instruction::NOP), 17));
+    assert_eq!(c.extract_header(" lab: if true nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 14))), 17));
     assert_eq!(c.label_def.as_ref().unwrap().0, "lab");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 1, current: 0 }));
 
-    assert_eq!(c.extract_header(" .lab2: if false nop ' ; this is a comment ").unwrap(), (Some(Instruction::NOP), 20));
+    assert_eq!(c.extract_header(" .lab2: if false nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "thingy.lab2");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Local);
     assert_eq!(c.times, Some(TimesInfo { total_count: 0, current: 0 }));
@@ -2020,6 +2052,18 @@ fn test_extract_header() {
         Err(e) => {
             assert_eq!(e.pos, Some(3));
             assert!(matches!(e.kind, AsmErrorKind::ReservedSymbolName));
+        }
+    }
+
+    assert_eq!(c.extract_header("  reP NoP  ").unwrap(), (Some((Some((Prefix::REP, 2)), (Instruction::NOP, 6))), 9));
+    assert_eq!(c.label_def, None);
+    assert_eq!(c.times, None);
+
+    match c.extract_header("  reP  ") {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::PrefixWithoutInstruction));
         }
     }
 }

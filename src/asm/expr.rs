@@ -374,8 +374,8 @@ impl BinaryRead for Expr {
         Ok(Expr { data: BinaryRead::bin_read(f)? })
     }
 }
-impl std::fmt::Debug for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", &*self.data.borrow())
     }
 }
@@ -386,15 +386,18 @@ impl<T> From<T> for Expr where ExprData: From<T> {
     }
 }
 
-/// A appendonly map-like collection of defined symbols.
+/// An appendonly map-like collection of defined symbols.
 /// 
 /// Importantly, an instance of this type is used during assembly/linking to facilitate pre- and user-defined symbols.
+/// 
+/// The type `T` is a tag type that is associated with the value to give it additional context.
+/// For instance, the assembler uses tags to keep track of declaration line numbers.
 /// 
 /// # Example
 /// ```
 /// # use csx64::asm::expr::*;
-/// let mut symbols = SymbolTable::new();
-/// symbols.define("foo".into(), 2u64.into()).unwrap();
+/// let mut symbols: SymbolTable<usize> = Default::default();
+/// symbols.define("foo".into(), 2u64.into(), 0).unwrap();
 /// ```
 /// 
 /// Note that in the above example `expr` was technically modified despite `eval()` being an immutable method.
@@ -405,26 +408,31 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 /// The way this is done is that any sub-expression in the expression tree which successfully evaluates is replaced with a value node with equivalent content.
 /// Because of this, if an `Expr` is evaluated using a given symbol table, it should typically never be evaluated with any other symbol table, lest the final value be potentially corrupted.
 /// Best practice has that there should be only one symbol table, which is what the assembly and linking functions included in this crate do implicitly.
-#[derive(Default, Clone)]
-pub struct SymbolTable {
-    pub(super) raw: HashMap<String, Expr>,
+#[derive(Clone)]
+pub struct SymbolTable<T> {
+    pub(super) raw: HashMap<String, (Expr, T)>,
 }
-impl BinaryWrite for SymbolTable {
+impl<T> BinaryWrite for SymbolTable<T> where T: BinaryWrite {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         self.raw.bin_write(f)
     }
 }
-impl BinaryRead for SymbolTable {
-    fn bin_read<F: Read>(f: &mut F) -> io::Result<SymbolTable> {
+impl<T> BinaryRead for SymbolTable<T> where T: BinaryRead {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<Self> {
         Ok(SymbolTable { raw: BinaryRead::bin_read(f)? })
     }
 }
-impl std::fmt::Debug for SymbolTable {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl<T> fmt::Debug for SymbolTable<T> where T: fmt::Debug {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (k, v) in self.iter() {
             writeln!(f, "{} := {:?}", k, v)?;
         }
         Ok(())
+    }
+}
+impl<T> Default for SymbolTable<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -490,22 +498,42 @@ fn test_all_legal() {
     }
 }
 
-impl SymbolTable {
-    /// Constructs an empty symbol table.
-    pub fn new() -> Self {
-        Default::default()
-    }
-
+pub trait SymbolTableCore {
+    /// Checks if the symbol table is empty.
+    fn is_empty(&self) -> bool;
+    /// Gets the number of defined symbols.
+    fn len(&self) -> usize;
     /// Checks if a symbol with the given name has already been defined.
-    pub fn is_defined(&self, symbol: &str) -> bool {
+    fn is_defined(&self, symbol: &str) -> bool;
+    /// Gets the associated expression if defined
+    fn get_expr(&self, symbol: &str) -> Option<&Expr>;
+}
+impl<T> SymbolTableCore for SymbolTable<T> {
+    fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.raw.len()
+    }
+    fn is_defined(&self, symbol: &str) -> bool {
         self.raw.contains_key(symbol)
     }
+    fn get_expr(&self, symbol: &str) -> Option<&Expr> {
+        self.get(symbol).map(|x| &x.0)
+    }
+}
+impl<T> SymbolTable<T> {
+    /// Constructs an empty symbol table.
+    pub fn new() -> Self {
+        Self { raw: Default::default() }
+    }
+
     /// Introduces a new symbol.
     /// If not already defined, defines it and returns `Ok(())`.
     /// Otherwise, returns `Err(symbol)`.
-    pub fn define(&mut self, symbol: String, value: Expr) -> Result<(), String> {
+    pub fn define(&mut self, symbol: String, value: Expr, tag: T) -> Result<(), String> {
         if !self.is_defined(&symbol) {
-            self.raw.insert(symbol, value);
+            self.raw.insert(symbol, (value, tag));
             Ok(())
         }
         else {
@@ -514,38 +542,30 @@ impl SymbolTable {
     }
 
     /// Gets the value of the given symbol if defined.
-    pub fn get(&self, symbol: &str) -> Option<&Expr> {
+    pub fn get(&self, symbol: &str) -> Option<&(Expr, T)> {
         self.raw.get(symbol)
     }
-
-    /// Checks if the symbol table is empty.
-    pub fn is_empty(&self) -> bool {
-        self.raw.is_empty()
-    }
+    
     /// Undefines all symbols, effectively restoring the newly-constructed state.
     /// This is meant to support resource reuse, and should not be used to remove or modify defined symbols.
     pub fn clear(&mut self) {
         self.raw.clear();
     }
-    /// Gets the number of defined symbols.
-    pub fn len(&self) -> usize {
-        self.raw.len()
-    }
-
+    
     /// Iterates over the defined symbols and their values.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Expr)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &(Expr, T))> {
         self.raw.iter()
     }
 }
 #[test]
 fn test_symbol_table() {
-    let mut s = SymbolTable::default();
+    let mut s: SymbolTable<()> = Default::default();
     assert!(!s.is_defined("foo"));
     assert!(!s.is_defined("bar"));
-    s.define("foo".into(), ExprData::Ident("bar".into()).into()).unwrap();
+    s.define("foo".into(), ExprData::Ident("bar".into()).into(), ()).unwrap();
     assert!(s.is_defined("foo"));
     assert!(!s.is_defined("bar"));
-    assert_eq!(s.define("foo".into(), ExprData::Ident("bar".into()).into()).unwrap_err(), "foo");
+    assert_eq!(s.define("foo".into(), ExprData::Ident("bar".into()).into(), ()).unwrap_err(), "foo");
 }
 
 enum Ownership<'a> {
@@ -598,17 +618,17 @@ impl<'a> ValueRef<'a> {
     }
 }
 impl<'a> Debug for ValueRef<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", *self)
     }
 }
 
 impl Expr {
-    fn eval_recursive<'a>(mut root: cell::RefMut<'a, ExprData>, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
+    fn eval_recursive<'a>(mut root: cell::RefMut<'a, ExprData>, symbols: &'a dyn SymbolTableCore) -> Result<ValueRef<'a>, EvalError> {
         // decide how to approach evaluation
         let res: Value = match &*root {
             ExprData::Value(_) => return Ok(ValueRef::mine(root)), // if we're a value node, we already have the value - skip caching
-            ExprData::Ident(ident) => match symbols.get(ident) { // if it's an identifier, look it up
+            ExprData::Ident(ident) => match symbols.get_expr(ident) { // if it's an identifier, look it up
                 None => return Err(EvalError::UndefinedSymbol(ident.clone())),
                 Some(entry) => match entry.data.try_borrow_mut() { // attempt to borrow it mutably - we don't allow symbol table content references to escape this module, so failure means cyclic dependency
                     Err(_) => return Err(EvalError::Illegal(IllegalReason::CyclicDependency)),
@@ -616,7 +636,7 @@ impl Expr {
                 }
             }
             ExprData::Uneval { op, left, right } => { // if it's an unevaluated expression, evaluate it
-                fn binary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, f: F) -> Result<Value, EvalError>
+                fn binary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a dyn SymbolTableCore, f: F) -> Result<Value, EvalError>
                 where F: FnOnce(ValueRef, ValueRef) -> Result<Value, EvalError>
                 {
                     let (left, right) = match (left.as_ref(), right.as_ref()) {
@@ -632,7 +652,7 @@ impl Expr {
                     }
                 }
 
-                fn unary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a SymbolTable, f: F) -> Result<Value, EvalError>
+                fn unary_op<'a, F>(left: &'a Option<Box<Expr>>, right: &'a Option<Box<Expr>>, symbols: &'a dyn SymbolTableCore, f: F) -> Result<Value, EvalError>
                 where F: FnOnce(ValueRef) -> Result<Value, EvalError>
                 {
                     let left = match left.as_ref() {
@@ -942,7 +962,7 @@ impl Expr {
     /// Attempts to evaluate the expression given a symbol table to use.
     /// Due to reasons discussed in the doc entry for `SymbolTable`, once an `Expr` has been evaluated with a given symbol table
     /// it should never be evaluated with any other symbol table.
-    pub(super) fn eval<'a>(&'a self, symbols: &'a SymbolTable) -> Result<ValueRef<'a>, EvalError> {
+    pub(super) fn eval<'a>(&'a self, symbols: &'a dyn SymbolTableCore) -> Result<ValueRef<'a>, EvalError> {
         Self::eval_recursive(self.data.borrow_mut(), symbols)
     }
 
@@ -1002,23 +1022,23 @@ impl Expr {
 }
 #[test]
 fn test_catch_cyclic_dep() {
-    let mut s = SymbolTable::new();
-    s.define("foo".into(), ExprData::Ident("bar".into()).into()).unwrap();
-    s.define("bar".into(), ExprData::Ident("foo".into()).into()).unwrap();
+    let mut s: SymbolTable<()> = Default::default();
+    s.define("foo".into(), ExprData::Ident("bar".into()).into(), ()).unwrap();
+    s.define("bar".into(), ExprData::Ident("foo".into()).into(), ()).unwrap();
 
-    assert!(matches!(s.get("foo").unwrap().eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
-    assert!(matches!(s.get("bar").unwrap().eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
+    assert!(matches!(s.get("foo").unwrap().0.eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
+    assert!(matches!(s.get("bar").unwrap().0.eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
 
-    s.define("solipsis".into(), ExprData::Ident("solipsis".into()).into()).unwrap();
-    assert!(matches!(s.get("solipsis").unwrap().eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
+    s.define("solipsis".into(), ExprData::Ident("solipsis".into()).into(), ()).unwrap();
+    assert!(matches!(s.get("solipsis").unwrap().0.eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
 
-    s.define("piano".into(), (OP::Add, ExprData::Ident("piano".into()), Expr::from(1i64)).into()).unwrap();
-    assert!(matches!(s.get("piano").unwrap().eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
+    s.define("piano".into(), (OP::Add, ExprData::Ident("piano".into()), Expr::from(1i64)).into(), ()).unwrap();
+    assert!(matches!(s.get("piano").unwrap().0.eval(&s), Err(EvalError::Illegal(IllegalReason::CyclicDependency))));
 }
 
 #[test]
 fn test_uneval_invalid() {
-    let s = SymbolTable::new();
+    let s: SymbolTable<()> = Default::default();
 
     match Expr::from((OP::Invalid, 2u64, 44u64)).eval(&s) {
         Err(EvalError::Illegal(IllegalReason::IllFormed)) => (),
@@ -1062,7 +1082,7 @@ fn test_uneval_invalid() {
 
 #[test]
 fn test_expr_eval() {
-    let mut s = SymbolTable::default();
+    let mut s: SymbolTable<()> = Default::default();
     macro_rules! make_expr {
         ($op:expr, $left:expr, $right:expr) => {
             Expr::from(($op, ExprData::from($left), ExprData::from($right)))
@@ -1090,14 +1110,14 @@ fn test_expr_eval() {
     assert!(matches!(make_expr!(OP::Mod, -57i64, 0i64).eval(&s).unwrap_err(), EvalError::Illegal(IllegalReason::DivideByZero)));
 
     // make sure that the new take() logic is safe when used on Ident (make sure it takes a copy, not the actual symbol value)
-    s.define("foo".into(), 654i64.into()).unwrap();
+    s.define("foo".into(), 654i64.into(), ()).unwrap();
     assert_eq!(Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().take_or_clone().signed().unwrap(), 654);
     assert_eq!(Expr::from(ExprData::Ident("foo".into())).eval(&s).unwrap().take_or_clone().signed().unwrap(), 654); // do it twice - second time is the potential failure
     assert_eq!(make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 664);
     assert_eq!(make_expr!(OP::Add, ExprData::Ident("foo".into()), 10i64).eval(&s).unwrap().take_or_clone().signed().unwrap(), 664); // do it twice - second time is the potential failure
 
-    s.define("msg".into(), "owo wats dis".as_bytes().to_owned().into()).unwrap();
-    s.define("msg2".into(), "rawr xd".as_bytes().to_owned().into()).unwrap();
+    s.define("msg".into(), "owo wats dis".as_bytes().to_owned().into(), ()).unwrap();
+    s.define("msg2".into(), "rawr xd".as_bytes().to_owned().into(), ()).unwrap();
     assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats dis".as_bytes());
     assert_eq!(Expr::from(ExprData::Ident("msg".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats dis".as_bytes()); // do it twice - second time is the potential failure
     assert_eq!(make_expr!(OP::Add, ExprData::Ident("msg".into()), ExprData::Ident("msg2".into())).eval(&s).unwrap().take_or_clone().binary().unwrap(), "owo wats disrawr xd".as_bytes());

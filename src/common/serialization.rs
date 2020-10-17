@@ -152,6 +152,25 @@ fn test_serialize_corrupt_isize() {
     }
 }
 
+macro_rules! impl_tuple {
+    ($($t:ident : $v:ident),+ => $($i:tt),+) => {
+        impl<$($t),+> BinaryWrite for ($($t),+) where $($t: BinaryWrite),+ {
+            fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+                $(self.$i.bin_write(f)?;)+
+                Ok(())
+            }
+        }
+        impl<$($t),+> BinaryRead for ($($t),+) where $($t: BinaryRead),+ {
+            fn bin_read<F: Read>(f: &mut F) -> io::Result<($($t),+)> {
+                $(let $v: $t = BinaryRead::bin_read(f)?;)+
+                Ok(($($v),+))
+            }
+        }
+    }
+}
+
+impl_tuple! { T0:t0, T1:t1 => 0, 1 }
+
 impl BinaryWrite for [u8] {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         self.len().bin_write(f)?; // write a length prefix

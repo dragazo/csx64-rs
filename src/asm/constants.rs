@@ -12,6 +12,12 @@ macro_rules! insert {
         assert!($s.insert($val))
     }
 }
+macro_rules! alias {
+    ($m:ident : $from:expr => $to:expr) => {{
+        let v = *$m.get(&$to).unwrap();
+        insert!($m: $from => v);
+    }}
+}
 
 pub(super) const COMMENT_CHAR: char = ';';
 pub(super) const LABEL_DEF_CHAR: char = ':';
@@ -330,6 +336,12 @@ lazy_static! {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Prefix {
+    REP, REPZ, REPNZ,
+    LOCK,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Instruction {
     EQU,
     SEGMENT,
@@ -339,10 +351,24 @@ pub(super) enum Instruction {
     DECLARE(Size), RESERVE(Size),
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
-    MOV, MOVZ, MOVNZ, MOVS, MOVNS, MOVP, MOVNP, MOVO, MOVNO, MOVC, MOVNC, MOVB, MOVBE, MOVA, MOVAE, MOVL, MOVLE, MOVG, MOVGE,
+    MOV, MOVcc(u8),
 }
 
 lazy_static! {
+    pub(super) static ref PREFIXES: BTreeMap<Caseless<'static>, Prefix> = {
+        let mut m = BTreeMap::new();
+
+        insert!(m: Caseless("REP") => Prefix::REP);
+        insert!(m: Caseless("REPZ") => Prefix::REPZ);
+        insert!(m: Caseless("REPNZ") => Prefix::REPNZ);
+
+        alias!(m: Caseless("REPE") => Caseless("REPZ"));
+        alias!(m: Caseless("REPNE") => Caseless("REPNZ"));
+
+        insert!(m: Caseless("LOCK") => Prefix::LOCK);
+
+        m
+    };
     pub(super) static ref INSTRUCTIONS: BTreeMap<Caseless<'static>, Instruction> = {
         let mut m = BTreeMap::new();
         
@@ -376,44 +402,47 @@ lazy_static! {
 
         insert!(m: Caseless("NOP") => Instruction::NOP);
         insert!(m: Caseless("HLT") => Instruction::HLT);
-        insert!(m: Caseless("PAUSE") => Instruction::HLT); // PAUSE is just an alias for HLT
         insert!(m: Caseless("SYSCALL") => Instruction::SYSCALL);
+
+        alias!(m: Caseless("PAUSE") => Caseless("HLT"));
 
         insert!(m: Caseless("LFENCE") => Instruction::LFENCE);
         insert!(m: Caseless("SFENCE") => Instruction::SFENCE);
         insert!(m: Caseless("MFENCE") => Instruction::MFENCE);
         
         insert!(m: Caseless("MOV") => Instruction::MOV);
-        insert!(m: Caseless("MOVZ") => Instruction::MOVZ);
-        insert!(m: Caseless("MOVE") => Instruction::MOVZ);
-        insert!(m: Caseless("MOVNZ") => Instruction::MOVNZ);
-        insert!(m: Caseless("MOVNE") => Instruction::MOVNZ);
-        insert!(m: Caseless("MOVS") => Instruction::MOVS);
-        insert!(m: Caseless("MOVNS") => Instruction::MOVNS);
-        insert!(m: Caseless("MOVP") => Instruction::MOVP);
-        insert!(m: Caseless("MOVPE") => Instruction::MOVP);
-        insert!(m: Caseless("MOVNP") => Instruction::MOVNP);
-        insert!(m: Caseless("MOVPO") => Instruction::MOVNP);
-        insert!(m: Caseless("MOVO") => Instruction::MOVO);
-        insert!(m: Caseless("MOVNO") => Instruction::MOVNO);
-        insert!(m: Caseless("MOVC") => Instruction::MOVC);
-        insert!(m: Caseless("MOVNC") => Instruction::MOVNC);
-        insert!(m: Caseless("MOVB") => Instruction::MOVB);
-        insert!(m: Caseless("MOVNAE") => Instruction::MOVB);
-        insert!(m: Caseless("MOVBE") => Instruction::MOVBE);
-        insert!(m: Caseless("MOVNA") => Instruction::MOVBE);
-        insert!(m: Caseless("MOVA") => Instruction::MOVA);
-        insert!(m: Caseless("MOVNBE") => Instruction::MOVA);
-        insert!(m: Caseless("MOVAE") => Instruction::MOVAE);
-        insert!(m: Caseless("MOVNB") => Instruction::MOVAE);
-        insert!(m: Caseless("MOVL") => Instruction::MOVL);
-        insert!(m: Caseless("MOVNGE") => Instruction::MOVL);
-        insert!(m: Caseless("MOVLE") => Instruction::MOVLE);
-        insert!(m: Caseless("MOVNG") => Instruction::MOVLE);
-        insert!(m: Caseless("MOVG") => Instruction::MOVG);
-        insert!(m: Caseless("MOVNLE") => Instruction::MOVG);
-        insert!(m: Caseless("MOVGE") => Instruction::MOVGE);
-        insert!(m: Caseless("MOVNL") => Instruction::MOVGE);
+        
+        insert!(m: Caseless("MOVZ") => Instruction::MOVcc(0));
+        insert!(m: Caseless("MOVNZ") => Instruction::MOVcc(1));
+        insert!(m: Caseless("MOVS") => Instruction::MOVcc(2));
+        insert!(m: Caseless("MOVNS") => Instruction::MOVcc(3));
+        insert!(m: Caseless("MOVP") => Instruction::MOVcc(4));
+        insert!(m: Caseless("MOVNP") => Instruction::MOVcc(5));
+        insert!(m: Caseless("MOVO") => Instruction::MOVcc(6));
+        insert!(m: Caseless("MOVNO") => Instruction::MOVcc(7));
+        insert!(m: Caseless("MOVC") => Instruction::MOVcc(8));
+        insert!(m: Caseless("MOVNC") => Instruction::MOVcc(9));
+        insert!(m: Caseless("MOVB") => Instruction::MOVcc(10));
+        insert!(m: Caseless("MOVBE") => Instruction::MOVcc(11));
+        insert!(m: Caseless("MOVA") => Instruction::MOVcc(12));
+        insert!(m: Caseless("MOVAE") => Instruction::MOVcc(13));
+        insert!(m: Caseless("MOVL") => Instruction::MOVcc(14));
+        insert!(m: Caseless("MOVLE") => Instruction::MOVcc(15));
+        insert!(m: Caseless("MOVG") => Instruction::MOVcc(16));
+        insert!(m: Caseless("MOVGE") => Instruction::MOVcc(17));
+
+        alias!(m: Caseless("MOVE") => Caseless("MOVZ"));
+        alias!(m: Caseless("MOVNE") => Caseless("MOVNZ"));
+        alias!(m: Caseless("MOVPE") => Caseless("MOVP"));
+        alias!(m: Caseless("MOVPO") => Caseless("MOVNP"));
+        alias!(m: Caseless("MOVNAE") => Caseless("MOVB"));
+        alias!(m: Caseless("MOVNA") => Caseless("MOVBE"));
+        alias!(m: Caseless("MOVNBE") => Caseless("MOVA"));
+        alias!(m: Caseless("MOVNB") => Caseless("MOVAE"));
+        alias!(m: Caseless("MOVNGE") => Caseless("MOVL"));
+        alias!(m: Caseless("MOVNG") => Caseless("MOVLE"));
+        alias!(m: Caseless("MOVNLE") => Caseless("MOVG"));
+        alias!(m: Caseless("MOVNL") => Caseless("MOVGE"));
         
         m
     };

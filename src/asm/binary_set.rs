@@ -5,10 +5,13 @@ use std::io::{self, Read, Write};
 use crate::common::serialization::*;
 
 #[derive(Clone, Copy)]
-struct SliceInfo {
-    src: usize,    // index in data
-    start: usize,  // starting index of slice in source
-    length: usize, // length of slice
+pub struct SliceInfo {
+    /// Index of the backing array.
+    pub src: usize,
+    /// Starting position in the backing array.
+    pub start: usize,
+    /// Length of the slice.
+    pub length: usize,
 }
 impl BinaryWrite for SliceInfo {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
@@ -216,6 +219,11 @@ impl BinarySet {
     /// This is never larger than `bytes`.
     pub fn backing_bytes(&self) -> usize {
         self.data.iter().fold(0, |v, s| v + s.len())
+    }
+
+    /// Gets the collection of backing arrays and the collection of slices.
+    pub fn decompose(self) -> (Vec<Vec<u8>>, Vec<SliceInfo>) {
+        (self.data, self.slices)
     }
 }
 /// Iterates over the slices of a `BinarySet` in insertion order.

@@ -13,6 +13,9 @@ fn test_shebang() {
     if let Err(e) = assemble("test.asm", &mut readable("#!csx -s".into()), Default::default()) {
         panic!("{:?}", e);
     }
+    if let Ok(_) = assemble("test.asm", &mut readable("\n#!csx -s".into()), Default::default()) {
+        panic!();
+    }
 }
 
 #[test]
@@ -43,7 +46,7 @@ fn test_segment() {
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(1)));
             assert_eq!(e.line_num, 1);
-            assert_eq!(e.pos, None);
+            assert_eq!(e.pos, Some(0));
             assert!(e.inner_err.is_none());
         }
     }
@@ -159,41 +162,59 @@ fn test_assert() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("static_assert false".into()), Default::default()) {
+    match assemble("test.asm", &mut readable("  static_assert false".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::AssertFailure));
             assert_eq!(e.line_num, 1);
-            assert_eq!(e.pos, None);
+            assert_eq!(e.pos, Some(2));
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("static_assert abc".into()), Default::default()) {
+    match assemble("test.asm", &mut readable("  static_assert abc".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            println!("{:?}", e);
             assert!(matches!(e.kind, AsmErrorKind::FailedCriticalExpression(_)));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("static_assert 1; hello".into()), Default::default()) {
+    match assemble("test.asm", &mut readable("  static_assert 1; hello".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            println!("{:?}", e);
             assert!(matches!(e.kind, AsmErrorKind::AssertArgNotLogical(ValueType::Signed)));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("static_assert;".into()), Default::default()) {
+    match assemble("test.asm", &mut readable("  static_assert;".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            println!("{:?}", e);
             assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(1)));
             assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, Some(2));
+            assert!(e.inner_err.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_global_uses_extern() {
+    if let Err(e) = assemble("test.asm", &mut readable("extern abc\nval: equ abc".into()), Default::default()) {
+        panic!("{:?}", e);
+    }
+    match assemble("test.asm", &mut readable("global val\nextern abc\nval: equ abc".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::GlobalUsesExtern { extern_sym } => {
+                    assert_eq!(extern_sym, "abc");
+                }
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 3);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
         }
