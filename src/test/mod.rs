@@ -6,11 +6,11 @@ fn readable(s: String) -> Cursor<Vec<u8>> {
 }
 
 macro_rules! assemble_and_link {
-    ($($asm:expr),* ; $entry:expr) => {{
+    ($($asm:expr),* => $entry:expr) => {{
         let src: Vec<String> = vec![$($asm),*];
         let mut input: Vec<(String, ObjectFile)> = Vec::with_capacity(src.len());
         for (i, src) in src.into_iter().enumerate() {
-            input.push((format!("file{}.o", i), assemble(&format!("file{}.o", i), &mut readable(src), Default::default()).unwrap()));
+            input.push((format!("file{}.o", i), assemble(&format!("file{}.asm", i), &mut readable(src), Default::default()).unwrap()));
         }
         link(input, $entry)
     }}
@@ -18,5 +18,3 @@ macro_rules! assemble_and_link {
 
 mod asm_error_tests;
 mod lnk_error_tests;
-
-

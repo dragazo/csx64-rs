@@ -102,9 +102,7 @@ impl BinarySet {
 
         // if an equivalent slice already exists, just refer to that
         for (i, other) in self.iter().enumerate() {
-            if other == &*value {
-                return i;
-            }
+            if other == &*value { return i; }
         }
 
         let ret = self.slices.len(); // eventual return value
@@ -118,51 +116,38 @@ impl BinarySet {
         }
 
         // if that didn't work, look for any data entry that is a subregion of value (i.e. containment the other way)
-        for mut i in 0..self.data.len() {
+        for i in 0..self.data.len() {
             // if we found one, we can replace it with value
             if let Some(start) = find_subregion(&*value, &self.data[i]) {
                 // replace it with value and update the starting position of any slices that referenced it
                 self.data[i] = value.into_owned();
-                for lit in self.slices.iter_mut() {
-                    if lit.src == i {
-                        lit.start += start;
-                    }
+                for slice in self.slices.iter_mut() {
+                    if slice.src == i { slice.start += start; }
                 }
 
                 // now we need to look through the data entries again and see if any of them are contained in value (the new, larger data entry)
-                let mut j = 0;
+                // we stopped on first that was a subset of value, so no need to tests 0..=i
+                let mut j = i + 1;
                 while j < self.data.len() {
-                    if j == i {
-                        j += 1;
-                        continue;
-                    }
-
                     // if data entry j is contained in value (entry i), we can remove j
                     if let Some(start) = find_subregion(&self.data[i], &self.data[j]) {
-                        // remove j via the move swap idiom
+                        // get rid of j, redundant with i - use swap remove for efficiency
                         self.data.swap_remove(j);
 
-                        // if i was the one we moved, repoint i to j (its new home)
-                        if i == self.data.len() {
-                            i = j;
-                        }
-
                         // update all the slices to reflect the change
-                        for lit in self.slices.iter_mut() {
+                        for slice in self.slices.iter_mut() {
                             // if it referenced the deleted entry (j), repoint it to value (i) and apply the start offset
-                            if lit.src == j {
-                                lit.src = i;
-                                lit.start += start;
+                            if slice.src == j {
+                                slice.src = i;
+                                slice.start += start;
                             }
-                            // if it referenced the moved entry (the one we used for move swap idiom), repoint it to j
-                            else if lit.src == self.data.len() {
-                                lit.src = j;
+                            // if it referenced the moved entry (the one we used for swap remove), repoint it to j
+                            else if slice.src == self.data.len() {
+                                slice.src = j;
                             }
                         }
                     }
-                    else {
-                        j += 1;
-                    }
+                    else { j += 1; } // only increment j if we didn't remove j
                 }
 
                 // and finally, add the slice info
@@ -378,4 +363,25 @@ fn test_binary_set() {
     assert_eq!(s.data, &[[1, 2, 3, 6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
     assert_eq!(s.bytes(), 14);
     assert_eq!(s.backing_bytes(), 9);
+
+    {
+        let mut s = BinarySet::new();
+        assert_eq!(s.add(vec![0]), 0);
+        assert_eq!(s.add(vec![1]), 1);
+        assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref()]);
+        assert_eq!(s.data, vec![[0].as_ref(), [1].as_ref()]);
+        assert_eq!(s.add(vec![0, 1]), 2);
+        assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref(), [0, 1].as_ref()]);
+        assert_eq!(s.data, vec![[0, 1].as_ref()]);
+    }
+    {
+        let mut s = BinarySet::new();
+        assert_eq!(s.add(vec![0]), 0);
+        assert_eq!(s.add(vec![1]), 1);
+        assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref()]);
+        assert_eq!(s.data, vec![[0].as_ref(), [1].as_ref()]);
+        assert_eq!(s.add(vec![1, 0]), 2);
+        assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref(), [1, 0].as_ref()]);
+        assert_eq!(s.data, vec![[1, 0].as_ref()]);
+    }
 }

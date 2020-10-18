@@ -134,6 +134,11 @@ impl FPU {
         Ok(i)
     }
 }
+impl Default for FPU {
+    fn default() -> FPU {
+        FPU::new()
+    }
+}
 
 #[test]
 fn test_fpu() {
