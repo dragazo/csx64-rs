@@ -8,14 +8,14 @@
 //! This crate contains only the CSX64 library code.
 //! A CLI driver program will be released as a separate GitHub project.
 //! 
-//! There are also [C#](https://github.com/dragazo/CSX64) and [C++](https://github.com/dragazo/CSX64-cpp) implementations of CSX64.
-//! Note that, while any CSX64 assembly program should work identically in any implementation,
-//! CSX64 shared object files, object files, and executables are not compatible across different implementations.
-//! However, they are compatible across different platforms using the same implementation.
+//! There are also [C#](https://github.com/dragazo/CSX64) and [C++](https://github.com/dragazo/CSX64-cpp) implementations of CSX64,
+//! however they've largely been deprecated in favor of this implementation and will likely not be up to date with the features present in this version.
+//! Note that, while any CSX64 assembly program should work identically in any implementation (of the same version),
+//! CSX64 object files and executables are not compatible across different implementations;
+//! however, they are compatible across different platforms using the same implementation.
 
 #[macro_use] extern crate num_derive;
 #[macro_use] extern crate lazy_static;
-#[macro_use] extern crate bitflags;
 
 pub mod exec;
 pub mod asm;

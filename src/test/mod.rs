@@ -18,3 +18,4 @@ macro_rules! assemble_and_link {
 
 mod asm_error_tests;
 mod lnk_error_tests;
+mod exe_tests;

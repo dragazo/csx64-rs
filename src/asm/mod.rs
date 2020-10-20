@@ -1,6 +1,6 @@
 //! Everything pertaining to the creation of CSX64 shared object files, object files, and executables.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write, BufRead};
 use std::{mem, iter};
 
@@ -689,6 +689,7 @@ enum PatchErrorKind {
 }
 #[derive(Debug)]
 pub enum IllegalPatchReason {
+    IllegalExpr(IllegalReason),
     HoleContentInvalidType(HoleType),
     WriteIntegerAsUnsupportedSize(Size),
     WriteFloatAsUnsupportedSize(Size),
@@ -701,13 +702,17 @@ pub enum IllegalPatchReason {
 /// Returns Ok(OK(())) to denote that everything succeeded and the hole was successfully patched.
 fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> Result<(), PatchError> {
     let val = match hole.expr.eval(symbols) {
-        Err(e) => return Err(PatchError { kind: PatchErrorKind::NotPatched(e), line_num: hole.line_num }),
+        Err(e) => match e {
+            EvalError::Illegal(reason) => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::IllegalExpr(reason)), line_num: hole.line_num }),
+            EvalError::UndefinedSymbol(_) => return Err(PatchError { kind: PatchErrorKind::NotPatched(e), line_num: hole.line_num }),
+        }
         Ok(v) => v,
     };
 
     match &*val {
         Value::Signed(v) => {
-            if hole.allowed_type != HoleType::Signed && hole.allowed_type != HoleType::Integral {
+            if hole.allowed_type != HoleType::Signed && hole.allowed_type != HoleType::Integral && hole.allowed_type != HoleType::Any {
+                println!("here signed");
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
@@ -720,36 +725,38 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
                     segment_write_bin(seg, &(*v as i16).to_le_bytes(), hole.address)
                 }
                 Size::Dword => {
-                    if *v as i32 as i64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    if *v as i32 as i64 != *v { println!("12343 value: {:x} {:x}", *v, *v as i32 as i64); return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(*v as i32).to_le_bytes(), hole.address)
                 }
-                Size::Qword => segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address),
+                Size::Qword => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
         Value::Unsigned(v) | Value::Pointer(v) => {
-            if hole.allowed_type != HoleType::Unsigned && hole.allowed_type != HoleType::Integral {
+            if hole.allowed_type != HoleType::Unsigned && hole.allowed_type != HoleType::Integral && hole.allowed_type != HoleType::Any {
+                println!("here unsigned/pointer");
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
                 Size::Byte => {
                     if *v as u8 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                    segment_write_bin(seg, &(*v as u8).to_le_bytes(), hole.address)
                 }
                 Size::Word => {
                     if *v as u16 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                    segment_write_bin(seg, &(*v as u16).to_le_bytes(), hole.address)
                 }
                 Size::Dword => {
                     if *v as u32 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                    segment_write_bin(seg, &(*v as u32).to_le_bytes(), hole.address)
                 }
-                Size::Qword => segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address),
+                Size::Qword => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
         Value::Floating(v) => {
-            if hole.allowed_type != HoleType::Floating {
+            if hole.allowed_type != HoleType::Floating && hole.allowed_type != HoleType::Any {
+                println!("here float {} {}", hole.line_num, v);
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
@@ -759,7 +766,7 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteFloatAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
-        _ => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num }),
+        x => { println!("here: {:?}", x); return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num }) }
     }
     Ok(())
 }
@@ -799,7 +806,7 @@ fn process_global_extern(arguments: Vec<Argument>, add_to: &mut HashMap<String, 
                         debug_assert!(is_valid_symbol_name(&ident) && !is_reserved_symbol_name(&ident));
                         if check_in.contains_key(&ident) { return Err(AsmError { kind: AsmErrorKind::IdentifierIsGlobalAndExtern, line_num, pos: None, inner_err: None }); }
                         if let Some(prev) = add_to.insert(ident, line_num) {
-                            return Err(AsmError { kind: AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num: line_num }, line_num, pos: None, inner_err: None });
+                            return Err(AsmError { kind: AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num: prev }, line_num, pos: None, inner_err: None });
                         }
                     }
                     _ => return Err(AsmError { kind: AsmErrorKind::ExpectedIdentifier, line_num, pos: None, inner_err: None }),
@@ -1274,9 +1281,9 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
 
         // define segment offsets
         obj.symbols.define(get_seg_offset_str(AsmSegment::Text).into(), Value::Pointer(bases.text as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Text).into(), Value::Pointer((text.len() + bases.rodata) as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Text).into(), Value::Pointer((text.len() + rodata.len() + bases.data) as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Text).into(), Value::Pointer((text.len() + rodata.len() + data.len() + bases.bss) as u64).into(), 0).unwrap();
+        obj.symbols.define(get_seg_offset_str(AsmSegment::Rodata).into(), Value::Pointer((text.len() + bases.rodata) as u64).into(), 0).unwrap();
+        obj.symbols.define(get_seg_offset_str(AsmSegment::Data).into(), Value::Pointer((text.len() + rodata.len() + bases.data) as u64).into(), 0).unwrap();
+        obj.symbols.define(get_seg_offset_str(AsmSegment::Bss).into(), Value::Pointer((text.len() + rodata.len() + data.len() + bases.bss) as u64).into(), 0).unwrap();
 
         // we must evaluate all global symbols at this point - next step copies them into other files; if we don't eval now we might use arbitrary symbol tables later
         for (global, _) in obj.global_symbols.iter() {

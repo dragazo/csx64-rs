@@ -1,6 +1,6 @@
 use std::iter::{self, Peekable};
 use std::str::CharIndices;
-use rug::Float;
+use rug::{Integer, Float};
 
 use super::*;
 use super::expr::{ExprData, OP, Value, ValueVariants, PRECISION};
@@ -406,19 +406,25 @@ impl AssembleArgs<'_> {
                     if term_fix.starts_with('+') || term_fix.starts_with('-') {
                         return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None });
                     }
-
-                    // parse it as correct type and propagate any errors
-                    match signed {
-                        false => match u64::from_str_radix(&term_fix, radix) {
-                            Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }), // failed unsigned is failure
-                            Ok(v) => v.into(),
+                
+                    // first, try to parse the value as an integer
+                    match Integer::from_str_radix(&term_fix, radix) {
+                        Ok(v) => match v.to_u64() {
+                            None => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
+                            Some(v) => match signed {
+                                false => Value::Unsigned(v).into(),
+                                true => Value::Signed(v as i64).into(),
+                            }
                         }
-                        true => match i64::from_str_radix(&term_fix, radix) {
-                            Err(_) => match Float::parse(term_fix) { // failed signed (int) could just mean that it's (signed) float
-                                Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }), // but if that fails too, it's a bust
+                        Err(_) => {
+                            // if we had a prefix or a suffix, it was supposed to be an integer (failure)
+                            if !signed || radix != 10 { return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+
+                            // otherwise we can attempt to parse as float
+                            match Float::parse(term_fix) { // failed signed (int) could just mean that it's (signed) float
+                                Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                                 Ok(v) => Float::with_val(PRECISION, v).into(),
                             }
-                            Ok(v) => v.into(),
                         }
                     }
                 }
@@ -628,11 +634,11 @@ impl AssembleArgs<'_> {
                 }
 
                 let mut mult = match mult.eval(&self.file.symbols) { // if it is then it must be a critical expression
-                    Ok(mut val) => match &*val.take_or_borrow() {
+                    Err(_) => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotCriticalExpr, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
+                    Ok(val) => match &*val {
                         Value::Signed(v) => *v,
                         _ => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotSignedInt, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                     },
-                    Err(_) => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotCriticalExpr, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                 };
                 if mult == 0 { continue; } // if it's zero then it canceled out and we don't need it
 
@@ -675,11 +681,14 @@ impl AssembleArgs<'_> {
         };
         let base = {
             let present = match imm.expr.eval(&self.file.symbols) {
+                Err(e) => match e { 
+                    EvalError::Illegal(reason) => return Err(AsmError { kind: AsmErrorKind::ExprIllegalError(reason), line_num: self.line_num, pos: Some(address_start), inner_err: None }),
+                    EvalError::UndefinedSymbol(_) => true, // a (recoverable) failure to evaluate means we can't statically elide it, so we assume it's present
+                }
                 Ok(v) => match &*v {
                     Value::Signed(v) => *v != 0, // if it's nonzero we have to keep it
                     _ => return Err(AsmError { kind: AsmErrorKind::AddressTypeUnsupported, line_num: self.line_num, pos: Some(address_start), inner_err: None }), // if it's some other type it's invalid
                 }
-                Err(_) => true, // failure to evaluate means we can't statically elide it, so we assume it's present
             };
             if present { Some(imm.expr) } else { None }
         };
@@ -942,8 +951,8 @@ impl AssembleArgs<'_> {
         Ok(())
     }
     /// Attempts to assemble an operation which uses the binary op format.
-    /// `force_b_imm_size` can be set to artificially force the size of an imm - e.g. the BTx series of instructions always have use imm8.
-    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_imm_size: Option<Size>) -> Result<(), AsmError> {
+    /// `force_imm_size` can be set to artificially force the size of an imm - e.g. the BTx series of instructions always have use imm8.
+    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_imm_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
         if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
@@ -970,7 +979,7 @@ impl AssembleArgs<'_> {
                 self.append_address(src)?;
             }
             (Argument::CPURegister(dest), Argument::Imm(mut src)) => {
-                match force_b_imm_size {
+                match force_imm_size {
                     None => match src.size {
                         Some(size) => if size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); },
                         None => src.size = Some(dest.size),
@@ -995,7 +1004,7 @@ impl AssembleArgs<'_> {
                 self.append_address(dest)?;
             }
             (Argument::Address(mut dest), Argument::Imm(mut src)) => {
-                match force_b_imm_size {
+                match force_imm_size {
                     None => match (dest.pointed_size, src.size) {
                         (Some(a), Some(b)) => if a != b { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); },
                         (None, Some(b)) => dest.pointed_size = Some(b),

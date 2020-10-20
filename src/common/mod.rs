@@ -11,14 +11,15 @@ use serialization::*;
 /// The supported op codes for the execution engine.
 /// 
 /// Nearly all of these have sub-encodings and therefore actually encode many more instructions.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromPrimitive)]
 #[repr(u8)]
 pub enum OPCode
 {
     // x86 instructions
 
     NOP,
-    HLT, SYSCALL,
+    HLT,
+    SYSCALL,
     STLDF,
     FlagManip,
 
@@ -89,7 +90,7 @@ pub enum OPCode
 
     TRANS,
 
-    DEBUG = 255,
+    DEBUG,
 }
 
 pub struct Executable {

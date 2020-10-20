@@ -220,3 +220,55 @@ fn test_global_uses_extern() {
         }
     }
 }
+
+#[test]
+fn test_double_global_extern() {
+    match assemble("test.asm", &mut readable("global abc\nglobal abc".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num } => assert_eq!(prev_line_num, 1),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("extern abc\nextern abc".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num } => assert_eq!(prev_line_num, 1),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("global abc, abc".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num } => assert_eq!(prev_line_num, 1),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("extern abc, abc".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num } => assert_eq!(prev_line_num, 1),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+}

@@ -111,6 +111,7 @@ pub enum ValueType {
 /// They are contextually treated as signed/unsigned based on operators that are applied to them.
 #[derive(Debug, Clone)]
 pub enum Value {
+    Invalid, // special value - should never be encountered
     Logical(bool),
     Signed(i64),
     Unsigned(u64),
@@ -121,6 +122,7 @@ pub enum Value {
 impl BinaryWrite for Value {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         match self {
+            Value::Invalid => panic!(),
             Value::Logical(v) => match v {
                 false => 0u8,
                 true => 1u8,
@@ -190,6 +192,7 @@ impl From<Vec<u8>> for Value {
 impl Value {
     pub fn get_type(&self) -> ValueType {
         match self {
+            Value::Invalid => panic!(),
             Value::Logical(_) => ValueType::Logical,
             Value::Signed(_) => ValueType::Signed,
             Value::Unsigned(_) => ValueType::Unsigned,
@@ -264,6 +267,7 @@ pub enum ExprData {
 impl BinaryWrite for ExprData {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
         match self {
+            ExprData::Value(Value::Invalid) => panic!(),
             ExprData::Value(Value::Logical(false)) => 0xffu8.bin_write(f),
             ExprData::Value(Value::Logical(true)) => 0xfeu8.bin_write(f),
             ExprData::Value(Value::Signed(value)) => {
@@ -607,7 +611,7 @@ impl<'a> ValueRef<'a> {
     }
     /// Either takes my value or clones theirs.
     pub(super) fn take_or_clone(&mut self) -> Value {
-        mem::replace(self.to_mut(), Value::Logical(false)) // take the value and leave some valid replacement that's non-allocating
+        mem::replace(self.to_mut(), Value::Invalid)
     }
     /// Either takes my value or borrows theirs
     pub(super) fn take_or_borrow(&mut self) -> Cow<Value> {
