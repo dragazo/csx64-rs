@@ -183,7 +183,7 @@ fn test_assert() {
     match assemble("test.asm", &mut readable("  static_assert 1; hello".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::AssertArgNotLogical(ValueType::Signed)));
+            assert!(matches!(e.kind, AsmErrorKind::AssertArgNotLogical(ValueType::Integer)));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());

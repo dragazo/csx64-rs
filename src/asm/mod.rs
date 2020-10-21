@@ -3,6 +3,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write, BufRead};
 use std::{mem, iter};
+use std::cmp::Ordering;
+use num_traits::FromPrimitive;
 
 pub mod binary_set;
 pub mod expr;
@@ -120,6 +122,7 @@ pub enum AsmErrorKind {
     TimesCountNotCriticalExpression,
     TimesCountNotInteger,
     TimesCountWasNegative,
+    TimesCountTooLarge,
     TimesUsedOnEmptyLine,
 
     IfMissingExpr,
@@ -455,38 +458,25 @@ fn test_size_fns() {
     assert_eq!(Size::Yword.vector_size(), Some(32));
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, FromPrimitive)]
+#[repr(u8)]
 pub enum HoleType {
-    Signed,
-    Unsigned,
-    Pointer,
-    Integral, // signed, unsigned, or pointer
-    Floating,
-    Any, // anything goes (used for e.g. dd)
+    Pointer, // only pointer
+    Integer, // integer or pointer
+    Float,   // only float
+    Any,     // anything (used for e.g. dd)
 }
 impl BinaryWrite for HoleType {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        match self {
-            HoleType::Signed => 0u8,
-            HoleType::Unsigned => 1u8,
-            HoleType::Pointer => 2u8,
-            HoleType::Integral => 3u8,
-            HoleType::Floating => 4u8,
-            HoleType::Any => 5u8,
-        }.bin_write(f)
+        (*self as u8).bin_write(f)
     }
 }
 impl BinaryRead for HoleType {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<HoleType> {
-        Ok(match u8::bin_read(f)? {
-            0 => HoleType::Signed,
-            1 => HoleType::Unsigned,
-            2 => HoleType::Pointer,
-            3 => HoleType::Integral,
-            4 => HoleType::Floating,
-            5 => HoleType::Any,
-            _ => return Err(io::ErrorKind::InvalidData.into())
-        })
+        match HoleType::from_u8(u8::bin_read(f)?) {
+            None => return Err(io::ErrorKind::InvalidData.into()),
+            Some(v) => Ok(v),
+        }
     }
 }
 
@@ -710,31 +700,32 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
     };
 
     match &*val {
-        Value::Signed(v) => {
-            if hole.allowed_type != HoleType::Signed && hole.allowed_type != HoleType::Integral && hole.allowed_type != HoleType::Any {
-                println!("here signed");
+        Value::Integer(v) => {
+            if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
-                Size::Byte => {
-                    if *v as i8 as i64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i8).to_le_bytes(), hole.address)
+                Size::Byte => match v.to_i8().map(|v| v as u8).or(v.to_u8()) {
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
-                Size::Word => {
-                    if *v as i16 as i64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i16).to_le_bytes(), hole.address)
+                Size::Word => match v.to_i16().map(|v| v as u16).or(v.to_u16()) {
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
-                Size::Dword => {
-                    if *v as i32 as i64 != *v { println!("12343 value: {:x} {:x}", *v, *v as i32 as i64); return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(*v as i32).to_le_bytes(), hole.address)
+                Size::Dword => match v.to_i32().map(|v| v as u32).or(v.to_u32()) {
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
-                Size::Qword => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
+                Size::Qword => match v.to_i64().map(|v| v as u64).or(v.to_u64()) {
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
+                }
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
-        Value::Unsigned(v) | Value::Pointer(v) => {
-            if hole.allowed_type != HoleType::Unsigned && hole.allowed_type != HoleType::Integral && hole.allowed_type != HoleType::Any {
-                println!("here unsigned/pointer");
+        Value::Pointer(v) => {
+            if hole.allowed_type != HoleType::Pointer && hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
@@ -754,9 +745,8 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
-        Value::Floating(v) => {
-            if hole.allowed_type != HoleType::Floating && hole.allowed_type != HoleType::Any {
-                println!("here float {} {}", hole.line_num, v);
+        Value::Float(v) => {
+            if hole.allowed_type != HoleType::Float && hole.allowed_type != HoleType::Any {
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
             match hole.size {
@@ -766,7 +756,7 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteFloatAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }
-        x => { println!("here: {:?}", x); return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num }) }
+        x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num }),
     }
     Ok(())
 }
@@ -1026,11 +1016,13 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 let val = match imm.expr.eval(&args.file.symbols) {
                                     Err(_) => return Err(AsmError { kind: AsmErrorKind::AlignValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
                                     Ok(res) => match &*res {
-                                        Value::Signed(v) => {
-                                            if *v < 0 { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
-                                            *v as u64
+                                        Value::Integer(v) => {
+                                            if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                            match v.to_u64() {
+                                                None => return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }),
+                                                Some(v) => v,
+                                            }
                                         }
-                                        Value::Unsigned(v) => *v,
                                         _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
                                 };
@@ -1090,11 +1082,13 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 let count = match imm.expr.eval(&args.file.symbols) {
                                     Err(_) => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
                                     Ok(res) => match &*res {
-                                        Value::Signed(v) => {
-                                            if *v < 0 { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
-                                            *v as u64
+                                        Value::Integer(v) => {
+                                            if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                            match v.to_u64() {
+                                                None => return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }),
+                                                Some(v) => v,
+                                            }
                                         }
-                                        Value::Unsigned(v) => *v,
                                         _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
                                 };
@@ -1114,8 +1108,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                     Instruction::SFENCE => args.process_no_arg_op(arguments, None, None)?,
                     Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
 
-                    Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integral, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                 }
             }
 

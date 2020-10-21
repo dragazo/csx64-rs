@@ -1,13 +1,15 @@
 use std::iter::{self, Peekable};
 use std::str::CharIndices;
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use rug::{Integer, Float};
 
 use super::*;
-use super::expr::{ExprData, OP, Value, ValueVariants, PRECISION};
+use super::expr::{ExprData, OP, Value, FLOAT_PRECISION};
 use super::caseless::Caseless;
 
 #[cfg(test)]
-use std::borrow::Cow;
+use super::expr::ValueCow;
 
 // advances the cursor iterator to the specified character index.
 // end_pos is the exclusive upper bound index of cursor.
@@ -348,15 +350,24 @@ impl AssembleArgs<'_> {
                                 if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let arg = args.into_iter().next().unwrap();
 
-                                let x = match arg.eval(&self.file.symbols) {
-                                    Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                                    Ok(mut val) => match val.take_or_borrow().binary() {
-                                        None => return Err(AsmError { kind: AsmErrorKind::ExpectedBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                                        Some(content) => {
-                                            if content.is_empty() { return Err(AsmError { kind: AsmErrorKind::EmptyBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
-                                            let idx = self.file.binary_set.add(content);
-                                            ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)).into()
+                                macro_rules! handle_content {
+                                    ($self:ident, $v:expr) => {
+                                        match $v {
+                                            Value::Binary(content) => {
+                                                if content.is_empty() { return Err(AsmError { kind: AsmErrorKind::EmptyBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+                                                let idx = self.file.binary_set.add(Cow::from(content));
+                                                ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)).into()
+                                            }
+                                            _ => return Err(AsmError { kind: AsmErrorKind::ExpectedBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
                                         }
+                                    }
+                                }
+
+                                let x = match arg.into_eval(&self.file.symbols) {
+                                    Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: self.line_num, pos: Some(term_start), inner_err: None }),
+                                    Ok(val) => match val {
+                                        ValueCow::Owned(v) => handle_content!(self, v),
+                                        ValueCow::Borrowed(v) => handle_content!(self, &*v),
                                     }
                                 };
                                 x
@@ -385,11 +396,7 @@ impl AssembleArgs<'_> {
                     ExprData::Value(Value::Binary(content)).into()
                 }
                 '0'..='9' => { // if it's a numeric constant
-                    let (term_fix, signed) = match term { // check if signed/unsigned suffix and remove it if present
-                        x if x.ends_with('u') => (&x[..x.len()-1], false),
-                        x => (x, true),
-                    };
-                    let (term_fix, radix) = match term_fix { // check for radix prefix and remove it if present
+                    let (term_fix, radix) = match term { // check for radix prefix and remove it if present
                         x if x.starts_with("0x") => (&x[2..], 16),
                         x if x.starts_with("0o") => (&x[2..], 8),
                         x if x.starts_with("0b") => (&x[2..], 2),
@@ -404,26 +411,24 @@ impl AssembleArgs<'_> {
 
                     // terms should not have signs - this is handled by unary ops (and prevents e.g. 0x-5 instead of proper -0x5)
                     if term_fix.starts_with('+') || term_fix.starts_with('-') {
-                        return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None });
+                        panic!(); // should be handled by token parsing logic
+                        //return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None });
                     }
                 
                     // first, try to parse the value as an integer
                     match Integer::from_str_radix(&term_fix, radix) {
                         Ok(v) => match v.to_u64() {
                             None => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                            Some(v) => match signed {
-                                false => Value::Unsigned(v).into(),
-                                true => Value::Signed(v as i64).into(),
-                            }
+                            Some(v) => v.into(),
                         }
                         Err(_) => {
-                            // if we had a prefix or a suffix, it was supposed to be an integer (failure)
-                            if !signed || radix != 10 { return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+                            // if we had a prefix, it was supposed to be an integer (failure)
+                            if radix != 10 { return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
 
                             // otherwise we can attempt to parse as float
                             match Float::parse(term_fix) { // failed signed (int) could just mean that it's (signed) float
                                 Err(_) => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                                Ok(v) => Float::with_val(PRECISION, v).into(),
+                                Ok(v) => Float::with_val(FLOAT_PRECISION, v).into(),
                             }
                         }
                     }
@@ -503,7 +508,7 @@ impl AssembleArgs<'_> {
         let target = match &*expr.data.borrow() {
             ExprData::Value(_) => return None,
             ExprData::Ident(ident) => {
-                if ident == base { return Some(Value::Signed(0).into()); } // if this is the base itself, offset is zero (signed because we want the offset value)
+                if ident == base { return Some(0.into()); } // if this is the base itself, offset is zero (signed because we want the offset value)
                 match self.file.symbols.get(ident) {
                     None => return None,
                     Some((symbol, _)) => symbol,
@@ -514,7 +519,7 @@ impl AssembleArgs<'_> {
         match &*target.data.borrow() {
             ExprData::Uneval { op: OP::Add, left, right } => match &*left.as_ref().unwrap().data.borrow() { // unwraps are ok cause we know we generated the value just before
                 ExprData::Ident(ident) if ident == base => match &*right.as_ref().unwrap().data.borrow() {
-                    ExprData::Value(Value::Signed(v)) => Some((*v).into()), // rhs of address should always be a signed constant (never needs to be evaluated)
+                    ExprData::Value(Value::Integer(v)) => Some(v.clone().into()), // rhs of address should always be an integer constant (never needs to be evaluated)
                     _ => panic!("address improperly constructed"),
                 }
                 _ => None,
@@ -636,7 +641,10 @@ impl AssembleArgs<'_> {
                 let mut mult = match mult.eval(&self.file.symbols) { // if it is then it must be a critical expression
                     Err(_) => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotCriticalExpr, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                     Ok(val) => match &*val {
-                        Value::Signed(v) => *v,
+                        Value::Integer(v) => match v.to_u64() {
+                            None => return Err(AsmError { kind: AsmErrorKind::AddressRegInvalidMult, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
+                            Some(v) => v,
+                        }
                         _ => return Err(AsmError { kind: AsmErrorKind::AddressRegMultNotSignedInt, line_num: self.line_num, pos: Some(address_start), inner_err: None }),
                     },
                 };
@@ -686,7 +694,7 @@ impl AssembleArgs<'_> {
                     EvalError::UndefinedSymbol(_) => true, // a (recoverable) failure to evaluate means we can't statically elide it, so we assume it's present
                 }
                 Ok(v) => match &*v {
-                    Value::Signed(v) => *v != 0, // if it's nonzero we have to keep it
+                    Value::Integer(v) => *v != 0, // if it's nonzero we have to keep it
                     _ => return Err(AsmError { kind: AsmErrorKind::AddressTypeUnsupported, line_num: self.line_num, pos: Some(address_start), inner_err: None }), // if it's some other type it's invalid
                 }
             };
@@ -807,11 +815,13 @@ impl AssembleArgs<'_> {
                     match imm.expr.eval(&self.file.symbols) {
                         Err(_) => return Err(AsmError { kind: AsmErrorKind::TimesCountNotCriticalExpression, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         Ok(val) => match &*val {
-                            Value::Signed(v) => {
-                                if *v < 0 { return Err(AsmError { kind: AsmErrorKind::TimesCountWasNegative, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
-                                *v as u64
+                            Value::Integer(v) => {
+                                if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::TimesCountWasNegative, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
+                                match v.to_u64() {
+                                    None => return Err(AsmError { kind: AsmErrorKind::TimesCountTooLarge, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
+                                    Some(v) => v,
+                                }
                             }
-                            Value::Unsigned(v) => *v,
                             _ => return Err(AsmError { kind: AsmErrorKind::TimesCountNotInteger, line_num: self.line_num, pos: Some(err_pos), inner_err: None }),
                         }
                     }
@@ -937,7 +947,7 @@ impl AssembleArgs<'_> {
 
         self.append_byte(a)?;
         if a & 3 != 0 { self.append_byte(b)?; }
-        if a & 0x80 != 0 { self.append_val(addr.address_size, addr.base.unwrap(), HoleType::Integral)? }
+        if a & 0x80 != 0 { self.append_val(addr.address_size, addr.base.unwrap(), HoleType::Integer)? }
         Ok(())
     }
 
@@ -1280,8 +1290,8 @@ fn test_extr_expr() {
     match c.extract_expr("trUe;", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Logical(val)) => assert_eq!(val, true),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Logical(val)) => assert_eq!(val, true),
                 _ => panic!(),
             }
         }
@@ -1290,8 +1300,8 @@ fn test_extr_expr() {
     match c.extract_expr("faLse", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Logical(val)) => assert_eq!(val, false),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Logical(val)) => assert_eq!(val, false),
                 _ => panic!(),
             }
         }
@@ -1300,8 +1310,8 @@ fn test_extr_expr() {
     match c.extract_expr("nuLl", 0, 4) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Pointer(val)) => assert_eq!(val, 0),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Pointer(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
         }
@@ -1310,8 +1320,8 @@ fn test_extr_expr() {
     match c.extract_expr("5", 0, 1) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 1);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 5),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 5),
                 _ => panic!(),
             }
         }
@@ -1327,18 +1337,8 @@ fn test_extr_expr() {
     match c.extract_expr("0", 0, 1) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 1);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
-                _ => panic!(),
-            }
-        }
-        Err(e) => panic!("{:?}", e),
-    }
-    match c.extract_expr("7u", 0, 2) {
-        Ok((expr, aft)) => {
-            assert_eq!(aft, 2);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Unsigned(val)) => assert_eq!(val, 7),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
         }
@@ -1347,8 +1347,8 @@ fn test_extr_expr() {
     match c.extract_expr("3.14", 0, 4) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Floating(val)) => assert!(Float::from(val - 3.14).abs() < 0.00000001),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Float(val)) => assert!(Float::from(val - 3.14).abs() < 0.00000001),
                 _ => panic!(),
             }
         }
@@ -1364,8 +1364,8 @@ fn test_extr_expr() {
     match c.extract_expr("5+8", 0, 3) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 3);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 13),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 13),
                 _ => panic!(),
             }
         }
@@ -1374,8 +1374,8 @@ fn test_extr_expr() {
     match c.extract_expr("5+8*2-1", 0, 7) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 7);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 20),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 20),
                 _ => panic!(),
             }
         }
@@ -1384,8 +1384,8 @@ fn test_extr_expr() {
     match c.extract_expr("(5+1)*(5-1) g", 0, 13) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 11);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 24),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 24),
                 _ => panic!(),
             }
         }
@@ -1401,8 +1401,8 @@ fn test_extr_expr() {
     match c.extract_expr("(5+1);*(5-1) g", 0, 13) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 6),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 6),
                 _ => panic!(),
             }
         }
@@ -1425,8 +1425,8 @@ fn test_extr_expr() {
     match c.extract_expr("  (  5-3 )     *--+ -(5 -1)f  ", 1, 30) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 27);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -8),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, -8),
                 _ => panic!(),
             }
         }
@@ -1435,8 +1435,8 @@ fn test_extr_expr() {
     match c.extract_expr("  'hello world'  ", 1, 17) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 15);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Binary(val)) => assert_eq!(val, "hello world".as_bytes()),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Binary(val)) => assert_eq!(val, "hello world".as_bytes()),
                 _ => panic!(),
             }
         }
@@ -1445,8 +1445,8 @@ fn test_extr_expr() {
     match c.extract_expr("  'hello;world'  ", 1, 17) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 15);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Binary(val)) => assert_eq!(val, "hello;world".as_bytes()),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Binary(val)) => assert_eq!(val, "hello;world".as_bytes()),
                 _ => panic!(),
             }
         }
@@ -1462,8 +1462,8 @@ fn test_extr_expr() {
     match c.extract_expr("$if(TrUe,6 / -2,3 << 2)", 0, 23) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 23);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -3),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, -3),
                 _ => panic!(),
             }
         }
@@ -1472,8 +1472,8 @@ fn test_extr_expr() {
     match c.extract_expr("   $if(  False == true  ,    6 / -  2 ,  3 << 2   )  ", 1, 53) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 51);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 12),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 12),
                 _ => panic!(),
             }
         }
@@ -1488,8 +1488,8 @@ fn test_ptriff() {
     match c.extract_expr("$-$", 0, 3) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 3);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
         }
@@ -1498,8 +1498,8 @@ fn test_ptriff() {
     match c.extract_expr("    $ + 3  + 3 - 1 - 2  - -- $ - 2 + 1  ", 2, 40) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 38);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 2),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 2),
                 _ => panic!(),
             }
         }
@@ -1508,8 +1508,8 @@ fn test_ptriff() {
     match c.extract_expr("5*(($ + 8)-($ - 3))", 0, 19) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 19);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 55),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 55),
                 _ => panic!(),
             }
         }
@@ -1518,8 +1518,8 @@ fn test_ptriff() {
     match c.extract_expr("foo-foo", 0, 7) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 7);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 0),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
         }
@@ -1528,8 +1528,8 @@ fn test_ptriff() {
     match c.extract_expr("foo-$;comment", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 10),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 10),
                 _ => panic!(),
             }
         }
@@ -1538,8 +1538,8 @@ fn test_ptriff() {
     match c.extract_expr("$-foo", 0, 5) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 5);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, -10),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, -10),
                 _ => panic!(),
             }
         }
@@ -1548,8 +1548,8 @@ fn test_ptriff() {
     match c.extract_expr("bar-foo", 0, 7) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 7);
-            match expr.eval(&c.file.symbols).unwrap().take_or_borrow() {
-                Cow::Owned(Value::Signed(val)) => assert_eq!(val, 4),
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 4),
                 _ => panic!(),
             }
         }
@@ -1564,7 +1564,7 @@ fn test_numeric_formats() {
             assert_eq!(aft, 6);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 0x2Ff4),
+                    Value::Integer(v) => assert_eq!(*v, 0x2Ff4),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1572,12 +1572,12 @@ fn test_numeric_formats() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("0x02Ff4u", 0, 8) {
+    match c.extract_expr("0x02Ff4", 0, 7) {
         Ok((expr, aft)) => {
-            assert_eq!(aft, 8);
+            assert_eq!(aft, 7);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Unsigned(v) => assert_eq!(*v, 0x2Ff4),
+                    Value::Integer(v) => assert_eq!(*v, 0x2Ff4),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1590,7 +1590,7 @@ fn test_numeric_formats() {
             assert_eq!(aft, 7);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 0o23_34),
+                    Value::Integer(v) => assert_eq!(*v, 0o23_34),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1598,12 +1598,12 @@ fn test_numeric_formats() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("0o23_34_u", 0, 9) {
+    match c.extract_expr("0o23_34_", 0, 8) {
         Ok((expr, aft)) => {
-            assert_eq!(aft, 9);
+            assert_eq!(aft, 8);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Unsigned(v) => assert_eq!(*v, 0o23_34),
+                    Value::Integer(v) => assert_eq!(*v, 0o23_34_),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1616,7 +1616,7 @@ fn test_numeric_formats() {
             assert_eq!(aft, 11);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 0b1011_0010),
+                    Value::Integer(v) => assert_eq!(*v, 0b1011_0010),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1624,12 +1624,12 @@ fn test_numeric_formats() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("0b1011_0010u", 0, 12) {
+    match c.extract_expr("0b1011_0010", 0, 11) {
         Ok((expr, aft)) => {
-            assert_eq!(aft, 12);
+            assert_eq!(aft, 11);
             match expr.eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Unsigned(v) => assert_eq!(*v, 0b1011_0010),
+                    Value::Integer(v) => assert_eq!(*v, 0b1011_0010),
                     x => panic!("unexpected type: {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1650,7 +1650,7 @@ fn test_address_parser() {
             assert_eq!(addr.pointed_size, Some(Size::Dword));
             match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 0x2334),
+                    Value::Integer(v) => assert_eq!(*v, 0x2334),
                     x => panic!("unexpected type {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1700,7 +1700,7 @@ fn test_address_parser() {
             assert_eq!(addr.pointed_size, Some(Size::Zword));
             match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 28),
+                    Value::Integer(v) => assert_eq!(*v, 28),
                     x => panic!("unexpected type {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),
@@ -1717,7 +1717,7 @@ fn test_address_parser() {
             assert_eq!(addr.pointed_size, None);
             match addr.base.as_ref().unwrap().eval(&c.file.symbols) {
                 Ok(v) => match &*v {
-                    Value::Signed(v) => assert_eq!(*v, 60),
+                    Value::Integer(v) => assert_eq!(*v, 60),
                     x => panic!("unexpected type {:?}", x),
                 }
                 Err(e) => panic!("{:?}", e),

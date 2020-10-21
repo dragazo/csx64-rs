@@ -8,80 +8,80 @@ fn test_imm_load() {
     let exe = assemble_and_link!(r"
     segment text
     mov rax, -7784568640113865156
-    mov rbx, 0x12de639fcd11a4cbu
-    mov rcx, 0x046579a453add4b8u
-    mov rdx, 0o1764420727724002664106u
-    mov rsi, 0xf1c89e98daa39a38u
-    mov rdi, 0xbdb00d43f2aaff23u
+    mov rbx, 0x12de639fcd11a4cb
+    mov rcx, 0x046579a453add4b8
+    mov rdx, 0o1764420727724002664106
+    mov rsi, 0xf1c89e98daa39a38
+    mov rdi, 0xbdb00d43f2aaff23
     mov rbp, -7740818_22331708_3_744
-    mov rsp, 0xa228b0bd6d86600eu
-    mov r8, 0x076899314a3e420bu
-    mov r9, 417771020883113582u
-    mov r10, 0x781b5ce0538f3fd0u
-    mov r11, 0x2569467b20f81cb8u
-    mov r12, 0xc0a9ed7647a335c4u
-    mov r13, 0o17052_7_0_262065_065_624_265u
-    mov r14, 0x65902d29eac939fbu
-    mov r15, 0xec7aa569a6155ab1u
+    mov rsp, 0xa228b0bd6d86600e
+    mov r8, 0x076899314a3e420b
+    mov r9, 417771020883113582
+    mov r10, 0x781b5ce0538f3fd0
+    mov r11, 0x2569467b20f81cb8
+    mov r12, 0xc0a9ed7647a335c4
+    mov r13, 0o17052_7_0_262065_065_624_265
+    mov r14, 0x65902d29eac939fb
+    mov r15, 0xec7aa569a6155ab1
     hlt
-    mov eax, 0x7d22cbb4u
-    mov ebx, 0xbecb162eu
-    mov ecx, 0xae23158eu
-    mov edx, 0x0ddfe51bu
-    mov esi, 0o24_734_613_417u
-    mov edi, 0xa71a36d7u
-    mov ebp, 0xd130b0c0u
-    mov esp, 2209513684u
-    mov r8d, 0xa53b7121u
-    mov r9d, 0x74c9e6d0u
-    mov r10d, 0x58b7c4e7u
-    mov r11d, 0b11001010101111101111111010010001u
-    mov r12d, 0xaa92e8b4u
-    mov r13d, 0x86bbdbc1u
-    mov r14d, 0b_0111_1001_1111_0100_1110_0011_0100_1000u
-    mov r15d, 0xc023567eu
+    mov eax, 0x7d22cbb4
+    mov ebx, 0xbecb162e
+    mov ecx, 0xae23158e
+    mov edx, 0x0ddfe51b
+    mov esi, 0o24_734_613_417
+    mov edi, 0xa71a36d7
+    mov ebp, 0xd130b0c0
+    mov esp, 2209513684
+    mov r8d, 0xa53b7121
+    mov r9d, 0x74c9e6d0
+    mov r10d, 0x58b7c4e7
+    mov r11d, 0b11001010101111101111111010010001
+    mov r12d, 0xaa92e8b4
+    mov r13d, 0x86bbdbc1
+    mov r14d, 0b_0111_1001_1111_0100_1110_0011_0100_1000
+    mov r15d, 0xc023567e
     hlt
-    mov ax, 0xcb04u
-    mov bx, 0x43f4u
-    mov cx, 0x6493u
-    mov dx, 0xacd9u
-    mov si, 0xf019u
-    mov di, 32_038u
-    mov bp, 0x60f1u
-    mov sp, 0x6476u
-    mov r8w, 0x3329u
-    mov r9w, 0x09f4u
-    mov r10w, 0x2cd7u
-    mov r11w, 0x6b08u
-    mov r12w, 0x3644u
-    mov r13w, 0x217fu
-    mov r14w, 0xb5a4u
-    mov r15w, 0x8df6u
+    mov ax, 0xcb04
+    mov bx, 0x43f4
+    mov cx, 0x6493
+    mov dx, 0xacd9
+    mov si, 0xf019
+    mov di, 32_038
+    mov bp, 0x60f1
+    mov sp, 0x6476
+    mov r8w, 0x3329
+    mov r9w, 0x09f4
+    mov r10w, 0x2cd7
+    mov r11w, 0x6b08
+    mov r12w, 0x3644
+    mov r13w, 0x217f
+    mov r14w, 0xb5a4
+    mov r15w, 0x8df6
     hlt
-    mov al, 0x1fu
-    mov bl, 0x5du
-    mov cl, 0x82u
-    mov dl, 0xfbu
-    mov sil, 0x83u
-    mov dil, 0x78u
-    mov bpl, 0x45u
-    mov spl, 0x08u
-    mov r8b, 0xc6u
-    mov r9b, 0x5au
-    mov r10b, 0xd2u
-    mov r11b, 0x3eu
-    mov r12b, 0x87u
-    mov r13b, 0x48u
-    mov r14b, 0x94u
-    mov r15b, 0x05u
+    mov al, 0x1f
+    mov bl, 0x5d
+    mov cl, 0x82
+    mov dl, 0xfb
+    mov sil, 0x83
+    mov dil, 0x78
+    mov bpl, 0x45
+    mov spl, 0x08
+    mov r8b, 0xc6
+    mov r9b, 0x5a
+    mov r10b, 0xd2
+    mov r11b, 0x3e
+    mov r12b, 0x87
+    mov r13b, 0x48
+    mov r14b, 0x94
+    mov r15b, 0x05
     hlt
-    mov ah, 0x8cu
-    mov bh, 0xaeu
-    mov ch, 0xe1u
-    mov dh, 0xafu
+    mov ah, 0x8c
+    mov bh, 0xae
+    mov ch, 0xe1
+    mov dh, 0xaf
     hlt
-    mov eax, 0u
-    mov ebx, 0xfe630756u
+    mov eax, 0
+    mov ebx, 0xfe630756
     syscall
     times 256 nop
     ".to_owned() => None).unwrap();
@@ -197,7 +197,7 @@ fn test_mov() {
 
     segment rodata
     val: dd 22
-    val2: dd 22u
+    val2: dd 22
     val3: dd 22.2
     segment bss
     align 4
