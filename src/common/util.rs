@@ -1,5 +1,5 @@
 /// Gets two mutable references to distinct elements of a slice. Panics if `a == b`.
-pub fn mut2<T>(src: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
+pub(crate) fn mut2<T>(src: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
     assert_ne!(a, b);
     if a < b {
         let (x, y) = src.split_at_mut(b);
@@ -18,7 +18,6 @@ fn test_mut2() {
             if a == b { continue; }
 
             let (x, y) = mut2(&mut v, a, b);
-            println!("{} {}", a, b);
             assert_eq!(*x, a);
             assert_eq!(*y, b);
         }

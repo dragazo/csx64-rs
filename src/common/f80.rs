@@ -1,6 +1,4 @@
-//! Conversion utilities between `rug::Float` and an 80-bit binary representation.
-//! 
-//! This is used to support reading/writing extended precision fp values for `tword` loads in the FPU.
+//! Conversion utilities between `rug::Float` and an 80-bit binary representation used by the FPU.
 
 use std::num::FpCategory;
 use std::cmp::Ordering;
@@ -49,6 +47,23 @@ pub const MIN_POSITIVE: F80 = F80([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 /// This type isn't technically a floating point type itself (no arithmetic operations are defined).
 /// This is just meant to hold the binary representation of an 80-bit float for use in strongly typed conversions.
 /// Note that values are thought to be 80-bit unsigned integers (sign bit is highest bit, followed by exp, then sig), but are stored little-endian.
+/// 
+/// There are 15 exponent bits and 64 significant bits.
+/// This means that integer arithmetic performed using extended floats are precice up to the range of 64-bit unsigned integers.
+/// Note that 80-bit floating point does not hide the leading bit, and therefore does not have subnormal values.
+/// 
+/// # Example
+/// ```
+/// # use csx64::common::f80::F80;
+/// # use rug::Float;
+/// // here we specify 64 significant bits.
+/// // less is ok, more is also ok but would be lost in conversion to F80.
+/// let float = Float::with_val(64, Float::parse("2.718281828459045235360").unwrap());
+/// let f80 = F80::from(&float);
+/// println!("encoded: {:x}", f80);
+/// let back = Float::from(f80);
+/// assert_eq!(float, back);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct F80(pub [u8; 10]);
 

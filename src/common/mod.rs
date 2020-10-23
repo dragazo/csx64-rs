@@ -3,8 +3,8 @@
 use std::io::{self, Read, Write};
 
 pub mod serialization;
-pub mod util;
 pub mod f80;
+pub(crate) mod util;
 
 use serialization::*;
 
@@ -20,22 +20,35 @@ pub enum OPCode
     NOP,
     HLT,
     SYSCALL,
+
+    MOV, MOVcc,
+
+    ADD, SUB,
+    AND, OR, XOR,
+    CMP, CMPZ, TEST,
+
+
+
+
+
+
+
+
     STLDF,
     FlagManip,
 
-    SETcc, MOV, MOVcc, XCHG,
+    SETcc, XCHG,
 
     JMP, Jcc, LOOPcc, CALL, RET,
     PUSH, POP,
     LEA,
 
-    ADD, SUB,
+    
     MULx, IMUL, DIV, IDIV,
     SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
-    AND, OR, XOR,
     INC, DEC, NEG, NOT,
-
-    CMP, CMPZ, TEST,
+    
+    
 
     BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
     Cxy, MOVxX,
@@ -93,6 +106,13 @@ pub enum OPCode
     DEBUG,
 }
 
+/// An executable file for use by the [`Emulator`].
+/// 
+/// Executables are produced by [`link`] by combining one or more [`ObjectFile`].
+/// 
+/// [`Emulator`]: ../exec/struct.Emulator.html
+/// [`link`]: ../asm/fn.link.html
+/// [`ObjectFile`]: ../asm/struct.ObjectFile.html
 pub struct Executable {
     pub(crate) text_seglen: usize,
     pub(crate) rodata_seglen: usize,

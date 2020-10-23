@@ -20,15 +20,15 @@ use registers::*;
 use fpu::*;
 use fd::*;
 
-/// Bitmask denoting FLAGS that users can modify with instructions like POPF.
+/// Bitmask denoting Flags that users can modify with instructions like POPF.
 pub const MODIFIABLE_FLAGS: u64 = 0x003f0fd5;
 
 /// Default max on emulator main memory footprint.
-const DEFAULT_MAX_MEM: usize = 2 * 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_MEM: usize = 2 * 1024 * 1024 * 1024;
 /// Default stack size to provide an emulator.
-const DEFAULT_STACK_SIZE: usize = 2 * 1024 * 1024;
+pub const DEFAULT_STACK_SIZE: usize = 2 * 1024 * 1024;
 /// Default number of file descriptors.
-const DEFAULT_MAX_FD: usize = 16;
+pub const DEFAULT_MAX_FD: usize = 16;
 
 /// Current state of an emulator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +37,7 @@ pub enum State {
     Uninitialized,
     /// The emulator is still running.
     Running,
-    /// The emulator terminated successfully with the given program return code.
+    /// The emulator terminated successfully with the given return code.
     Terminated(i32),
     /// The emulator terminated due to an error.
     Error(ExecError),
@@ -120,9 +120,9 @@ fn sign_extend(val: u64, sizecode: u8) -> u64 {
         _ => panic!(),
     }
 }
-/// Checks if the value with the given size would be negative as a signed integer.
-/// The test ignores any bits outside the range of the given size.
-fn is_negative(val: u64, sizecode: u8) -> bool {
+/// Gets the sign bit of the value with given size.
+/// Bits outside the range of the size are ignored.
+fn sign_bit(val: u64, sizecode: u8) -> bool {
     match sizecode {
         0 => (val as i8) < 0,
         1 => (val as i16) < 0,
@@ -214,6 +214,7 @@ pub struct EmulatorArgs {
     pub command_line_args: Vec<String>,
 }
 
+/// Processor emulator which runs a compiled program.
 pub struct Emulator {
     memory: Vec<u8>,
     min_memory: usize, // so users can't accidentally truncate the executable itself
@@ -229,7 +230,7 @@ pub struct Emulator {
 
     fpu: FPU,
     mxcsr: MXCSR,
-    flags: FLAGS,
+    flags: Flags,
     
     file_descriptors: Vec<Box<dyn FileDescriptor>>,
 
@@ -256,7 +257,7 @@ impl Emulator {
 
             fpu: Default::default(),
             mxcsr: MXCSR(0),
-            flags: FLAGS(0),
+            flags: Flags(0),
 
             file_descriptors: vec![],
 
@@ -397,6 +398,16 @@ impl Emulator {
                         OPCode::MOV => self.exec_mov(),
                         OPCode::MOVcc => self.exec_mov_cc(),
 
+                        OPCode::ADD => self.exec_add(),
+                        OPCode::SUB => self.exec_sub_helper(true),
+                        OPCode::CMP => self.exec_sub_helper(false),
+                        OPCode::CMPZ => self.exec_cmp0(),
+
+                        OPCode::AND => self.exec_and_helper(true),
+                        OPCode::OR => self.exec_or(),
+                        OPCode::XOR => self.exec_xor(),
+                        OPCode::TEST => self.exec_and_helper(false),
+
                         _ => unimplemented!(),
                     }
                 }
@@ -409,7 +420,7 @@ impl Emulator {
 
     // -------------------------------------------------------------------------------------
 
-    pub fn get_flags(&self) -> FLAGS {
+    pub fn get_flags(&self) -> Flags {
         self.flags
     }
 
@@ -660,23 +671,17 @@ impl Emulator {
 
         let (m, a, b) = match s2 >> 4 {
             0 => {
-                let a = if !get_a { 0 } else {
-                    if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) }
-                };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) };
                 let b = if s1 & 1 != 0 { self.cpu_regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu_regs[s2 as usize & 15].raw_get(sizecode) };
                 (0, a, b)
             }
             1 => {
-                let a = if !get_a { 0 } else {
-                    if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) }
-                };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) };
                 let b = self.raw_get_mem_adv(force_imm_sizecode.unwrap_or(sizecode))?;
                 (0, a, b)
             }
             2 => {
-                let a = if !get_a { 0 } else {
-                    if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) }
-                };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s1 as usize >> 4].raw_get(sizecode) };
                 let m = self.get_address_adv()?;
                 let b = self.raw_get_mem(m, sizecode)?;
                 (m, a, b)
@@ -701,11 +706,41 @@ impl Emulator {
     fn store_binary_op_result(&mut self, s1: u8, s2: u8, m: u64, res: u64) -> Result<(), ExecError> {
         let sizecode = (s1 >> 2) & 3;
         if s2 <= 0x2f { // modes 0-2 -- this method avoids having to perform the shift
-            if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].set_x8h(res as u8); }
-            else { self.cpu_regs[s1 as usize >> 4].raw_set(sizecode, res); }
+            if s1 & 2 != 0 { self.cpu_regs[s1 as usize >> 4].set_x8h(res as u8); } else { self.cpu_regs[s1 as usize >> 4].raw_set(sizecode, res); }
             Ok(())
         }
         else { self.raw_set_mem(m, sizecode, res) } // modes 3-4 -- the corresponding read already validated mode was in the proper range
+    }
+
+    /*
+    [4: dest][2: size][1: dh][1: mem]
+    mem = 0:             dest <- f(dest)
+    mem = 1: [address]   M[address] <- f(M[address])
+    (dh marks AH, BH, CH, or DH for dest)
+    */
+    fn read_unary_op(&mut self, get: bool) -> Result<(u8, u64, u64), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let sizecode = (s >> 2) & 3;
+
+        let (m, v) = {
+            if s & 1 == 0 {
+                let v = if !get { 0 } else if s & 2 != 0 { self.cpu_regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu_regs[s as usize >> 4].raw_get(sizecode) };
+                (0, v)
+            } else {
+                let m = self.get_address_adv()?;
+                let v = if !get { 0 } else { self.raw_get_mem(m, sizecode)? };
+                (m, v)
+            }
+        };
+
+        Ok((s, m, v))
+    }
+    fn store_unary_op_result(&mut self, s: u8, m: u64, res: u64) -> Result<(), ExecError> {
+        let sizecode = (s >> 2) & 3;
+        if s & 1 == 0 {
+            if s & 2 != 0 { self.cpu_regs[s as usize >> 4].set_x8h(res as u8); } else { self.cpu_regs[s as usize >> 4].raw_set(sizecode, res); }
+            Ok(())
+        } else { self.raw_set_mem(m, sizecode, res) }
     }
 
     // -------------------------------------------------------------------------------------
@@ -713,17 +748,21 @@ impl Emulator {
     /// Updates ZF SF PF to reflect the given value.
     /// Bits outside the range of the given size are ignored.
     fn update_flags_zsp(&mut self, value: u64, sizecode: u8) {
-        self.flags.0 &= !(FLAGS::MASK_ZF | FLAGS::MASK_SF | FLAGS::MASK_PF);
+        self.flags.0 &= !mask!(Flags: MASK_ZF | MASK_SF | MASK_PF);
         if truncate(value, sizecode) == 0 { self.flags.set_zf(); }
-        if is_negative(value, sizecode) { self.flags.set_sf(); }
+        if sign_bit(value, sizecode) { self.flags.set_sf(); }
         if is_parity_even(value as u8) { self.flags.set_pf(); }
+    }
+
+    /// Randomizes the flags specified by the given mask.
+    fn randomize_flags(&mut self, mask: u64) {
+        self.flags.0 ^= self.rng.next_u64() & mask;
     }
 
     // -------------------------------------------------------------------------------------
 
     fn exec_mov(&mut self) -> Result<(), ExecError> {
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
-        println!("mov value: {}", b);
         self.store_binary_op_result(s1, s2, m, b)
     }
     /*
@@ -772,6 +811,79 @@ impl Emulator {
         };
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
         if cnd { self.store_binary_op_result(s1, s2, m, b) } else { Ok(()) }
+    }
+
+    fn exec_add(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let sizecode = (s1 >> 2) & 3;
+
+        let res = truncate(a.wrapping_add(b), sizecode); // has to be truncated for CF logic
+
+        self.update_flags_zsp(res, sizecode);
+        self.flags.0 &= !mask!(Flags: MASK_CF | MASK_AF | MASK_OF);
+        if res < a { self.flags.set_cf(); }
+        if (res & 15) < (a & 15) { self.flags.set_af(); } // AF is just like CF but only the low 4-bits
+        if sign_bit(!(a ^ b) & (a ^ res), sizecode) { self.flags.set_of(); } // overflow if sign(a)=sign(b) and sign(a)!=sign(res)
+        
+        self.store_binary_op_result(s1, s2, m, res)
+    }
+    fn exec_sub_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let sizecode = (s1 >> 2) & 3;
+
+        let res = a.wrapping_sub(b);
+
+        self.update_flags_zsp(res, sizecode);
+        self.flags.0 &= !mask!(Flags: MASK_CF | MASK_AF | MASK_OF);
+        if a < b { self.flags.set_cf(); } // if a < b then a borrow was taken from the highest bit
+        if (a & 15) < (b & 15) { self.flags.set_af(); } // AF is just like CF but only the low 4-bits
+        if sign_bit((a ^ b) & (a ^ res), sizecode) { self.flags.set_of(); } // overflow if sign(a)!=sign(b) and sign(a)!=sign(res)
+
+        if should_store { self.store_binary_op_result(s1, s2, m, res) } else { Ok(()) }
+    }
+    fn exec_cmp0(&mut self) -> Result<(), ExecError> {
+        let (s, _, v) = self.read_unary_op(true)?;
+        let sizecode = (s >> 2) & 3;
+        self.update_flags_zsp(v, sizecode);
+        self.flags.0 &= !mask!(Flags: MASK_CF | MASK_OF | MASK_AF);
+        Ok(())
+    }
+
+    fn exec_and_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let sizecode = (s1 >> 2) & 3;
+
+        let res = a & b;
+
+        self.flags.0 &= !mask!(Flags: MASK_OF | MASK_CF);
+        self.update_flags_zsp(res, sizecode);
+        self.randomize_flags(mask!(Flags: MASK_AF));
+        
+        if should_store { self.store_binary_op_result(s1, s2, m, res) } else { Ok(()) }
+    }
+    fn exec_or(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let sizecode = (s1 >> 2) & 3;
+
+        let res = a | b;
+
+        self.flags.0 &= !mask!(Flags: MASK_OF | MASK_CF);
+        self.update_flags_zsp(res, sizecode);
+        self.randomize_flags(mask!(Flags: MASK_AF));
+        
+        self.store_binary_op_result(s1, s2, m, res)
+    }
+    fn exec_xor(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let sizecode = (s1 >> 2) & 3;
+
+        let res = a ^ b;
+
+        self.flags.0 &= !mask!(Flags: MASK_OF | MASK_CF);
+        self.update_flags_zsp(res, sizecode);
+        self.randomize_flags(mask!(Flags: MASK_AF));
+        
+        self.store_binary_op_result(s1, s2, m, res)
     }
 }
 impl Default for Emulator {

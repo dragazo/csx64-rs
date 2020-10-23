@@ -407,13 +407,13 @@ impl AssembleArgs<'_> {
                             (x, 10)
                         }
                     };
-                    let term_fix = term_fix.replace('_', ""); // remove all underscores (allowed as group separators)
+                    let term_fix = { // because of prefix, we might now start with an underscore - strip all those away
+                        let p = term_fix.find(|c: char| c != '_').unwrap_or(term_fix.len());
+                        &term_fix[p..]
+                    };
 
-                    // terms should not have signs - this is handled by unary ops (and prevents e.g. 0x-5 instead of proper -0x5)
-                    if term_fix.starts_with('+') || term_fix.starts_with('-') {
-                        panic!(); // should be handled by token parsing logic
-                        //return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None });
-                    }
+                    // terms should not have signs - this should be exclusively handled by unary ops
+                    debug_assert!(!term_fix.starts_with('+') && !term_fix.starts_with('-'));
                 
                     // first, try to parse the value as an integer
                     match Integer::from_str_radix(&term_fix, radix) {
@@ -1034,6 +1034,33 @@ impl AssembleArgs<'_> {
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
             _ => return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None }),
+        }
+
+        Ok(())
+    }
+    pub(super) fn process_unary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: None, inner_err: None }); }
+        let arg = args.into_iter().next().unwrap();
+
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)?; }
+
+        match arg {
+            Argument::CPURegister(reg) => {
+                if !allowed_sizes.contains(&reg.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                self.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2) | (if reg.high { 2 } else { 0 }))?;
+            }
+            Argument::Address(addr) => {
+                let size = match addr.pointed_size {
+                    None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                    Some(s) => s,
+                };
+                if !allowed_sizes.contains(&size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                self.append_byte((size.basic_sizecode().unwrap() << 2) | 1)?;
+                self.append_address(addr)?;
+            }
+            _ => return Err(AsmError { kind: AsmErrorKind::UnaryOpUnsupportedType, line_num: self.line_num, pos: None, inner_err: None }),
         }
 
         Ok(())

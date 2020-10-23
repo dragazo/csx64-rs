@@ -147,8 +147,10 @@ pub enum AsmErrorKind {
     UnsupportedOperandSize,
     OperandsHadDifferentSizes,
     SizeSpecOnForcedSize,
-    BinaryOpUnsupportedSrcDestTypes, // e.g. memory x memory
     CouldNotDeduceOperandSize,
+    
+    BinaryOpUnsupportedSrcDestTypes, // e.g. memory x memory
+    UnaryOpUnsupportedType,
 
     EQUWithoutLabel,
     EQUArgumentHadSizeSpec,
@@ -958,7 +960,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
         if let Some(TimesInfo { total_count: 0, current: _ }) = args.times { continue; }
         loop { // otherwise we have to parse it once each time and update the times iter count after each step (if applicable)
             args.update_line_pos_in_seg(); // update line position once before each first-order iteration
-            let arguments = args.extract_arguments(&line, header_aft)?;
+            let mut arguments = args.extract_arguments(&line, header_aft)?;
             match prefix { // then we proceed into the handlers
                 Some((Prefix::REP, prefix_pos)) => match instruction {
                     _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
@@ -1110,6 +1112,32 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
 
                     Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                     Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+
+                    Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::CMP => {
+                        let is_cmpz = arguments.len() == 2 && match &arguments[1] {
+                            Argument::Imm(imm) => match imm.expr.eval(&args.file.symbols) {
+                                Ok(v) => match &*v {
+                                    Value::Integer(v) => v.cmp0() == Ordering::Equal,
+                                    Value::Pointer(v) => *v == 0,
+                                    _ => false,
+                                }
+                                Err(_) => false,
+                            }
+                            _ => false,
+                        };
+                        if is_cmpz {
+                            arguments.pop();
+                            args.process_unary_op(arguments, OPCode::CMPZ as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?
+                        }
+                        else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)? }
+                    }
+
+                    Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                 }
             }
 

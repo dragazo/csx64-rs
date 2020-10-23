@@ -3,7 +3,7 @@
 //! It is intended that all implementors use little-endian byte ordering for multi-byte values, but this is not strictly required.
 //!
 //! `BinaryRead` and `BinaryWrite` are the two main features of this module.
-//! They are implemented for all integer primitives with the notably exception of `u8`.
+//! They are implemented for all integer primitives with the notable exception of `u8`.
 //! This is because stable rust does not currently support specialization, meaning the blanket implementations
 //! for `[T]` and `Vec<T>` would otherwise conflict with the performance-based implementations for `[u8]` and `Vec<u8>`.
 //! To support the same interface (but not the same trait), `u8` implements `TrivialBinaryRead` and `TrivialBinaryWrite`.

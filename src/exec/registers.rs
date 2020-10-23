@@ -173,7 +173,7 @@ macro_rules! impl_flag {
         pub fn $set(&mut self) { self.0 |= $mask }
         pub fn $reset(&mut self) { self.0 &= !$mask }
         pub fn $flip(&mut self) { self.0 ^= $mask }
-        pub fn $get(self) -> bool { (self.0 & $mask) != 0 }
+        pub const fn $get(self) -> bool { (self.0 & $mask) != 0 }
         pub fn $assign(&mut self, value: bool) {
             if value { self.$set() } else { self.$reset() }
         }
@@ -182,7 +182,7 @@ macro_rules! impl_flag {
 macro_rules! impl_field {
     ($mask_name:ident, $get:ident, $assign:ident => $from:ty [ $shift:literal => $mask:literal ] $to:ty) => {
         pub const $mask_name: $from = $mask << $shift;
-        pub fn $get(self) -> $to {
+        pub const fn $get(self) -> $to {
             ((self.0 >> $shift) & $mask) as $to
         }
         pub fn $assign(&mut self, val: $to) {
@@ -194,8 +194,8 @@ macro_rules! impl_field {
 
 /// The CPU flags register.
 #[derive(Clone, Copy)]
-pub struct FLAGS(pub u64);
-impl FLAGS {
+pub struct Flags(pub u64);
+impl Flags {
     impl_flag! { MASK_CF, set_cf, reset_cf, flip_cf, get_cf, assign_cf       => u64 [0x0000000000000001] }
     impl_flag! { MASK_PF, set_pf, reset_pf, flip_pf, get_pf, assign_pf       => u64 [0x0000000000000004] }
     impl_flag! { MASK_AF, set_af, reset_af, flip_af, get_af, assign_af       => u64 [0x0000000000000010] }
@@ -218,24 +218,24 @@ impl FLAGS {
     // -------------------------------------------------------------------------------------
 
     /// Checks the "below" condition.
-    pub fn condition_b(&self) -> bool { self.get_cf() }
+    pub const fn condition_b(self) -> bool { self.get_cf() }
     /// Checks the "below or equal" condition.
-    pub fn condition_be(&self) -> bool { self.get_cf() || self.get_zf() }
+    pub const fn condition_be(self) -> bool { self.get_cf() || self.get_zf() }
     /// Checks the "above" condition.
-    pub fn condition_a(&self) -> bool { !self.condition_be() }
+    pub const fn condition_a(self) -> bool { !self.condition_be() }
     /// Checks the "above or equal" condition.
-    pub fn condition_ae(&self) -> bool { !self.condition_b() }
+    pub const fn condition_ae(self) -> bool { !self.condition_b() }
 
     // -------------------------------------------------------------------------------------
 
     /// Checks the "less than" condition.
-    pub fn condition_l(&self) -> bool { self.get_sf() != self.get_of() }
+    pub const fn condition_l(self) -> bool { self.get_sf() != self.get_of() }
     /// Checks the "less or equal" condition.
-    pub fn condition_le(&self) -> bool { self.get_zf() || (self.get_sf() != self.get_of()) }
+    pub const fn condition_le(self) -> bool { self.get_zf() || (self.get_sf() != self.get_of()) }
     /// Checks the "greater than" condition.
-    pub fn condition_g(&self) -> bool { !self.condition_le() }
+    pub const fn condition_g(self) -> bool { !self.condition_le() }
     /// Checks the "greater or equal" condition.
-    pub fn condition_ge(&self) -> bool { !self.condition_l() }
+    pub const fn condition_ge(self) -> bool { !self.condition_l() }
 }
 
 /// The MXCSR register.

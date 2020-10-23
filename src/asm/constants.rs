@@ -352,6 +352,8 @@ pub(super) enum Instruction {
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
     MOV, MOVcc(u8),
+    ADD, SUB, CMP,
+    AND, OR, XOR, TEST,
 }
 
 lazy_static! {
@@ -444,6 +446,15 @@ lazy_static! {
         alias!(m: Caseless("MOVNLE") => Caseless("MOVG"));
         alias!(m: Caseless("MOVNL") => Caseless("MOVGE"));
         
+        insert!(m: Caseless("ADD") => Instruction::ADD);
+        insert!(m: Caseless("SUB") => Instruction::SUB);
+        insert!(m: Caseless("CMP") => Instruction::CMP);
+
+        insert!(m: Caseless("AND") => Instruction::AND);
+        insert!(m: Caseless("OR") => Instruction::OR);
+        insert!(m: Caseless("XOR") => Instruction::XOR);
+        insert!(m: Caseless("TEST") => Instruction::TEST);
+
         m
     };
 }
