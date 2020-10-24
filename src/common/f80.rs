@@ -66,6 +66,18 @@ pub const MIN_POSITIVE: F80 = F80([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct F80(pub [u8; 10]);
+impl F80 {
+    /// Converts the `F80` instance into a little-endian byte array.
+    /// This is equivalent to accessing the wrapped value, but is defined for macro expansion convenience.
+    pub fn to_le_bytes(self) -> [u8; 10] {
+        self.0
+    }
+    /// Constructs an `F80` instance from a little-endian byte array.
+    /// This is equivalent to wrapping the array, but is defined for macro expansion convenience.
+    pub fn from_le_bytes(bytes: [u8; 10]) -> F80 {
+        F80(bytes)
+    }
+}
 
 impl BinaryWrite for F80 {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {

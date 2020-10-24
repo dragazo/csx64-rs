@@ -193,7 +193,7 @@ macro_rules! impl_field {
 }
 
 /// The CPU flags register.
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub struct Flags(pub u64);
 impl Flags {
     impl_flag! { MASK_CF, set_cf, reset_cf, flip_cf, get_cf, assign_cf       => u64 [0x0000000000000001] }
@@ -239,7 +239,7 @@ impl Flags {
 }
 
 /// The MXCSR register.
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub struct MXCSR(pub u16);
 impl MXCSR {
 
