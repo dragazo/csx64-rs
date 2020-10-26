@@ -6,7 +6,6 @@ use memchr::memchr;
 use num_traits::FromPrimitive;
 
 use std::mem;
-use std::convert::TryInto;
 use std::iter;
 
 use crate::common::f80::*;
@@ -565,6 +564,7 @@ impl Emulator {
                             }
                         }
 
+                        OPCode::LEA => self.exec_lea(),
                         OPCode::MOV => self.exec_mov(),
                         OPCode::MOVcc => self.exec_mov_cc(),
 
@@ -814,6 +814,17 @@ impl Emulator {
     }
 
     // -------------------------------------------------------------------------------------
+
+    /*
+    [4: dest][2: size][2:]   [address]
+    dest <- address
+    */
+    fn exec_lea(&mut self) -> Result<(), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let addr = self.get_address_adv()?;
+        self.cpu.regs[s as usize >> 4].raw_set((s >> 2) & 3, addr);
+        Ok(())
+    }
 
     fn exec_mov(&mut self) -> Result<(), ExecError> {
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;

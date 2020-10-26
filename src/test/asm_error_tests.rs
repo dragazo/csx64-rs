@@ -1,5 +1,6 @@
 use super::*;
 use crate::asm::{*, expr::ValueType};
+use crate::asm::expr::*;
 
 #[test]
 fn test_empty_source() {
@@ -269,6 +270,223 @@ fn test_double_global_extern() {
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_addr_8bit() {
+    match assemble("test.asm", &mut readable("segment text\nmov eax, [ah + al]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::SizeUnsupported) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nmov eax, [al]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::SizeUnsupported) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nmov eax, [byte 0]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::SizeUnsupported) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_bad_addr() {
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [rax + rbx + rcx]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::InvalidRegMults) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [dword bx]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::ConflictingSizes) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [bx + rcx]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::ConflictingSizes) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [2*rax + 2*rbx]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::InvalidRegMults) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [6*rax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::InvalidRegMults) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [0*eax + 1*rax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::ConflictingSizes) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [1 / eax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::RegIllegalOp) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax >> 2]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::RegIllegalOp) => (),
+                _ => panic!("{:?}", e),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax * eax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax * ebx]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [ebx * eax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [2.0 * rax]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::RegMultNotCriticalExpr(reason)) => match reason {
+                    EvalError::Illegal(IllegalReason::IncompatibleTypes(OP::Mul, ValueType::Float, ValueType::Integer)) => (),
+                    _ => panic!("{:?}", reason),
+                }
+                _ => panic!("{:?}", e.kind),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, []".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::BadBase) => (),
+                _ => panic!("{:?}", e.kind),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            let inner = *e.inner_err.unwrap();
+            match inner.kind {
+                AsmErrorKind::ExpectedExprTerm => (),
+                _ => panic!("{:?}", inner.kind),
+            }
+            assert_eq!(inner.line_num, 2);
+            assert_eq!(inner.pos, Some(10));
+            assert!(inner.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nlea rax, [dword]".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::BadAddress(BadAddress::BadBase) => (),
+                _ => panic!("{:?}", e.kind),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(9));
+            let inner = *e.inner_err.unwrap();
+            match inner.kind {
+                AsmErrorKind::ExpectedExprTerm => (),
+                _ => panic!("{:?}", inner.kind),
+            }
+            assert_eq!(inner.line_num, 2);
+            assert_eq!(inner.pos, Some(15));
+            assert!(inner.inner_err.is_none());
         }
     }
 }

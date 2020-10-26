@@ -279,6 +279,33 @@ fn test_mov() {
 
     assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::NotRunning));
 }
+#[test]
+fn test_mov_cc() {
+    let exe = assemble_and_link!(r"
+    segment text
+    mov ax, 0xfe12
+    cmp ax, 12
+    movg ah, al
+    hlt
+    cmp ax, 12
+    movle ah, al
+    hlt
+    xor eax, eax
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None).unwrap();
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xfe12);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x1212);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
 
 #[test]
 fn test_add() {
@@ -526,4 +553,149 @@ fn test_binary_high_regs() {
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
     assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::NotRunning));
+}
+
+#[test]
+fn test_lea() {
+    let exe = assemble_and_link!(r"
+    segment text
+    mov rax, 412
+    mov rbx, 323
+    mov r14, -30
+    mov r15, -55
+    mov ecx, 0
+    hlt
+    lea rcx, [rax + rbx ]
+    lea rdx, [1*rbx + 1*rax]
+    lea rsi, zword ptr [rax + 2*rbx]
+    lea rdi, [rax + 4*rbx]
+    lea r8, [rax + 8*rbx]
+    lea r9, word ptr [rax + rbx + 100]
+    lea r10, [rax + 2*rbx + 120]
+    lea r11, qword ptr [2*rax + rbx - 130]
+    lea r12, [rax + 4*rbx + 0]
+    lea r13, [8*rax + 1*rbx - 143]
+    hlt
+    lea rcx, [2*rax - rax + rbx]
+    lea rdx, [rax*3 + 20]
+    lea rsi, zword ptr [5*rbx + 20]
+    lea rdi, [rax*9 - 10]
+    hlt
+    lea rcx, [r14 + r15]
+    lea edx, yword ptr [r14 + r15]
+    lea si, [r14 + r15]
+    lea rdi, [r14d + r15d + R15d]
+    lea r8d, [r14d + r15d + r15d]
+    lea r9w, xword ptr [r14d + r15d + r15d]
+    lea r10, [r14w + 2*r15w*2]
+    lea r11d, [r14w + 2*r15w*2]
+    lea r12w, word ptr [r14w + 2*r15w*2]
+    hlt
+    lea rcx, [3   *(2 *r15 + r15)]
+    lea edx, [3*    (2*r15 + r15)   ]
+    lea si, yword ptr [   3*(2*r15 + r15)]
+    lea rdi, [3*-(2*-r14d - --++-+-+r14d)]
+    lea r8d, [3*-(2*-r14d - --++-+-+r14d)]
+    lea r9w, qword ptr [3*-(2*-r14d - --++-+-+r14d)]
+    lea r10, [3*-(2*-ax - --++-+-+aX) - 1*1*3*1*1*Ax*1*1*3*1*1 + r14w + 8*r15w]
+    lea r11d, byte ptr [3*-(2 *- ax - --++ -+- +AX) - 1*1*3*1*1*ax*1*1*3*1*1 + r14w + 8*r15w]
+    lea r12w, [3*-(2*-AX- --++-+-+aX) - 1*1*3*1*1*ax*1*1*3*1*1 + r14w + 8*r15w]
+    hlt
+    lea rcx, xword ptr [(rax + 212) * 2]
+    lea rdx, [(rax - 222) * 2]
+    lea rsi, [(22+rax)*4]
+    lea rdi, dword ptr [(29 -rax) * -4]
+    lea r8, [  8 * (     rax + 21)]
+    lea r9, [8 * (rax - 20)]
+    lea r10, [2 * (7 + rax)]
+    lea r11, byte ptr [-  2 * (7 - rax)]
+    hlt
+    lea rcx, [rax]
+    lea rdx, [rbx]
+    lea rsi, [1*rax]
+    lea rdi, [rbx*1]
+    hlt
+    lea rcx, [-423]
+    lea rdx, [qword -423  ]
+    lea rsi, [ dword - 423]
+    lea rdi, [word    -423    ]
+    hlt
+    mov eax, 0
+    mov ebx, 0
+    syscall
+    ".to_owned() => None).unwrap();
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (6, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 412);
+    assert_eq!(e.cpu.get_rbx(), 323);
+    assert_eq!(e.cpu.get_rcx(), 0);
+    assert_eq!(e.cpu.get_r14(), 0xffffffffffffffe2);
+    assert_eq!(e.cpu.get_r15(), 0xffffffffffffffc9);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (11, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 412 + 323);
+    assert_eq!(e.cpu.get_rdx(), 412 + 323);
+    assert_eq!(e.cpu.get_rsi(), 412 + 2 * 323);
+    assert_eq!(e.cpu.get_rdi(), 412 + 4 * 323);
+    assert_eq!(e.cpu.get_r8(), 412 + 8 * 323);
+    assert_eq!(e.cpu.get_r9(), 412 + 323 + 100);
+    assert_eq!(e.cpu.get_r10(), 412 + 2 * 323 + 120);
+    assert_eq!(e.cpu.get_r11(), 2 * 412 + 323 - 130);
+    assert_eq!(e.cpu.get_r12(), 412 + 4 * 323);
+    assert_eq!(e.cpu.get_r13(), 8 * 412 + 323 - 143);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 412 + 323);
+    assert_eq!(e.cpu.get_rdx(), 3 * 412 + 20);
+    assert_eq!(e.cpu.get_rsi(), 5 * 323 + 20);
+    assert_eq!(e.cpu.get_rdi(), 9 * 412 - 10);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (10, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xffffffffffffffab);
+    assert_eq!(e.cpu.get_rdx(), 0x00000000ffffffab);
+    assert_eq!(e.cpu.get_si(), 0xffab);
+    assert_eq!(e.cpu.get_rdi(), 0x00000000ffffff74);
+    assert_eq!(e.cpu.get_r8(), 0x00000000ffffff74);
+    assert_eq!(e.cpu.get_r9w(), 0xff74);
+    assert_eq!(e.cpu.get_r10(), 0x000000000000ff06);
+    assert_eq!(e.cpu.get_r11(), 0x000000000000ff06);
+    assert_eq!(e.cpu.get_r12w(), 0xff06);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (10, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xfffffffffffffe11);
+    assert_eq!(e.cpu.get_rdx(), 0x00000000fffffe11);
+    assert_eq!(e.cpu.get_si(), 0xfe11);
+    assert_eq!(e.cpu.get_rdi(), 0x00000000fffffef2);
+    assert_eq!(e.cpu.get_r8(), 0x00000000fffffef2);
+    assert_eq!(e.cpu.get_r9w(), 0xfef2);
+    assert_eq!(e.cpu.get_r10(), 0x000000000000fe2a);
+    assert_eq!(e.cpu.get_r11(), 0x000000000000fe2a);
+    assert_eq!(e.cpu.get_r12w(), 0xfe2a);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (9, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 1248);
+    assert_eq!(e.cpu.get_rdx(), 380);
+    assert_eq!(e.cpu.get_rsi(), 1736);
+    assert_eq!(e.cpu.get_rdi(), 1532);
+    assert_eq!(e.cpu.get_r8(), 3464);
+    assert_eq!(e.cpu.get_r9(), 3136);
+    assert_eq!(e.cpu.get_r10(), 838);
+    assert_eq!(e.cpu.get_r11(), 810);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 412);
+    assert_eq!(e.cpu.get_rdx(), 323);
+    assert_eq!(e.cpu.get_rsi(), 412);
+    assert_eq!(e.cpu.get_rdi(), 323);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xfffffffffffffe59);
+    assert_eq!(e.cpu.get_rdx(), 0xfffffffffffffe59);
+    assert_eq!(e.cpu.get_rsi(), 0x00000000fffffe59);
+    assert_eq!(e.cpu.get_rdi(), 0x000000000000fe59);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }

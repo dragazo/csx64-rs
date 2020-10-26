@@ -22,6 +22,28 @@ use crate::common::serialization::*;
 use crate::common::f80::F80;
 use crate::common::{OPCode, Executable};
 
+/// The types of errors associated with failed address parsing,
+/// but for which we know the argument was intended to be an address.
+#[derive(Debug)]
+pub enum BadAddress {
+    Unterminated,
+    SizeMissingPtr,
+    RegMultNotCriticalExpr(EvalError),
+    /// A register was connected by an operation other than addition/subtraction.
+    RegIllegalOp,
+    /// Denotes invalid usage of register multipliers in an address expression.
+    /// This is issued when the registers cannot be expressed as `a*r1 + r2` where `a` is 1, 2, 4, or 8.
+    InvalidRegMults,
+    ConflictingSizes,
+    SizeUnsupported,
+    TypeUnsupported,
+    InteriorNotSingleExpr,
+    PtrSpecWithoutSize,
+    SizeNotRecognized,
+    IllegalExpr(IllegalReason),
+    BadBase,
+}
+
 /// The kinds of errors that can occur during assembly.
 /// These are meant to be specific enough to have customized, detailed error messages.
 #[derive(Debug)]
@@ -55,8 +77,6 @@ pub enum AsmErrorKind {
     SegmentAlreadyCompleted,
     LabelOnSegmentLine,
 
-    
-
     AssertFailure,
     AssertArgHadSizeSpec,
     AssertArgNotLogical(ValueType),
@@ -75,7 +95,6 @@ pub enum AsmErrorKind {
     ParenInteriorNotExpr,
     ExpectedCommaBeforeToken,
     UnrecognizedMacroInvocation,
-    IllFormedExpr,
 
     IllFormedNumericLiteral,
     NumericLiteralWithZeroPrefix,
@@ -93,28 +112,7 @@ pub enum AsmErrorKind {
     TimesIterOutisideOfTimes,
 
     ExpectedAddress,
-    UnterminatedAddress,
-    AddressSizeMissingPtr,
-    AddressRegMultNotCriticalExpr,
-    AddressRegMultNotSignedInt,
-    AddressRegInvalidMult,
-    AddressRegIllegalOp,
-    AddressConflictingSizes,
-    AddressTooManyRegs,
-    AddressSizeUnsupported,
-    AddressTypeUnsupported,
-    AddressInteriorNotSingleExpr,
-    AddressPtrSpecWithoutSize,
-    AddressSizeNotRecognized,
-    AddressUseOfHighRegister,
-
-    FailedParseImm,
-    FailedParseAddress,
-    FailedParseCPURegister,
-    FailedParseFPURegister,
-    FailedParseVPURegister,
-
-    RegisterWithSizeSpec,
+    BadAddress(BadAddress),
     
     TimesMissingCount,
     TimesCountNotImm,
@@ -149,7 +147,7 @@ pub enum AsmErrorKind {
     SizeSpecOnForcedSize,
     CouldNotDeduceOperandSize,
     
-    BinaryOpUnsupportedSrcDestTypes, // e.g. memory x memory
+    BinaryOpUnsupportedSrcDestTypes,
     UnaryOpUnsupportedType,
 
     EQUWithoutLabel,
@@ -180,9 +178,19 @@ pub enum AsmErrorKind {
     IdentifierIsGlobalAndExtern,
     RedundantGlobalOrExternDecl { prev_line_num: usize },
 
+    LEADestNotRegister,
+    LEADestByte,
+    LEASrcNotAddress,
+
     GlobalSymbolWasNotDefined,
-    UnknownSymbol,
+    UnknownSymbol(String),
 }
+impl From<BadAddress> for AsmErrorKind {
+    fn from(reason: BadAddress) -> Self {
+        AsmErrorKind::BadAddress(reason)
+    }
+}
+
 #[derive(Debug)]
 pub struct AsmError {
     /// The type of error that was encountered.
@@ -1112,7 +1120,27 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
 
                     Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                     Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                    Instruction::LEA => {
+                        if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: args.line_num, pos: None, inner_err: None }); }
+                        let mut arguments = arguments.into_iter();
 
+                        let reg = match arguments.next().unwrap() {
+                            Argument::CPURegister(reg) => {
+                                if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::LEADestByte, line_num: args.line_num, pos: None, inner_err: None }); }
+                                reg
+                            }
+                            _ => return Err(AsmError { kind: AsmErrorKind::LEADestNotRegister, line_num: args.line_num, pos: None, inner_err: None }),
+                        };
+                        let addr = match arguments.next().unwrap() {
+                            Argument::Address(addr) => addr,
+                            _ => return Err(AsmError { kind: AsmErrorKind::LEASrcNotAddress, line_num: args.line_num, pos: None, inner_err: None }),
+                        };
+
+                        args.append_byte(OPCode::LEA as u8)?;
+                        args.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2))?;
+                        args.append_address(addr)?;
+                    }
+                    
                     Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                     Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                     Instruction::CMP => {

@@ -21,6 +21,7 @@ pub enum OPCode
     HLT,
     SYSCALL,
 
+    LEA,
     MOV, MOVcc,
 
     ADD, SUB,
@@ -34,21 +35,23 @@ pub enum OPCode
 
 
 
+
+
+    JMP, Jcc, LOOPcc,
+    CALL, RET,
+    PUSH, POP,
+
+    XCHG,
+    SETcc,
+
+    INC, DEC, NEG, NOT,
+
+    SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
+
     STLDF,
     FlagManip,
 
-    SETcc, XCHG,
-
-    JMP, Jcc, LOOPcc, CALL, RET,
-    PUSH, POP,
-    LEA,
-
-    
     MULx, IMUL, DIV, IDIV,
-    SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
-    INC, DEC, NEG, NOT,
-    
-    
 
     BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
     Cxy, MOVxX,
