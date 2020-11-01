@@ -1059,12 +1059,11 @@ impl AssembleArgs<'_> {
     pub(super) fn process_unary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
         if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: None, inner_err: None }); }
-        let arg = args.into_iter().next().unwrap();
 
         self.append_byte(op)?;
         if let Some(ext) = ext_op { self.append_byte(ext)?; }
 
-        match arg {
+        match args.into_iter().next().unwrap() {
             Argument::CPURegister(reg) => {
                 if !allowed_sizes.contains(&reg.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2) | (if reg.high { 2 } else { 0 }))?;
@@ -1076,6 +1075,47 @@ impl AssembleArgs<'_> {
                 };
                 if !allowed_sizes.contains(&size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((size.basic_sizecode().unwrap() << 2) | 1)?;
+                self.append_address(addr)?;
+            }
+            _ => return Err(AsmError { kind: AsmErrorKind::UnaryOpUnsupportedType, line_num: self.line_num, pos: None, inner_err: None }),
+        }
+
+        Ok(())
+    }
+    pub(super) fn process_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, default_imm_size: Option<Size>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: None, inner_err: None }); }
+
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)?; }
+/*
+    [4: reg][2: size][2: mode]
+    mode = 0:               reg
+    mode = 1:               h reg (AH, BH, CH, or DH)
+    mode = 2: [size: imm]   imm
+    mode = 3: [address]     M[address]
+    */
+        match args.into_iter().next().unwrap() {
+            Argument::CPURegister(reg) => {
+                if !allowed_sizes.contains(&reg.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                self.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2) | (if reg.high { 1 } else { 0 }))?;
+            }
+            Argument::Imm(imm) => {
+                let size = match imm.size.or(default_imm_size) {
+                    None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                    Some(s) => s,
+                };
+                if !allowed_sizes.contains(&size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                self.append_byte((size.basic_sizecode().unwrap() << 2) | 2)?;
+                self.append_val(size, imm.expr, allowed_type)?;
+            }
+            Argument::Address(addr) => {
+                let size = match addr.pointed_size {
+                    None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                    Some(s) => s,
+                };
+                if !allowed_sizes.contains(&size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                self.append_byte((size.basic_sizecode().unwrap() << 2) | 3)?;
                 self.append_address(addr)?;
             }
             _ => return Err(AsmError { kind: AsmErrorKind::UnaryOpUnsupportedType, line_num: self.line_num, pos: None, inner_err: None }),

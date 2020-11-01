@@ -566,7 +566,7 @@ impl Emulator {
 
                         OPCode::LEA => self.exec_lea(),
                         OPCode::MOV => self.exec_mov(),
-                        OPCode::MOVcc => self.exec_mov_cc(),
+                        OPCode::MOVcc => self.exec_movcc(),
 
                         OPCode::ADD => self.exec_add(),
                         OPCode::SUB => self.exec_sub_helper(true),
@@ -578,6 +578,12 @@ impl Emulator {
                         OPCode::XOR => self.exec_xor(),
                         OPCode::TEST => self.exec_and_helper(false),
 
+                        OPCode::JMP => self.exec_jmp(),
+                        OPCode::Jcc => self.exec_jcc(),
+                        OPCode::LOOPcc => self.exec_loopcc(),
+                        OPCode::CALL => self.exec_call(),
+                        OPCode::RET => self.exec_ret(),
+
                         _ => unimplemented!(),
                     }
                 }
@@ -586,6 +592,12 @@ impl Emulator {
         }
 
         (cycles, StopReason::MaxCycles)
+    }
+
+    fn jump_to(&mut self, pos: u64) -> Result<(), ExecError> {
+        if pos > usize::MAX as u64 { return Err(ExecError::MemOutOfBounds); }
+        self.instruction_pointer = pos as usize;
+        Ok(())
     }
 
     // -------------------------------------------------------------------------------------
@@ -797,6 +809,73 @@ impl Emulator {
         } else { self.raw_set_mem(m, sizecode, res) }
     }
 
+    /*
+    [4: reg][2: size][2: mode]
+    mode = 0:               reg
+    mode = 1:               h reg (AH, BH, CH, or DH)
+    mode = 2: [size: imm]   imm
+    mode = 3: [address]     M[address]
+    */
+    fn read_value_op(&mut self) -> Result<(u8, u64), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let sizecode = (s >> 2) & 3;
+
+        let v = match s & 3 {
+            0 => self.cpu.regs[s as usize >> 4].raw_get(sizecode),
+            1 => self.cpu.regs[s as usize >> 4].get_x8h() as u64,
+            2 => self.raw_get_mem_adv(sizecode)?,
+            3 => {
+                let m = self.get_address_adv()?;
+                self.raw_get_mem(m, sizecode)?
+            }
+            _ => unreachable!(),
+        };
+
+        Ok((s, v))
+    }
+
+    /*
+    [cnd]
+    cnd = 0: Z       cnd = 1: NZ
+    cnd = 2: S       cnd = 3: NS
+    cnd = 4: P       cnd = 5: NP
+    cnd = 6: O       cnd = 7: NO
+    cnd = 8: C       cnd = 9: NC
+    cnd = 10: B      cnd = 11: BE
+    cnd = 12: A      cnd = 13: AE
+    cnd = 14: L      cnd = 15: LE
+    cnd = 16: G      cnd = 17: GE
+    cnd = 18: CXZ    cnd = 19: ECXZ
+    cnd = 20: RCXZ
+    else: UND
+    */
+    fn read_standard_condition(&mut self) -> Result<bool, ExecError> {
+        Ok(match self.get_mem_adv_u8()? {
+            0 => self.flags.get_zf(),
+            1 => !self.flags.get_zf(),
+            2 => self.flags.get_sf(),
+            3 => !self.flags.get_sf(),
+            4 => self.flags.get_pf(),
+            5 => !self.flags.get_pf(),
+            6 => self.flags.get_of(),
+            7 => !self.flags.get_of(),
+            8 => self.flags.get_cf(),
+            9 => !self.flags.get_cf(),
+            10 => self.flags.condition_b(),
+            11 => self.flags.condition_be(),
+            12 => self.flags.condition_a(),
+            13 => self.flags.condition_ae(),
+            14 => self.flags.condition_l(),
+            15 => self.flags.condition_le(),
+            16 => self.flags.condition_g(),
+            17 => self.flags.condition_ge(),
+            18 => self.cpu.get_cx() == 0,
+            19 => self.cpu.get_ecx() == 0,
+            20 => self.cpu.get_rcx() == 0,
+            _ => return Err(ExecError::InvalidOpEncoding),
+        })
+    }
+
     // -------------------------------------------------------------------------------------
 
     /// Updates ZF SF PF to reflect the given value.
@@ -830,50 +909,9 @@ impl Emulator {
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
         self.store_binary_op_result(s1, s2, m, b)
     }
-    /*
-    [cnd]
-    cnd = 0: Z
-    cnd = 1: NZ
-    cnd = 2: S
-    cnd = 3: NS
-    cnd = 4: P
-    cnd = 5: NP
-    cnd = 6: O
-    cnd = 7: NO
-    cnd = 8: C
-    cnd = 9: NC
-    cnd = 10: B
-    cnd = 11: BE
-    cnd = 12: A
-    cnd = 13: AE
-    cnd = 14: L
-    cnd = 15: LE
-    cnd = 16: G
-    cnd = 17: GE
-    else: UND
-    */
-    fn exec_mov_cc(&mut self) -> Result<(), ExecError> {
-        let cnd = match self.get_mem_adv_u8()? {
-            0 => self.flags.get_zf(),
-            1 => !self.flags.get_zf(),
-            2 => self.flags.get_sf(),
-            3 => !self.flags.get_sf(),
-            4 => self.flags.get_pf(),
-            5 => !self.flags.get_pf(),
-            6 => self.flags.get_of(),
-            7 => !self.flags.get_of(),
-            8 => self.flags.get_cf(),
-            9 => !self.flags.get_cf(),
-            10 => self.flags.condition_b(),
-            11 => self.flags.condition_be(),
-            12 => self.flags.condition_a(),
-            13 => self.flags.condition_ae(),
-            14 => self.flags.condition_l(),
-            15 => self.flags.condition_le(),
-            16 => self.flags.condition_g(),
-            17 => self.flags.condition_ge(),
-            _ => return Err(ExecError::InvalidOpEncoding),
-        };
+    
+    fn exec_movcc(&mut self) -> Result<(), ExecError> {
+        let cnd = self.read_standard_condition()?;
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
         if cnd { self.store_binary_op_result(s1, s2, m, b) } else { Ok(()) }
     }
@@ -949,6 +987,38 @@ impl Emulator {
         self.randomize_flags(mask!(Flags: MASK_AF));
         
         self.store_binary_op_result(s1, s2, m, res)
+    }
+
+    fn exec_jmp(&mut self) -> Result<(), ExecError> {
+        let (_, v) = self.read_value_op()?;
+        self.jump_to(v)
+    }
+    fn exec_jcc(&mut self) -> Result<(), ExecError> {
+        let cnd = self.read_standard_condition()?;
+        let (_, v) = self.read_value_op()?;
+        if cnd { self.jump_to(v) } else { Ok(()) }
+    }
+    fn exec_loopcc(&mut self) -> Result<(), ExecError> {
+        let cnd = match self.get_mem_adv_u8()? {
+            0 => true,
+            1 => self.flags.get_zf(),
+            2 => !self.flags.get_zf(),
+            _ => return Err(ExecError::InvalidOpEncoding),
+        };
+        let (_, v) = self.read_value_op()?;
+        let new_rcx = self.cpu.get_rcx().wrapping_sub(1);
+        self.cpu.set_rcx(new_rcx);
+        if new_rcx != 0 && cnd { self.jump_to(v) } else { Ok(()) }
+    }
+    fn exec_call(&mut self) -> Result<(), ExecError> {
+        let (_, v) = self.read_value_op()?;
+        let aft = self.instruction_pointer;
+        self.jump_to(v)?;
+        self.push_mem_u64(aft as u64)
+    }
+    fn exec_ret(&mut self) -> Result<(), ExecError> {
+        let v = self.pop_mem_u64()?;
+        self.jump_to(v)
     }
 }
 impl Default for Emulator {

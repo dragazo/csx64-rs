@@ -28,6 +28,7 @@ pub enum OPCode
     AND, OR, XOR,
     CMP, CMPZ, TEST,
 
+    JMP, Jcc, LOOPcc, CALL, RET,
 
 
 
@@ -36,9 +37,8 @@ pub enum OPCode
 
 
 
+    
 
-    JMP, Jcc, LOOPcc,
-    CALL, RET,
     PUSH, POP,
 
     XCHG,

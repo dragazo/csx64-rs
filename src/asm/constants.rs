@@ -354,6 +354,7 @@ pub(super) enum Instruction {
     MOV, MOVcc(u8), LEA,
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
+    JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
 }
 
 lazy_static! {
@@ -456,6 +457,53 @@ lazy_static! {
         insert!(m: Caseless("OR") => Instruction::OR);
         insert!(m: Caseless("XOR") => Instruction::XOR);
         insert!(m: Caseless("TEST") => Instruction::TEST);
+
+        insert!(m: Caseless("JMP") => Instruction::JMP);
+
+        insert!(m: Caseless("JZ") => Instruction::Jcc(0));
+        insert!(m: Caseless("JNZ") => Instruction::Jcc(1));
+        insert!(m: Caseless("JS") => Instruction::Jcc(2));
+        insert!(m: Caseless("JNS") => Instruction::Jcc(3));
+        insert!(m: Caseless("JP") => Instruction::Jcc(4));
+        insert!(m: Caseless("JNP") => Instruction::Jcc(5));
+        insert!(m: Caseless("JO") => Instruction::Jcc(6));
+        insert!(m: Caseless("JNO") => Instruction::Jcc(7));
+        insert!(m: Caseless("JC") => Instruction::Jcc(8));
+        insert!(m: Caseless("JNC") => Instruction::Jcc(9));
+        insert!(m: Caseless("JB") => Instruction::Jcc(10));
+        insert!(m: Caseless("JBE") => Instruction::Jcc(11));
+        insert!(m: Caseless("JA") => Instruction::Jcc(12));
+        insert!(m: Caseless("JAE") => Instruction::Jcc(13));
+        insert!(m: Caseless("JL") => Instruction::Jcc(14));
+        insert!(m: Caseless("JLE") => Instruction::Jcc(15));
+        insert!(m: Caseless("JG") => Instruction::Jcc(16));
+        insert!(m: Caseless("JGE") => Instruction::Jcc(17));
+        insert!(m: Caseless("JCXZ") => Instruction::Jcc(18));
+        insert!(m: Caseless("JECXZ") => Instruction::Jcc(19));
+        insert!(m: Caseless("JRCXZ") => Instruction::Jcc(20));
+
+        alias!(m: Caseless("JE") => Caseless("JZ"));
+        alias!(m: Caseless("JNE") => Caseless("JNZ"));
+        alias!(m: Caseless("JPE") => Caseless("JP"));
+        alias!(m: Caseless("JPO") => Caseless("JNP"));
+        alias!(m: Caseless("JNAE") => Caseless("JB"));
+        alias!(m: Caseless("JNA") => Caseless("JBE"));
+        alias!(m: Caseless("JNBE") => Caseless("JA"));
+        alias!(m: Caseless("JNB") => Caseless("JAE"));
+        alias!(m: Caseless("JNGE") => Caseless("JL"));
+        alias!(m: Caseless("JNG") => Caseless("JLE"));
+        alias!(m: Caseless("JNLE") => Caseless("JG"));
+        alias!(m: Caseless("JNL") => Caseless("JGE"));
+
+        insert!(m: Caseless("LOOP") => Instruction::LOOPcc(0));
+        insert!(m: Caseless("LOOPZ") => Instruction::LOOPcc(1));
+        insert!(m: Caseless("LOOPNZ") => Instruction::LOOPcc(2));
+
+        alias!(m: Caseless("LOOPE") => Caseless("LOOPZ"));
+        alias!(m: Caseless("LOOPNE") => Caseless("LOOPNZ"));
+
+        insert!(m: Caseless("CALL") => Instruction::CALL);
+        insert!(m: Caseless("RET") => Instruction::RET);
 
         m
     };

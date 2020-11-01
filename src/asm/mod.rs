@@ -913,7 +913,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
         line.clear();
         match asm.read_line(&mut line) {
             Err(e) => return Err(AsmError { kind: AsmErrorKind::ReadError(e), line_num: args.line_num, pos: None, inner_err: None }),
-            Ok(v) => if v == 0 { break; }
+            Ok(v) => if v == 0 { break; } // check for EOF
         }
         args.line_num += 1;
         if args.line_num == 1 && line.starts_with("#!") { continue; } // accept a shebang, but only on the first line
@@ -956,224 +956,231 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
             }
         }
 
-        // if times count is zero, we shouldn't even look at the rest of the line
-        let (instruction, instruction_pos) = match instruction {
+        match instruction {
             None => {
                 debug_assert!(args.times.is_none()); // this is a syntax error, and should be handled elsewhere
                 debug_assert!(prefix.is_none()); // this should be guaranteed by parser
-                continue; // if there's not an instruction on this line, we also don't have to do anything
             }
-            Some(x) => x,
-        };
-        if let Some(TimesInfo { total_count: 0, current: _ }) = args.times { continue; }
-        loop { // otherwise we have to parse it once each time and update the times iter count after each step (if applicable)
-            args.update_line_pos_in_seg(); // update line position once before each first-order iteration
-            let mut arguments = args.extract_arguments(&line, header_aft)?;
-            match prefix { // then we proceed into the handlers
-                Some((Prefix::REP, prefix_pos)) => match instruction {
-                    _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
-                }
-                Some((Prefix::REPZ, prefix_pos)) => match instruction {
-                    _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
-                }
-                Some((Prefix::REPNZ, prefix_pos)) => match instruction {
-                    _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
-                }
-                Some((Prefix::LOCK, prefix_pos)) => match instruction {
-                    _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
-                }
-                None => match instruction {
-                    Instruction::EQU => match &args.label_def {
-                        None => return Err(AsmError { kind: AsmErrorKind::EQUWithoutLabel, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }),
-                        Some((name, _)) => {
-                            if arguments.len() != 1 {
-                                return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None });
-                            }
-                            let val = match arguments.into_iter().next().unwrap() {
-                                Argument::Imm(imm) => {
-                                    if let Some(_) = imm.size {
-                                        return Err(AsmError { kind: AsmErrorKind::EQUArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None });
-                                    }
-                                    imm.expr
-                                }
-                                _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
-                            };
-                            if let Err(_) = args.file.symbols.define(name.into(), val, args.line_num) {
-                                return Err(AsmError { kind: AsmErrorKind::SymbolAlreadyDefined, line_num: args.line_num, pos: None, inner_err: None });
-                            }
-                        }
+            Some((instruction, instruction_pos)) => {
+                debug_assert!(if let Some(TimesInfo { total_count: _, current }) = args.times { current == 0 } else { true }); // if we have times, should start at 0
+                loop { // otherwise we have to parse it once each time and update the times iter count after each step (if applicable)
+                    if let Some(TimesInfo { total_count, current }) = args.times {
+                        debug_assert!(current <= total_count);
+                        if current == total_count { break; } // check times exit condition
                     }
-                    Instruction::SEGMENT => {
-                        if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        let seg = match arguments.into_iter().next().unwrap() {
-                            Argument::Segment(seg) => seg,
-                            _ => return Err(AsmError { kind: AsmErrorKind::ExpectedSegment, line_num: args.line_num, pos: None, inner_err: None }),
-                        };
 
-                        if args.done_segs.contains(&seg) { return Err(AsmError { kind: AsmErrorKind::SegmentAlreadyCompleted, line_num: args.line_num, pos: None, inner_err: None }); }
-                        args.done_segs.push(seg);
-                        args.current_seg = Some(seg);
-                        args.last_nonlocal_label = None; // we don't want local symbols to propagate accross segments
-                        debug_assert!(args.label_def.is_none()); // no labels allowed - should have been taken care of before now
-                    }
-                    Instruction::GLOBAL => process_global_extern(arguments, &mut args.file.global_symbols, &args.file.extern_symbols, args.line_num)?,
-                    Instruction::EXTERN => process_global_extern(arguments, &mut args.file.extern_symbols, &args.file.global_symbols, args.line_num)?,
-                    Instruction::ALIGN => {
-                        if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        match arguments.into_iter().next().unwrap() {
-                            Argument::Imm(imm) => {
-                                if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AlignArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
-                                let val = match imm.expr.eval(&args.file.symbols) {
-                                    Err(_) => return Err(AsmError { kind: AsmErrorKind::AlignValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
-                                    Ok(res) => match &*res {
-                                        Value::Integer(v) => {
-                                            if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
-                                            match v.to_u64() {
-                                                None => return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }),
-                                                Some(v) => v,
+                    args.update_line_pos_in_seg(); // update line position once before each first-order iteration
+                    let mut arguments = args.extract_arguments(&line, header_aft)?;
+                    match prefix { // then we proceed into the handlers
+                        Some((Prefix::REP, prefix_pos)) => match instruction {
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                        }
+                        Some((Prefix::REPZ, prefix_pos)) => match instruction {
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                        }
+                        Some((Prefix::REPNZ, prefix_pos)) => match instruction {
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                        }
+                        Some((Prefix::LOCK, prefix_pos)) => match instruction {
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                        }
+                        None => match instruction {
+                            Instruction::EQU => match &args.label_def {
+                                None => return Err(AsmError { kind: AsmErrorKind::EQUWithoutLabel, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }),
+                                Some((name, _)) => {
+                                    if arguments.len() != 1 {
+                                        return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None });
+                                    }
+                                    let val = match arguments.into_iter().next().unwrap() {
+                                        Argument::Imm(imm) => {
+                                            if let Some(_) = imm.size {
+                                                return Err(AsmError { kind: AsmErrorKind::EQUArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None });
+                                            }
+                                            imm.expr
+                                        }
+                                        _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
+                                    };
+                                    if let Err(_) = args.file.symbols.define(name.clone(), val, args.line_num) {
+                                        return Err(AsmError { kind: AsmErrorKind::SymbolAlreadyDefined, line_num: args.line_num, pos: None, inner_err: None });
+                                    }
+                                }
+                            }
+                            Instruction::SEGMENT => {
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                let seg = match arguments.into_iter().next().unwrap() {
+                                    Argument::Segment(seg) => seg,
+                                    _ => return Err(AsmError { kind: AsmErrorKind::ExpectedSegment, line_num: args.line_num, pos: None, inner_err: None }),
+                                };
+        
+                                if args.done_segs.contains(&seg) { return Err(AsmError { kind: AsmErrorKind::SegmentAlreadyCompleted, line_num: args.line_num, pos: None, inner_err: None }); }
+                                args.done_segs.push(seg);
+                                args.current_seg = Some(seg);
+                                args.last_nonlocal_label = None; // we don't want local symbols to propagate accross segments
+                                debug_assert!(args.label_def.is_none()); // no labels allowed - should have been taken care of before now
+                            }
+                            Instruction::GLOBAL => process_global_extern(arguments, &mut args.file.global_symbols, &args.file.extern_symbols, args.line_num)?,
+                            Instruction::EXTERN => process_global_extern(arguments, &mut args.file.extern_symbols, &args.file.global_symbols, args.line_num)?,
+                            Instruction::ALIGN => {
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                match arguments.into_iter().next().unwrap() {
+                                    Argument::Imm(imm) => {
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AlignArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        let val = match imm.expr.eval(&args.file.symbols) {
+                                            Err(_) => return Err(AsmError { kind: AsmErrorKind::AlignValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                            Ok(res) => match &*res {
+                                                Value::Integer(v) => {
+                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                                    match v.to_u64() {
+                                                        None => return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }),
+                                                        Some(v) => v,
+                                                    }
+                                                }
+                                                _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
+                                            }
+                                        };
+                                        if val > MAX_ALIGN { return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if !val.is_power_of_two() { return Err(AsmError { kind: AsmErrorKind::AlignValueNotPowerOf2, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        let val = val as usize;
+                                        debug_assert!(val != 0 && MAX_ALIGN <= usize::MAX as u64 && MAX_ALIGN <= u32::MAX as u64);
+        
+                                        match args.current_seg {
+                                            None => return Err(AsmError { kind: AsmErrorKind::AlignOutsideOfSegment, line_num: args.line_num, pos: None, inner_err: None }),
+                                            Some(seg) => match seg {
+                                                AsmSegment::Text => align_seg(&mut args.file.text, &mut args.file.text_align, val),
+                                                AsmSegment::Rodata => align_seg(&mut args.file.rodata, &mut args.file.rodata_align, val),
+                                                AsmSegment::Data => align_seg(&mut args.file.data, &mut args.file.data_align, val),
+                                                AsmSegment::Bss => align_seg(&mut args.file.bss_len, &mut args.file.bss_align, val),
                                             }
                                         }
-                                        _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
-                                };
-                                if val > MAX_ALIGN { return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }); }
-                                if !val.is_power_of_two() { return Err(AsmError { kind: AsmErrorKind::AlignValueNotPowerOf2, line_num: args.line_num, pos: None, inner_err: None }); }
-                                let val = val as usize;
-                                debug_assert!(val != 0 && MAX_ALIGN <= usize::MAX as u64 && MAX_ALIGN <= u32::MAX as u64);
-
-                                match args.current_seg {
-                                    None => return Err(AsmError { kind: AsmErrorKind::AlignOutsideOfSegment, line_num: args.line_num, pos: None, inner_err: None }),
-                                    Some(seg) => match seg {
-                                        AsmSegment::Text => align_seg(&mut args.file.text, &mut args.file.text_align, val),
-                                        AsmSegment::Rodata => align_seg(&mut args.file.rodata, &mut args.file.rodata_align, val),
-                                        AsmSegment::Data => align_seg(&mut args.file.data, &mut args.file.data_align, val),
-                                        AsmSegment::Bss => align_seg(&mut args.file.bss_len, &mut args.file.bss_align, val),
-                                    }
+                                    _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
                                 }
                             }
-                            _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
-                        }
-                    }
-                    Instruction::ASSERT => {
-                        if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        let cond = match arguments.into_iter().next().unwrap() {
-                            Argument::Imm(imm) => {
-                                if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AssertArgHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
-                                match imm.expr.eval(&args.file.symbols) {
-                                    Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: args.line_num, pos: None, inner_err: None }),
-                                    Ok(res) => match &*res {
-                                        Value::Logical(v) => *v,
-                                        v => return Err(AsmError { kind: AsmErrorKind::AssertArgNotLogical(v.get_type()), line_num: args.line_num, pos: None, inner_err: None }),
-                                    }
-                                }
-                            }
-                            _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
-                        };
-                        if !cond { return Err(AsmError { kind: AsmErrorKind::AssertFailure, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                    }
-                    Instruction::DECLARE(size) => {
-                        if arguments.len() < 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCountAtLeast(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        for arg in arguments {
-                            match arg {
-                                Argument::Imm(imm) => {
-                                    if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::DeclareValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
-                                    args.append_val(size, imm.expr, HoleType::Any)?;
-                                }
-                                _ => return Err(AsmError { kind: AsmErrorKind::DeclareValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
-                            }
-                        }
-                    }
-                    Instruction::RESERVE(size) => {
-                        if args.current_seg != Some(AsmSegment::Bss) { return Err(AsmError { kind: AsmErrorKind::ReserveOutsideOfBss, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                        match arguments.into_iter().next().unwrap() {
-                            Argument::Imm(imm) => {
-                                if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::ReserveValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
-                                let count = match imm.expr.eval(&args.file.symbols) {
-                                    Err(_) => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
-                                    Ok(res) => match &*res {
-                                        Value::Integer(v) => {
-                                            if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
-                                            match v.to_u64() {
-                                                None => return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }),
-                                                Some(v) => v,
+                            Instruction::ASSERT => {
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                let cond = match arguments.into_iter().next().unwrap() {
+                                    Argument::Imm(imm) => {
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AssertArgHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        match imm.expr.eval(&args.file.symbols) {
+                                            Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: args.line_num, pos: None, inner_err: None }),
+                                            Ok(res) => match &*res {
+                                                Value::Logical(v) => *v,
+                                                v => return Err(AsmError { kind: AsmErrorKind::AssertArgNotLogical(v.get_type()), line_num: args.line_num, pos: None, inner_err: None }),
                                             }
                                         }
-                                        _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
+                                    _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
                                 };
-                                if count > usize::MAX as u64 { return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }); }
-                                let bytes = count as usize * size.size();
-                                args.file.bss_len += bytes;
+                                if !cond { return Err(AsmError { kind: AsmErrorKind::AssertFailure, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                             }
-                            _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
-                        }
-                    }
-
-                    Instruction::NOP => args.process_no_arg_op(arguments, Some(OPCode::NOP as u8), None)?,
-                    Instruction::HLT => args.process_no_arg_op(arguments, Some(OPCode::HLT as u8), None)?,
-                    Instruction::SYSCALL => args.process_no_arg_op(arguments, Some(OPCode::SYSCALL as u8), None)?,
-
-                    Instruction::LFENCE => args.process_no_arg_op(arguments, None, None)?,
-                    Instruction::SFENCE => args.process_no_arg_op(arguments, None, None)?,
-                    Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
-
-                    Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::LEA => {
-                        if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: args.line_num, pos: None, inner_err: None }); }
-                        let mut arguments = arguments.into_iter();
-
-                        let reg = match arguments.next().unwrap() {
-                            Argument::CPURegister(reg) => {
-                                if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::LEADestByte, line_num: args.line_num, pos: None, inner_err: None }); }
-                                reg
+                            Instruction::DECLARE(size) => {
+                                if arguments.len() < 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCountAtLeast(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                for arg in arguments {
+                                    match arg {
+                                        Argument::Imm(imm) => {
+                                            if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::DeclareValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                            args.append_val(size, imm.expr, HoleType::Any)?;
+                                        }
+                                        _ => return Err(AsmError { kind: AsmErrorKind::DeclareValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                    }
+                                }
                             }
-                            _ => return Err(AsmError { kind: AsmErrorKind::LEADestNotRegister, line_num: args.line_num, pos: None, inner_err: None }),
-                        };
-                        let addr = match arguments.next().unwrap() {
-                            Argument::Address(addr) => addr,
-                            _ => return Err(AsmError { kind: AsmErrorKind::LEASrcNotAddress, line_num: args.line_num, pos: None, inner_err: None }),
-                        };
-
-                        args.append_byte(OPCode::LEA as u8)?;
-                        args.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2))?;
-                        args.append_address(addr)?;
-                    }
-                    
-                    Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::CMP => {
-                        let is_cmpz = arguments.len() == 2 && match &arguments[1] {
-                            Argument::Imm(imm) => match imm.expr.eval(&args.file.symbols) {
-                                Ok(v) => match &*v {
-                                    Value::Integer(v) => v.cmp0() == Ordering::Equal,
-                                    Value::Pointer(v) => *v == 0,
+                            Instruction::RESERVE(size) => {
+                                if args.current_seg != Some(AsmSegment::Bss) { return Err(AsmError { kind: AsmErrorKind::ReserveOutsideOfBss, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                match arguments.into_iter().next().unwrap() {
+                                    Argument::Imm(imm) => {
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::ReserveValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        let count = match imm.expr.eval(&args.file.symbols) {
+                                            Err(_) => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                            Ok(res) => match &*res {
+                                                Value::Integer(v) => {
+                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                                    match v.to_u64() {
+                                                        None => return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }),
+                                                        Some(v) => v,
+                                                    }
+                                                }
+                                                _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
+                                            }
+                                        };
+                                        if count > usize::MAX as u64 { return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        let bytes = count as usize * size.size();
+                                        args.file.bss_len += bytes;
+                                    }
+                                    _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                }
+                            }
+        
+                            Instruction::NOP => args.process_no_arg_op(arguments, Some(OPCode::NOP as u8), None)?,
+                            Instruction::HLT => args.process_no_arg_op(arguments, Some(OPCode::HLT as u8), None)?,
+                            Instruction::SYSCALL => args.process_no_arg_op(arguments, Some(OPCode::SYSCALL as u8), None)?,
+        
+                            Instruction::LFENCE => args.process_no_arg_op(arguments, None, None)?,
+                            Instruction::SFENCE => args.process_no_arg_op(arguments, None, None)?,
+                            Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
+        
+                            Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::LEA => {
+                                if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: args.line_num, pos: None, inner_err: None }); }
+                                let mut arguments = arguments.into_iter();
+        
+                                let reg = match arguments.next().unwrap() {
+                                    Argument::CPURegister(reg) => {
+                                        if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::LEADestByte, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        reg
+                                    }
+                                    _ => return Err(AsmError { kind: AsmErrorKind::LEADestNotRegister, line_num: args.line_num, pos: None, inner_err: None }),
+                                };
+                                let addr = match arguments.next().unwrap() {
+                                    Argument::Address(addr) => addr,
+                                    _ => return Err(AsmError { kind: AsmErrorKind::LEASrcNotAddress, line_num: args.line_num, pos: None, inner_err: None }),
+                                };
+        
+                                args.append_byte(OPCode::LEA as u8)?;
+                                args.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2))?;
+                                args.append_address(addr)?;
+                            }
+                            
+                            Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::CMP => {
+                                let is_cmpz = arguments.len() == 2 && match &arguments[1] {
+                                    Argument::Imm(imm) => match imm.expr.eval(&args.file.symbols) {
+                                        Ok(v) => match &*v {
+                                            Value::Integer(v) => v.cmp0() == Ordering::Equal,
+                                            Value::Pointer(v) => *v == 0,
+                                            _ => false,
+                                        }
+                                        Err(_) => false,
+                                    }
                                     _ => false,
+                                };
+                                if is_cmpz {
+                                    arguments.pop();
+                                    args.process_unary_op(arguments, OPCode::CMPZ as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?
                                 }
-                                Err(_) => false,
+                                else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)? }
                             }
-                            _ => false,
-                        };
-                        if is_cmpz {
-                            arguments.pop();
-                            args.process_unary_op(arguments, OPCode::CMPZ as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?
+        
+                            Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+        
+                            Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::LOOPcc(ext) => args.process_value_op(arguments, OPCode::LOOPcc as u8, Some(ext), HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::RET => args.process_no_arg_op(arguments, Some(OPCode::RET as u8), None)?,
                         }
-                        else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)? }
                     }
-
-                    Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                    Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                }
-            }
-
-            match &mut args.times { // update times count if applicable (and test for break condition)
-                None => break,
-                Some(info) => {
-                    info.current += 1;
-                    if info.current >= info.total_count { break; }
+        
+                    match &mut args.times { // update times count if applicable, otherwise break on no times count
+                        None => break,
+                        Some(info) => info.current += 1,
+                    }
                 }
             }
         }

@@ -699,3 +699,152 @@ fn test_lea() {
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
+
+#[test]
+fn test_jmp() {
+    let exe = assemble_and_link!(r"
+    segment text
+    mov rax, again
+    mov ebx, 123
+    jmp next
+    times 16 nop
+    hlt
+
+    again:
+    hlt
+    mov ebx, 2232
+    jmp qword ptr [finally]
+    times 16 nop
+    hlt
+
+    next:
+    hlt
+    mov ebx, 1222
+    jmp rax
+    times 16 nop
+    hlt
+
+    stop:
+    hlt
+    mov eax, 0
+    mov ebx, 0
+    syscall
+    times 16 nop
+    hlt
+
+    segment rodata
+    finally: dq stop
+    ".to_owned() => None).unwrap();
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ebx(), 123);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ebx(), 1222);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ebx(), 2232);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_jcc() {
+    let exe = assemble_and_link!(r"
+    segment text
+    xor eax, eax
+    mov ebx, 12
+    cmp eax, 0
+    jne stop
+    mov ebx, 123
+    je other
+    times 16 nop
+    hlt
+
+    other:
+    hlt
+    cmp eax, 2
+    jg .skip
+    mov ebx, 66
+    jl stop
+    .skip: times 20 nop
+    hlt
+
+    stop:
+    hlt
+    mov eax, 0
+    mov ebx, 0
+    syscall
+    times 16 nop
+    hlt
+
+    segment rodata
+    finally: dq stop
+    ".to_owned() => None).unwrap();
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (7, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_eax(), 0);
+    assert_eq!(e.cpu.get_ebx(), 123);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_eax(), 0);
+    assert_eq!(e.cpu.get_ebx(), 66);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_call_ret_loop() {
+    let exe = assemble_and_link!(r"
+    segment text
+    mov edi, 6
+    call sum
+    hlt
+    mov edi, 17
+    call sum
+    hlt
+    mov edi, 0
+    call sum
+    hlt
+    mov edi, 200
+    call sum
+    hlt
+
+    mov eax, 0
+    mov ebx, 0
+    syscall
+
+    sum:
+    xor rax, rax
+    mov rcx, rdi
+    jrcxz .done
+    .top:
+        add rax, rcx
+        loop .top
+    .done:
+    ret
+    times 16 nop
+    hlt
+    ".to_owned() => None).unwrap();
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (19, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 21);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (41, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 153);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (7, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (407, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 20100);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
