@@ -490,3 +490,19 @@ fn test_bad_addr() {
         }
     }
 }
+
+#[test]
+fn test_late_expr_errors() {
+    match assemble("test.asm", &mut readable("val: equ 1.0 + foo\nfoo: equ 2\n\n\n\n\n\n\n\n\n\n".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ExprIllegalError(IllegalReason::IncompatibleTypes(OP::Add, ValueType::Float, ValueType::Integer)) => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+}

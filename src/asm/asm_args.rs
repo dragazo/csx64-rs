@@ -436,7 +436,7 @@ impl AssembleArgs<'_> {
                 _ => { // otherwise it must be an keyword/identifier - keywords are always case insensitive
                     if Caseless(term) == Caseless("TRUE") { true.into() }
                     else if Caseless(term) == Caseless("FALSE") { false.into() }
-                    else if Caseless(term) == Caseless("NULL") { Value::Pointer(0).into() }
+                    else if Caseless(term) == Caseless("NULL") { Value::Integer(Integer::new()).into() }
                     else { // if none of above, must be an identifier
                         let (mutated, _) = self.mutate_name(term, term_start)?;
                         ExprData::Ident(mutated).into()
@@ -1396,7 +1396,7 @@ fn test_extr_expr() {
         Ok((expr, aft)) => {
             assert_eq!(aft, 4);
             match expr.into_eval(&c.file.symbols).unwrap() {
-                ValueCow::Owned(Value::Pointer(val)) => assert_eq!(val, 0),
+                ValueCow::Owned(Value::Integer(val)) => assert_eq!(val, 0),
                 _ => panic!(),
             }
         }

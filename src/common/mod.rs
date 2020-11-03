@@ -30,7 +30,7 @@ pub enum OPCode
 
     JMP, Jcc, LOOPcc, CALL, RET,
 
-
+    INC, DEC, NEG, NOT,
 
 
 
@@ -44,7 +44,7 @@ pub enum OPCode
     XCHG,
     SETcc,
 
-    INC, DEC, NEG, NOT,
+    
 
     SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
 

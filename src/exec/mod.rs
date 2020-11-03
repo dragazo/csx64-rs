@@ -584,6 +584,11 @@ impl Emulator {
                         OPCode::CALL => self.exec_call(),
                         OPCode::RET => self.exec_ret(),
 
+                        OPCode::INC => self.exec_inc(),
+                        OPCode::DEC => self.exec_dec(),
+                        OPCode::NEG => self.exec_neg(),
+                        OPCode::NOT => self.exec_not(),
+
                         _ => unimplemented!(),
                     }
                 }
@@ -1019,6 +1024,51 @@ impl Emulator {
     fn exec_ret(&mut self) -> Result<(), ExecError> {
         let v = self.pop_mem_u64()?;
         self.jump_to(v)
+    }
+
+    fn exec_inc(&mut self) -> Result<(), ExecError> {
+        let (s, m, v) = self.read_unary_op(true)?;
+        let sizecode = (s >> 2) & 3;
+
+        let res = truncate(v.wrapping_add(1), sizecode); // truncated for carry flag check below
+
+        self.flags.0 &= !mask!(Flags: MASK_AF | MASK_OF);
+        self.update_flags_zsp(res, sizecode);
+        if res & 0x0f == 0 { self.flags.set_af(); } // low nibble of 0 was a nibble overflow (TM)
+        if sign_bit(!v & res, sizecode) { self.flags.set_of(); }
+
+        self.store_unary_op_result(s, m, res)
+    }
+    fn exec_dec(&mut self) -> Result<(), ExecError> {
+        let (s, m, v) = self.read_unary_op(true)?;
+        let sizecode = (s >> 2) & 3;
+
+        let res = truncate(v.wrapping_sub(1), sizecode); // truncated for carry flag check below
+
+        self.flags.0 &= !mask!(Flags: MASK_AF | MASK_OF);
+        self.update_flags_zsp(res, sizecode);
+        if v & 0x0f == 0 { self.flags.set_af(); } // low nibble of 0 was a nibble underflow (TM)
+        if sign_bit(v & !res, sizecode) { self.flags.set_of(); }
+
+        self.store_unary_op_result(s, m, res)
+    }
+    fn exec_neg(&mut self) -> Result<(), ExecError> {
+        let (s, m, v) = self.read_unary_op(true)?;
+        let sizecode = (s >> 2) & 3;
+
+        let res = truncate(v.wrapping_neg(), sizecode); // truncated for flag check below
+
+        self.flags.0 &= !mask!(Flags: MASK_CF | MASK_AF | MASK_OF);
+        self.update_flags_zsp(res, sizecode);
+        if v != 0 { self.flags.set_cf(); } // this is 0 < v (see exec_sub() logic for 0 - v)
+        if v & 0x0f != 0 { self.flags.set_af(); }               // same reasoning as above, but only low nibble
+        if sign_bit(v & res, sizecode) { self.flags.set_of(); } // same reasoning as above
+
+        self.store_unary_op_result(s, m, res)
+    }
+    fn exec_not(&mut self) -> Result<(), ExecError> {
+        let (s, m, v) = self.read_unary_op(true)?;
+        self.store_unary_op_result(s, m, !v)
     }
 }
 impl Default for Emulator {

@@ -1174,6 +1174,11 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             Instruction::LOOPcc(ext) => args.process_value_op(arguments, OPCode::LOOPcc as u8, Some(ext), HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::RET => args.process_no_arg_op(arguments, Some(OPCode::RET as u8), None)?,
+
+                            Instruction::INC => args.process_unary_op(arguments, OPCode::INC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::DEC => args.process_unary_op(arguments, OPCode::DEC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::NEG => args.process_unary_op(arguments, OPCode::NEG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::NOT => args.process_unary_op(arguments, OPCode::NOT as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                         }
                     }
         
@@ -1192,9 +1197,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
     }
 
     // link each symbol to internal symbols (minimizes file size and allows us to eliminate resolved internals)
-    for (_, (expr, _)) in args.file.symbols.iter() {
+    for (_, (expr, line_num)) in args.file.symbols.iter() {
         if let Err(EvalError::Illegal(reason)) = expr.eval(&args.file.symbols) {
-            return Err(AsmError { kind: AsmErrorKind::ExprIllegalError(reason), line_num: args.line_num, pos: None, inner_err: None });
+            return Err(AsmError { kind: AsmErrorKind::ExprIllegalError(reason), line_num: *line_num, pos: None, inner_err: None });
         }
     }
 
