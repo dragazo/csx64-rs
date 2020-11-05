@@ -24,8 +24,7 @@ fn get_conditions(flags: Flags) -> ((bool, bool, bool, bool), (bool, bool, bool,
 
 #[test]
 fn test_mov_basic() {
-    
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov rax, -7784568640113865156
     mov rbx, 0x12de639fcd11a4cb
@@ -109,7 +108,7 @@ fn test_mov_basic() {
     mov ebx, 0xfe630756
     syscall
     times 256 nop
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -213,7 +212,7 @@ fn test_mov_basic() {
 
 #[test]
 fn test_mov() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov rax, 12
     mov ebx, -3
@@ -250,7 +249,7 @@ fn test_mov() {
     align 4
     dest1: resd 1
     dest2: resd 1
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -281,7 +280,7 @@ fn test_mov() {
 }
 #[test]
 fn test_mov_cc() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov ax, 0xfe12
     cmp ax, 12
@@ -293,7 +292,7 @@ fn test_mov_cc() {
     xor eax, eax
     xor ebx, ebx
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -309,7 +308,7 @@ fn test_mov_cc() {
 
 #[test]
 fn test_add() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, -1
     add ax, 22
@@ -344,7 +343,7 @@ fn test_add() {
     syscall
     segment data
     val: dq 0x623
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -400,7 +399,7 @@ fn test_add() {
 
 #[test]
 fn test_sub_cmp() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov rax, 0xffffffff00000000 | 22
     sub eax, 19
@@ -424,7 +423,7 @@ fn test_sub_cmp() {
     mov eax, 0
     mov ebx, -1
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -475,7 +474,7 @@ fn test_sub_cmp() {
 
 #[test]
 fn test_and_or_xor_test() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov ax, 0x0ff0
     mov bx, 0xf00f
@@ -490,7 +489,7 @@ fn test_and_or_xor_test() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -518,7 +517,7 @@ fn test_and_or_xor_test() {
 
 #[test]
 fn test_binary_high_regs() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov ax, 0x0102
     mov bx, 0x1508
@@ -531,7 +530,7 @@ fn test_binary_high_regs() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -557,7 +556,7 @@ fn test_binary_high_regs() {
 
 #[test]
 fn test_lea() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov rax, 412
     mov rbx, 323
@@ -623,7 +622,7 @@ fn test_lea() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -711,7 +710,7 @@ fn test_lea() {
 
 #[test]
 fn test_jmp() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov rax, again
     mov ebx, 123
@@ -743,7 +742,7 @@ fn test_jmp() {
 
     segment rodata
     finally: dq stop
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -765,7 +764,7 @@ fn test_jmp() {
 }
 #[test]
 fn test_jcc() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     xor eax, eax
     mov ebx, 12
@@ -795,7 +794,7 @@ fn test_jcc() {
 
     segment rodata
     finally: dq stop
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -812,7 +811,7 @@ fn test_jcc() {
 }
 #[test]
 fn test_call_ret_loop() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov edi, 6
     call sum
@@ -842,7 +841,7 @@ fn test_call_ret_loop() {
     ret
     times 16 nop
     hlt
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -863,8 +862,99 @@ fn test_call_ret_loop() {
 }
 
 #[test]
+fn test_push_pop() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 0x1234
+    push ax
+    push dword 0x6546
+    hlt
+    pop ax
+    pop bx
+    pop cx
+    hlt
+    push qword ptr [thing]
+    pop qword ptr [other]
+    mov rax, [other]
+    hlt
+    xor eax, eax
+    xor ebx, ebx
+    syscall
+
+    segment data
+    thing: dq 0x0102030405060708
+    other: dq -1
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let stack_start = e.cpu.get_rsp();
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rsp(), stack_start - 6);
+    assert_eq!(e.memory.get_u16(stack_start - 2).unwrap(), 0x1234);
+    assert_eq!(e.memory.get_u32(stack_start - 6).unwrap(), 0x6546);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rsp(), stack_start);
+    assert_eq!(e.memory.get_u16(stack_start - 2).unwrap(), 0x1234); // they should still be there
+    assert_eq!(e.memory.get_u32(stack_start - 6).unwrap(), 0x6546);
+    assert_eq!(e.cpu.get_ax(), 0x6546);
+    assert_eq!(e.cpu.get_bx(), 0x0000);
+    assert_eq!(e.cpu.get_cx(), 0x1234);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rsp(), stack_start);
+    assert_eq!(e.memory.get_u64(stack_start - 8).unwrap(), 0x0102030405060708); // it should still be there
+    assert_eq!(e.cpu.get_rax(), 0x0102030405060708);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_stack_underflow() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    pop ax
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::Error(ExecError::StackUnderflow)));
+    assert_eq!(e.get_state(), State::Error(ExecError::StackUnderflow));
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::NotRunning));
+}
+#[test]
+fn test_stack_overflow() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov r9, thing
+    hlt
+
+    top:
+    push qword 0x0102030405060708
+    jmp top
+    
+    segment bss
+    thing: resb 1
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    let thing = e.cpu.get_r9();
+    assert_eq!(e.memory.get_u8(thing).unwrap(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Error(ExecError::StackOverflow));
+    assert_eq!(e.get_state(), State::Error(ExecError::StackOverflow));
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::NotRunning));
+    assert_eq!(e.memory.get_u8(thing).unwrap(), 0); // we shouldn't have overwritten anything outside of stack
+}
+
+#[test]
 fn test_inc() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, -2
     inc eax
@@ -885,7 +975,7 @@ fn test_inc() {
 
     segment data
     val: dw 0x7fff
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -915,7 +1005,7 @@ fn test_inc() {
 }
 #[test]
 fn test_dec() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, 2
     dec eax
@@ -936,7 +1026,7 @@ fn test_dec() {
 
     segment data
     val: dw 0x8000
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -966,7 +1056,7 @@ fn test_dec() {
 }
 #[test]
 fn test_neg() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, 2
     neg eax
@@ -982,7 +1072,7 @@ fn test_neg() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1007,7 +1097,7 @@ fn test_neg() {
 }
 #[test]
 fn test_not() {
-    let exe = assemble_and_link!(r"
+    let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, 0xdeadbeef
     not eax
@@ -1017,7 +1107,7 @@ fn test_not() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None).unwrap();
+    ".to_owned() => None);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);

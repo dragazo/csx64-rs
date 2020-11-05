@@ -1175,6 +1175,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::RET => args.process_no_arg_op(arguments, Some(OPCode::RET as u8), None)?,
 
+                            Instruction::PUSH => args.process_value_op(arguments, OPCode::PUSH as u8, None, HoleType::Integer, None, &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::POP => args.process_unary_op(arguments, OPCode::POP as u8, None, &[Size::Word, Size::Dword, Size::Qword])?,
+
                             Instruction::INC => args.process_unary_op(arguments, OPCode::INC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::DEC => args.process_unary_op(arguments, OPCode::DEC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::NEG => args.process_unary_op(arguments, OPCode::NEG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,

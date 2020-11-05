@@ -355,6 +355,7 @@ pub(super) enum Instruction {
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
+    PUSH, POP,
     INC, DEC, NEG, NOT,
 }
 
@@ -505,6 +506,9 @@ lazy_static! {
 
         insert!(m: Caseless("CALL") => Instruction::CALL);
         insert!(m: Caseless("RET") => Instruction::RET);
+
+        insert!(m: Caseless("PUSH") => Instruction::PUSH);
+        insert!(m: Caseless("POP") => Instruction::POP);
 
         insert!(m: Caseless("INC") => Instruction::INC);
         insert!(m: Caseless("DEC") => Instruction::DEC);

@@ -584,12 +584,13 @@ impl Emulator {
                         OPCode::CALL => self.exec_call(),
                         OPCode::RET => self.exec_ret(),
 
+                        OPCode::PUSH => self.exec_push(),
+                        OPCode::POP => self.exec_pop(),
+
                         OPCode::INC => self.exec_inc(),
                         OPCode::DEC => self.exec_dec(),
                         OPCode::NEG => self.exec_neg(),
                         OPCode::NOT => self.exec_not(),
-
-                        _ => unimplemented!(),
                     }
                 }
             };
@@ -1024,6 +1025,18 @@ impl Emulator {
     fn exec_ret(&mut self) -> Result<(), ExecError> {
         let v = self.pop_mem_u64()?;
         self.jump_to(v)
+    }
+
+    fn exec_push(&mut self) -> Result<(), ExecError> {
+        let (s, v) = self.read_value_op()?;
+        let sizecode = (s >> 2) & 3;
+        self.raw_push_mem(sizecode, v)
+    }
+    fn exec_pop(&mut self) -> Result<(), ExecError> {
+        let (s, m, _) = self.read_unary_op(false)?;
+        let sizecode = (s >> 2) & 3;
+        let res = self.raw_pop_mem(sizecode)?;
+        self.store_unary_op_result(s, m, res)
     }
 
     fn exec_inc(&mut self) -> Result<(), ExecError> {

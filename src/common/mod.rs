@@ -29,6 +29,7 @@ pub enum OPCode
     CMP, CMPZ, TEST,
 
     JMP, Jcc, LOOPcc, CALL, RET,
+    PUSH, POP,
 
     INC, DEC, NEG, NOT,
 
@@ -39,74 +40,74 @@ pub enum OPCode
 
     
 
-    PUSH, POP,
+    
 
-    XCHG,
-    SETcc,
+    // XCHG,
+    // SETcc,
 
     
 
-    SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
+    // SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
 
-    STLDF,
-    FlagManip,
+    // STLDF,
+    // FlagManip,
 
-    MULx, IMUL, DIV, IDIV,
+    // MULx, IMUL, DIV, IDIV,
 
-    BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
-    Cxy, MOVxX,
-    ADXX, AAX,
+    // BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
+    // Cxy, MOVxX,
+    // ADXX, AAX,
 
-    STRING,
+    // STRING,
 
-    BSx, TZCNT,
+    // BSx, TZCNT,
 
-    UD,
+    // UD,
 
-    IO,
+    // IO,
 
-    // x87 instructions
+    // // x87 instructions
 
-    FWAIT,
-    FINIT, FCLEX,
-    FSTLDword,
-    FLDconst, FLD, FST, FXCH, FMOVcc,
+    // FWAIT,
+    // FINIT, FCLEX,
+    // FSTLDword,
+    // FLDconst, FLD, FST, FXCH, FMOVcc,
 
-    FADD, FSUB, FSUBR,
-    FMUL, FDIV, FDIVR,
+    // FADD, FSUB, FSUBR,
+    // FMUL, FDIV, FDIVR,
 
-    F2XM1, FABS, FCHS, FPREM, FPREM1, FRNDINT, FSQRT, FYL2X, FYL2XP1, FXTRACT, FSCALE,
-    FXAM, FTST, FCOM,
-    FSIN, FCOS, FSINCOS, FPTAN, FPATAN,
-    FINCDECSTP, FFREE,
+    // F2XM1, FABS, FCHS, FPREM, FPREM1, FRNDINT, FSQRT, FYL2X, FYL2XP1, FXTRACT, FSCALE,
+    // FXAM, FTST, FCOM,
+    // FSIN, FCOS, FSINCOS, FPTAN, FPATAN,
+    // FINCDECSTP, FFREE,
 
-    // SIMD instructions
+    // // SIMD instructions
 
-    VPUMOV,
+    // VPUMOV,
 
-    VPUFADD, VPUFSUB, VPUFMUL, VPUFDIV,
-    VPUAND, VPUOR, VPUXOR, VPUANDN,
-    VPUADD, VPUADDS, VPUADDUS,
-    VPUSUB, VPUSUBS, VPUSUBUS,
-    VPUMULL,
+    // VPUFADD, VPUFSUB, VPUFMUL, VPUFDIV,
+    // VPUAND, VPUOR, VPUXOR, VPUANDN,
+    // VPUADD, VPUADDS, VPUADDUS,
+    // VPUSUB, VPUSUBS, VPUSUBUS,
+    // VPUMULL,
 
-    VPUFMIN, VPUFMAX,
-    VPUUMIN, VPUSMIN, VPUUMAX, VPUSMAX,
+    // VPUFMIN, VPUFMAX,
+    // VPUUMIN, VPUSMIN, VPUUMAX, VPUSMAX,
 
-    VPUFADDSUB,
-    VPUAVG,
+    // VPUFADDSUB,
+    // VPUAVG,
 
-    VPUFCMP, VPUFCOMI,
+    // VPUFCMP, VPUFCOMI,
 
-    VPUFSQRT, VPUFRSQRT,
+    // VPUFSQRT, VPUFRSQRT,
 
-    VPUCVT,
+    // VPUCVT,
 
-    // misc instructions
+    // // misc instructions
 
-    TRANS,
+    // TRANS,
 
-    DEBUG,
+    // DEBUG,
 }
 
 /// An executable file for use by the [`Emulator`].
