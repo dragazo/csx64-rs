@@ -23,6 +23,7 @@ pub enum OPCode
 
     LEA,
     MOV, MOVcc,
+    XCHG,
 
     ADD, SUB,
     AND, OR, XOR,

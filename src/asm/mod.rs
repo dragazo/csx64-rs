@@ -149,6 +149,9 @@ pub enum AsmErrorKind {
     
     BinaryOpUnsupportedSrcDestTypes,
     UnaryOpUnsupportedType,
+    ValueOpUnsupportedType,
+    BinaryLvalueOpUnsupportedSrcDestTypes,
+    BinaryLvalueUnorderedOpUnsupportedSrcDestTypes,
 
     EQUWithoutLabel,
     EQUArgumentHadSizeSpec,
@@ -1142,6 +1145,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 args.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2))?;
                                 args.append_address(addr)?;
                             }
+                            Instruction::XCHG => args.process_binary_lvalue_unordered_op(arguments, OPCode::XCHG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             
                             Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,

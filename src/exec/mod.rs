@@ -567,6 +567,7 @@ impl Emulator {
                         OPCode::LEA => self.exec_lea(),
                         OPCode::MOV => self.exec_mov(),
                         OPCode::MOVcc => self.exec_movcc(),
+                        OPCode::XCHG => self.exec_xchg(),
 
                         OPCode::ADD => self.exec_add(),
                         OPCode::SUB => self.exec_sub_helper(true),
@@ -785,6 +786,42 @@ impl Emulator {
     }
 
     /*
+    [4: r1][2: size][1: r1h][1: mem]
+    mem = 0: [1: r2h][3:][4: r2]
+        r1 <- r2
+        r2 <- r1
+    mem = 1: [address]
+        r1 <- M[address]
+        M[address] <- r1
+    (r1h and r2h mark AH, BH, CH, or DH for r1 or r2)
+    */
+    fn read_binary_lvalue_op(&mut self) -> Result<(u8, u64, u64, u64), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let sizecode = (s >> 2) & 3;
+
+        let a = if s & 2 != 0 { self.cpu.regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s as usize >> 4].raw_get(sizecode) };
+        if s & 1 == 0 {
+            let s2 = self.get_mem_adv_u8()?;
+            let b = if s2 & 0x80 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(sizecode) };
+            Ok((s, s2 as u64, a, b))
+        } else {
+            let m = self.get_address_adv()?;
+            let b = self.raw_get_mem(m, sizecode)?;
+            Ok((s, m, a, b))
+        }
+    }
+    fn store_binary_lvalue_result(&mut self, s: u8, sm2: u64, res1: u64, res2: u64) -> Result<(), ExecError> {
+        let sizecode = (s >> 2) & 3;
+        if s & 2 != 0 { self.cpu.regs[s as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s as usize >> 4].raw_set(sizecode, res1); }
+        if s & 1 == 0 {
+            if sm2 & 0x80 != 0 { self.cpu.regs[sm2 as usize & 15].set_x8h(res2 as u8); } else { self.cpu.regs[sm2 as usize & 15].raw_set(sizecode, res2); }
+            Ok(())
+        } else {
+            self.raw_set_mem(sm2, sizecode, res2)
+        }
+    }
+
+    /*
     [4: dest][2: size][1: dh][1: mem]
     mem = 0:             dest <- f(dest)
     mem = 1: [address]   M[address] <- f(M[address])
@@ -915,11 +952,15 @@ impl Emulator {
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
         self.store_binary_op_result(s1, s2, m, b)
     }
-    
     fn exec_movcc(&mut self) -> Result<(), ExecError> {
         let cnd = self.read_standard_condition()?;
         let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
         if cnd { self.store_binary_op_result(s1, s2, m, b) } else { Ok(()) }
+    }
+
+    fn exec_xchg(&mut self) -> Result<(), ExecError> {
+        let (s, sm2, a, b) = self.read_binary_lvalue_op()?;
+        self.store_binary_lvalue_result(s, sm2, b, a)
     }
 
     fn exec_add(&mut self) -> Result<(), ExecError> {

@@ -351,7 +351,7 @@ pub(super) enum Instruction {
     DECLARE(Size), RESERVE(Size),
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
-    MOV, MOVcc(u8), LEA,
+    MOV, MOVcc(u8), LEA, XCHG,
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
@@ -450,6 +450,7 @@ lazy_static! {
         alias!(m: Caseless("MOVNL") => Caseless("MOVGE"));
         
         insert!(m: Caseless("LEA") => Instruction::LEA);
+        insert!(m: Caseless("XCHG") => Instruction::XCHG);
 
         insert!(m: Caseless("ADD") => Instruction::ADD);
         insert!(m: Caseless("SUB") => Instruction::SUB);

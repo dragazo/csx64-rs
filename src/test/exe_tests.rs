@@ -709,6 +709,73 @@ fn test_lea() {
 }
 
 #[test]
+fn test_xchg() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov rax, -1
+    mov rbx, -2
+    xchg rax, rbx
+    hlt
+    xchg eax, ebx
+    hlt
+    xchg bl, bh
+    hlt
+    xchg bh, al
+    hlt
+    xchg bx, [val]
+    mov rcx, [val]
+    hlt
+    xchg [val], bh
+    mov rcx, [val]
+    hlt
+    mov eax, 0
+    mov ebx, 0
+    syscall
+
+    segment data
+    val: dq 0x3543
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let prev_flags = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xfffffffffffffffe);
+    assert_eq!(e.cpu.get_rbx(), 0xffffffffffffffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xffffffff);
+    assert_eq!(e.cpu.get_rbx(), 0xfffffffe);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xffffffff);
+    assert_eq!(e.cpu.get_rbx(), 0xfffffeff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xfffffffe);
+    assert_eq!(e.cpu.get_rbx(), 0xffffffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xfffffffe);
+    assert_eq!(e.cpu.get_rbx(), 0xffff3543);
+    assert_eq!(e.cpu.get_rcx(), 0xffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xfffffffe);
+    assert_eq!(e.cpu.get_rbx(), 0xffffff43);
+    assert_eq!(e.cpu.get_rcx(), 0xff35);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
 fn test_jmp() {
     let exe = asm_unwrap_link_unwrap!(r"
     segment text
