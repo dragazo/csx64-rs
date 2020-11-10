@@ -28,6 +28,7 @@ pub enum OPCode
     ADD, SUB,
     AND, OR, XOR,
     CMP, CMPZ, TEST,
+    MULDIV,
 
     JMP, Jcc, LOOPcc, CALL, RET,
     PUSH, POP,
@@ -43,17 +44,12 @@ pub enum OPCode
 
     
 
-    // XCHG,
     // SETcc,
-
-    
 
     // SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
 
     // STLDF,
     // FlagManip,
-
-    // MULx, IMUL, DIV, IDIV,
 
     // BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
     // Cxy, MOVxX,

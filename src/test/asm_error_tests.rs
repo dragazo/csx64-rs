@@ -45,7 +45,7 @@ fn test_segment() {
     match assemble("test.asm", &mut readable("segment text, dsdef".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(1)));
+            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[1])));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, Some(0));
             assert!(e.inner_err.is_none());
@@ -122,7 +122,7 @@ fn test_no_arg_ops() {
     match assemble("test.asm", &mut readable("segment text\nnop 0".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(0)));
+            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[0])));
             assert_eq!(e.line_num, 2);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
@@ -193,7 +193,7 @@ fn test_assert() {
     match assemble("test.asm", &mut readable("  static_assert;".into()), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(1)));
+            assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[1])));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, Some(2));
             assert!(e.inner_err.is_none());
@@ -501,6 +501,46 @@ fn test_late_expr_errors() {
                 k => panic!("{:?}", k),
             }
             assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_value_unknown_size() {
+    match assemble("test.asm", &mut readable("segment text\npush 5".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::CouldNotDeduceOperandSize => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nmul 5".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::CouldNotDeduceOperandSize => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut readable("segment text\nimul 5".into()), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::CouldNotDeduceOperandSize => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
         }

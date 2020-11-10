@@ -135,6 +135,53 @@ fn is_parity_even(val: u8) -> bool {
     val.count_ones() % 2 == 0
 }
 
+/// Computes the unsigned product of `a` and `b`, which are assumed to be of size `sizecode`.
+/// For the result, bits outside the range of `sizecode` are undefined.
+/// Also returns a flag denoting if the operation overflowed `sizecode`.
+fn raw_mul(sizecode: u8, a: u64, b: u64) -> (u64, bool) {
+    match sizecode {
+        0 => {
+            let full = a as u16 * b as u16;
+            (full as u64, full as u8 as u16 != full)
+        }
+        1 => {
+            let full = a as u32 * b as u32;
+            (full as u64, full as u16 as u32 != full)
+        }
+        2 => {
+            let full = a as u64 * b as u64;
+            (full as u64, full as u32 as u64 != full)
+        }
+        3 => {
+            let full = a as u128 * b as u128;
+            (full as u64, full as u64 as u128 != full)
+        }
+        _ => unreachable!(),
+    }
+}
+/// As `raw_mul` except performs signed multiplication.
+fn raw_imul(sizecode: u8, a: u64, b: u64) -> (u64, bool) {
+    match sizecode {
+        0 => {
+            let full = a as i8 as i16 * b as i8 as i16;
+            (full as u64, full as i8 as i16 != full)
+        }
+        1 => {
+            let full = a as i16 as i32 * b as i16 as i32;
+            (full as u64, full as i16 as i32 != full)
+        }
+        2 => {
+            let full = a as i32 as i64 * b as i32 as i64;
+            (full as u64, full as i32 as i64 != full)
+        }
+        3 => {
+            let full = a as i64 as i128 * b as i64 as i128;
+            (full as u64, full as i64 as i128 != full)
+        }
+        _ => unreachable!(),
+    }
+}
+
 macro_rules! impl_mem_primitive {
     ($([ $get:ident, $set:ident => $t:ty ]),*$(,)?) => {$(
         pub fn $get(&self, pos: u64) -> Result<$t, ExecError> {
@@ -579,6 +626,8 @@ impl Emulator {
                         OPCode::XOR => self.exec_xor(),
                         OPCode::TEST => self.exec_and_helper(false),
 
+                        OPCode::MULDIV => self.exec_muldiv_family(),
+
                         OPCode::JMP => self.exec_jmp(),
                         OPCode::Jcc => self.exec_jcc(),
                         OPCode::LOOPcc => self.exec_loopcc(),
@@ -728,13 +777,28 @@ impl Emulator {
     // -------------------------------------------------------------------------------------
 
     /*
+    [4: r1][3:][1: r1h]   [binary a b]
+    f(r1, a, b)
+    */
+    fn read_ternary_op(&mut self, get_a: bool, force_imm_sizecode: Option<u8>) -> Result<(u8, u8, u8, u64, u64, u64), ExecError> {
+        let s1 = self.get_mem_adv_u8()?;
+        let (s2, s3, m, a, b) = self.read_binary_op(get_a, force_imm_sizecode)?;
+        Ok((s1, s2, s3, m, a, b))
+    }
+    fn store_ternary_op_result(&mut self, s1: u8, s2: u8, s3: u8, m: u64, res1: u64, res2: Option<u64>) -> Result<(), ExecError> {
+        let sizecode = (s2 >> 2) & 3;
+        if s1 & 1 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s1 as usize >> 4].raw_set(sizecode, res1); }
+        if let Some(res2) = res2 { self.store_binary_op_result(s2, s3, m, res2) } else { Ok(()) }
+    }
+
+    /*
     [4: dest][2: size][1:dh][1: sh]   [4: mode][4: src]
-    Mode = 0:                           dest <- f(dest, src)
-    Mode = 1: [size: imm]               dest <- f(dest, imm)
-    Mode = 2: [address]                 dest <- f(dest, M[address])
-    Mode = 3: [address]                 M[address] <- f(M[address], src)
-    Mode = 4: [address]   [size: imm]   M[address] <- f(M[address], imm)
-    Else UND
+    mode = 0:                           dest <- f(dest, src)
+    mode = 1: [size: imm]               dest <- f(dest, imm)
+    mode = 2: [address]                 dest <- f(dest, M[address])
+    mode = 3: [address]                 M[address] <- f(M[address], src)
+    mode = 4: [address]   [size: imm]   M[address] <- f(M[address], imm)
+    else UND
     (dh and sh mark AH, BH, CH, or DH for dest or src)
     */
     fn read_binary_op(&mut self, get_a: bool, force_imm_sizecode: Option<u8>) -> Result<(u8, u8, u64, u64, u64), ExecError> {
@@ -787,12 +851,8 @@ impl Emulator {
 
     /*
     [4: r1][2: size][1: r1h][1: mem]
-    mem = 0: [1: r2h][3:][4: r2]
-        r1 <- r2
-        r2 <- r1
-    mem = 1: [address]
-        r1 <- M[address]
-        M[address] <- r1
+    mem = 0: [1: r2h][3:][4: r2]   f(r1, r2)
+    mem = 1: [address]             f(r1, M[address])
     (r1h and r2h mark AH, BH, CH, or DH for r1 or r2)
     */
     fn read_binary_lvalue_op(&mut self) -> Result<(u8, u64, u64, u64), ExecError> {
@@ -997,6 +1057,126 @@ impl Emulator {
         self.update_flags_zsp(v, sizecode);
         self.flags.0 &= !mask!(Flags: MASK_CF | MASK_OF | MASK_AF);
         Ok(())
+    }
+
+    /*
+    [ext]
+    ext = 0: mul 1
+    ext = 1: mul 2
+    ext = 2: mul 3
+    ext = 3: imul 1
+    ext = 4: imul 2
+    ext = 5: imul 3
+    else: UND
+    */
+    fn exec_muldiv_family(&mut self) -> Result<(), ExecError> {
+        match self.get_mem_adv_u8()? {
+            0 => self.exec_mul_1(),
+            1 => self.exec_mul_2(),
+            2 => self.exec_mul_3(),
+            3 => self.exec_imul_1(),
+            4 => self.exec_imul_2(),
+            5 => self.exec_imul_3(),
+            _ => Err(ExecError::InvalidOpEncoding),
+        }
+    }
+    fn exec_mul_1(&mut self) -> Result<(), ExecError> {
+        let (s, v) = self.read_value_op()?;
+        let overflow = match (s >> 2) & 3 {
+            0 => {
+                let full = self.cpu.get_al() as u16 * v as u16;
+                self.cpu.set_ax(full);
+                full as u8 as u16 != full
+            }
+            1 => {
+                let full = self.cpu.get_ax() as u32 * v as u32;
+                self.cpu.set_dx((full >> 16) as u16);
+                self.cpu.set_ax(full as u16);
+                full as u16 as u32 != full
+            }
+            2 => {
+                let full = self.cpu.get_eax() as u64 * v as u64;
+                self.cpu.set_edx((full >> 32) as u32);
+                self.cpu.set_eax(full as u32);
+                full as u32 as u64 != full
+            }
+            3 => {
+                let full = self.cpu.get_rax() as u128 * v as u128;
+                self.cpu.set_rdx((full >> 64) as u64);
+                self.cpu.set_rax(full as u64);
+                full as u64 as u128 != full
+            }
+            _ => unreachable!(),
+        };
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        Ok(())
+    }
+    fn exec_mul_2(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (res, overflow) = raw_mul((s1 >> 2) & 3, a, b);
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        self.store_binary_op_result(s1, s2, m, res)
+    }
+    fn exec_mul_3(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None)?;
+        let (res, overflow) = raw_mul((s2 >> 2) & 3, a, b);
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        self.store_ternary_op_result(s1, s2, s3, m, res, None)
+    }
+    fn exec_imul_1(&mut self) -> Result<(), ExecError> {
+        let (s, v) = self.read_value_op()?;
+        let overflow = match (s >> 2) & 3 {
+            0 => {
+                let full = self.cpu.get_al() as i8 as i16 * v as i8 as i16;
+                self.cpu.set_ax(full as u16);
+                full as i8 as i16 != full
+            }
+            1 => {
+                let full = self.cpu.get_ax() as i16 as i32 * v as i16 as i32;
+                self.cpu.set_dx((full >> 16) as u16);
+                self.cpu.set_ax(full as u16);
+                full as i16 as i32 != full
+            }
+            2 => {
+                let full = self.cpu.get_eax() as i32 as i64 * v as i32 as i64;
+                self.cpu.set_edx((full >> 32) as u32);
+                self.cpu.set_eax(full as u32);
+                full as i32 as i64 != full
+            }
+            3 => {
+                let full = self.cpu.get_rax() as i64 as i128 * v as i64 as i128;
+                self.cpu.set_rdx((full >> 64) as u64);
+                self.cpu.set_rax(full as u64);
+                full as i64 as i128 != full
+            }
+            _ => unreachable!(),
+        };
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        Ok(())
+    }
+    fn exec_imul_2(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (res, overflow) = raw_imul((s1 >> 2) & 3, a, b);
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        self.store_binary_op_result(s1, s2, m, res)
+    }
+    fn exec_imul_3(&mut self) -> Result<(), ExecError> {
+        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None)?;
+        let (res, overflow) = raw_imul((s2 >> 2) & 3, a, b);
+        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
+        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
+        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        self.store_ternary_op_result(s1, s2, s3, m, res, None)
     }
 
     fn exec_and_helper(&mut self, should_store: bool) -> Result<(), ExecError> {

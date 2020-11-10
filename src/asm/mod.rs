@@ -54,7 +54,7 @@ pub enum AsmErrorKind {
     // --------------------------------------------------------------------------
 
     /// Incorrect number of arguments supplied. Expected this many.
-    ArgsExpectedCount(u8),
+    ArgsExpectedCount(&'static [u8]),
     /// Incorrect number of arguments supplied. Expected at least this many.
     ArgsExpectedCountAtLeast(u8),
     /// There was unknown content after the arguments list.
@@ -147,11 +147,12 @@ pub enum AsmErrorKind {
     SizeSpecOnForcedSize,
     CouldNotDeduceOperandSize,
     
-    BinaryOpUnsupportedSrcDestTypes,
+    TernaryOpUnsupportedTypes,
+    BinaryOpUnsupportedTypes,
     UnaryOpUnsupportedType,
     ValueOpUnsupportedType,
-    BinaryLvalueOpUnsupportedSrcDestTypes,
-    BinaryLvalueUnorderedOpUnsupportedSrcDestTypes,
+    BinaryLvalueOpUnsupportedTypes,
+    BinaryLvalueUnorderedOpUnsupportedTypes,
 
     EQUWithoutLabel,
     EQUArgumentHadSizeSpec,
@@ -992,7 +993,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 None => return Err(AsmError { kind: AsmErrorKind::EQUWithoutLabel, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }),
                                 Some((name, _)) => {
                                     if arguments.len() != 1 {
-                                        return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None });
+                                        return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None });
                                     }
                                     let val = match arguments.into_iter().next().unwrap() {
                                         Argument::Imm(imm) => {
@@ -1009,7 +1010,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 }
                             }
                             Instruction::SEGMENT => {
-                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 let seg = match arguments.into_iter().next().unwrap() {
                                     Argument::Segment(seg) => seg,
                                     _ => return Err(AsmError { kind: AsmErrorKind::ExpectedSegment, line_num: args.line_num, pos: None, inner_err: None }),
@@ -1024,7 +1025,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             Instruction::GLOBAL => process_global_extern(arguments, &mut args.file.global_symbols, &args.file.extern_symbols, args.line_num)?,
                             Instruction::EXTERN => process_global_extern(arguments, &mut args.file.extern_symbols, &args.file.global_symbols, args.line_num)?,
                             Instruction::ALIGN => {
-                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
                                         if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AlignArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
@@ -1060,7 +1061,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 }
                             }
                             Instruction::ASSERT => {
-                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 let cond = match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
                                         if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AssertArgHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
@@ -1090,7 +1091,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             }
                             Instruction::RESERVE(size) => {
                                 if args.current_seg != Some(AsmSegment::Bss) { return Err(AsmError { kind: AsmErrorKind::ReserveOutsideOfBss, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
+                                if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
                                         if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::ReserveValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
@@ -1126,7 +1127,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::LEA => {
-                                if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: args.line_num, pos: None, inner_err: None }); }
+                                if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: args.line_num, pos: None, inner_err: None }); }
                                 let mut arguments = arguments.into_iter();
         
                                 let reg = match arguments.next().unwrap() {
@@ -1173,13 +1174,26 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                             Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
         
-                            Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::LOOPcc(ext) => args.process_value_op(arguments, OPCode::LOOPcc as u8, Some(ext), HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, Some(Size::Qword), &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::MUL => match arguments.len() {
+                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
+                            }
+                            Instruction::IMUL => match arguments.len() {
+                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
+                            }
+
+                            Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
+                            Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
+                            Instruction::LOOPcc(ext) => args.process_value_op(arguments, OPCode::LOOPcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
+                            Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
                             Instruction::RET => args.process_no_arg_op(arguments, Some(OPCode::RET as u8), None)?,
 
-                            Instruction::PUSH => args.process_value_op(arguments, OPCode::PUSH as u8, None, HoleType::Integer, None, &[Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::PUSH => args.process_value_op(arguments, OPCode::PUSH as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::POP => args.process_unary_op(arguments, OPCode::POP as u8, None, &[Size::Word, Size::Dword, Size::Qword])?,
 
                             Instruction::INC => args.process_unary_op(arguments, OPCode::INC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,

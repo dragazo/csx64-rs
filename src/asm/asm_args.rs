@@ -347,7 +347,7 @@ impl AssembleArgs<'_> {
 
                         match func {
                             "$ptr" => { // pointer macro - interns a binary value in the rodata segment and returns a pointer to its eventual location
-                                if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+                                if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let arg = args.into_iter().next().unwrap();
 
                                 macro_rules! handle_content {
@@ -373,7 +373,7 @@ impl AssembleArgs<'_> {
                                 x
                             }
                             "$if" => {
-                                if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(3), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+                                if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[3]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let mut args = args.into_iter();
                                 let cond = args.next().unwrap();
                                 let left = args.next().unwrap();
@@ -382,7 +382,7 @@ impl AssembleArgs<'_> {
                             }
                             _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
                                 Some(op) => {
-                                    if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
+                                    if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                     (op, args.into_iter().next().unwrap()).into()
                                 }
                                 None => return Err(AsmError { kind: AsmErrorKind::UnrecognizedMacroInvocation, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
@@ -973,16 +973,45 @@ impl AssembleArgs<'_> {
     /// Writes `op`, followed by `ext_op` (if valid).
     pub(super) fn process_no_arg_op(&mut self, args: Vec<Argument>, op: Option<u8>, ext_op: Option<u8>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 0 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(0), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 0 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[0]), line_num: self.line_num, pos: None, inner_err: None }); }
         if let Some(ext) = op { self.append_byte(ext)? }
         if let Some(ext) = ext_op { self.append_byte(ext)? }
         Ok(())
+    }
+    pub(super) fn process_ternary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_imm_size: Option<Size>) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[3]), line_num: self.line_num, pos: None, inner_err: None }); }
+        let mut args = args.into_iter();
+        let arg1 = args.next().unwrap();
+        let mut arg2 = args.next().unwrap();
+        let arg3 = args.next().unwrap();
+
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)?; }
+
+        let r1 = match arg1 {
+            Argument::CPURegister(r) => r,
+            _ => return Err(AsmError { kind: AsmErrorKind::TernaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+        };
+        let pseudo_op = (r1.id << 4) | (if r1.high { 1 } else { 0 });
+
+        let mismatched_sizes = match (&mut arg2, &arg3) {
+            (Argument::CPURegister(reg), Argument::CPURegister(_)) | (Argument::CPURegister(reg), Argument::Imm(_)) | (Argument::CPURegister(reg), Argument::Address(_)) => reg.size != r1.size,
+            (Argument::Address(addr), Argument::CPURegister(_)) | (Argument::Address(addr), Argument::Imm(_)) => match addr.pointed_size {
+                Some(size) => size != r1.size,
+                None => { addr.pointed_size = Some(r1.size); false }, // if no size present, set it to r1 size to propagate to binary handler
+            }
+            _ => return Err(AsmError { kind: AsmErrorKind::TernaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+        };
+        if mismatched_sizes { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
+
+        self.process_binary_op(vec![arg2, arg3], pseudo_op, None, allowed_type, allowed_sizes, force_imm_size) // we validated everything we need, so hand over to the binary formatter
     }
     /// Attempts to assemble an operation which uses the binary op format.
     /// `force_imm_size` can be set to artificially force the size of an imm - e.g. the BTx series of instructions always have use imm8.
     pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_imm_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
         let arg1 = args.next().unwrap();
         let arg2 = args.next().unwrap();
@@ -1051,14 +1080,14 @@ impl AssembleArgs<'_> {
                 self.append_address(dest)?;
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
-            _ => return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None }),
+            _ => return Err(AsmError { kind: AsmErrorKind::BinaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
         }
 
         Ok(())
     }
     pub(super) fn process_binary_lvalue_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
         let arg1 = args.next().unwrap();
         let arg2 = args.next().unwrap();
@@ -1081,25 +1110,25 @@ impl AssembleArgs<'_> {
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }) | 1)?;
                 self.append_address(src)?;
             }
-            _ => return Err(AsmError { kind: AsmErrorKind::BinaryLvalueOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None }),
+            _ => return Err(AsmError { kind: AsmErrorKind::BinaryLvalueOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
         }
 
         Ok(())
     }
     pub(super) fn process_binary_lvalue_unordered_op(&mut self, mut args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(2), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
         match (&args[0], &args[1]) {
             (Argument::CPURegister(_), Argument::CPURegister(_)) => (),
             (Argument::CPURegister(_), Argument::Address(_)) => (),
             (Argument::Address(_), Argument::CPURegister(_)) => args.swap(0, 1),
-            _ => return Err(AsmError { kind: AsmErrorKind::BinaryLvalueUnorderedOpUnsupportedSrcDestTypes, line_num: self.line_num, pos: None, inner_err: None }),
+            _ => return Err(AsmError { kind: AsmErrorKind::BinaryLvalueUnorderedOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
         }
         self.process_binary_lvalue_op(args, op, ext_op, allowed_sizes)
     }
     pub(super) fn process_unary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
 
         self.append_byte(op)?;
         if let Some(ext) = ext_op { self.append_byte(ext)?; }
@@ -1123,9 +1152,9 @@ impl AssembleArgs<'_> {
 
         Ok(())
     }
-    pub(super) fn process_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, default_imm_size: Option<Size>, allowed_sizes: &[Size]) -> Result<(), AsmError> {
+    pub(super) fn process_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], default_imm_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
-        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(1), line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
 
         self.append_byte(op)?;
         if let Some(ext) = ext_op { self.append_byte(ext)?; }
