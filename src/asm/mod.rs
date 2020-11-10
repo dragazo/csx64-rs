@@ -1181,11 +1181,13 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<u
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
                             Instruction::IMUL => match arguments.len() {
-                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
+                            Instruction::MULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::IMULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(7), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
 
                             Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
                             Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,

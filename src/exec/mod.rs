@@ -135,48 +135,49 @@ fn is_parity_even(val: u8) -> bool {
     val.count_ones() % 2 == 0
 }
 
-/// Computes the unsigned product of `a` and `b`, which are assumed to be of size `sizecode`.
-/// For the result, bits outside the range of `sizecode` are undefined.
+/// Computes the unsigned product of `a` and `b`, split into high and low halves.
+/// Bits in `a` and `b` that are outside of `sizecode` are ignored.
+/// For both result halves, bits outside the range of `sizecode` are undefined.
 /// Also returns a flag denoting if the operation overflowed `sizecode`.
-fn raw_mul(sizecode: u8, a: u64, b: u64) -> (u64, bool) {
+fn raw_mul(sizecode: u8, a: u64, b: u64) -> (u64, u64, bool) {
     match sizecode {
         0 => {
-            let full = a as u16 * b as u16;
-            (full as u64, full as u8 as u16 != full)
+            let full = a as u8 as u16 * b as u8 as u16;
+            ((full >> 8) as u64, full as u64, full as u8 as u16 != full)
         }
         1 => {
-            let full = a as u32 * b as u32;
-            (full as u64, full as u16 as u32 != full)
+            let full = a as u16 as u32 * b as u16 as u32;
+            ((full >> 16) as u64, full as u64, full as u16 as u32 != full)
         }
         2 => {
-            let full = a as u64 * b as u64;
-            (full as u64, full as u32 as u64 != full)
+            let full = a as u32 as u64 * b as u32 as u64;
+            ((full >> 32) as u64, full as u64, full as u32 as u64 != full)
         }
         3 => {
-            let full = a as u128 * b as u128;
-            (full as u64, full as u64 as u128 != full)
+            let full = a as u64 as u128 * b as u64 as u128;
+            ((full >> 64) as u64, full as u64, full as u64 as u128 != full)
         }
         _ => unreachable!(),
     }
 }
 /// As `raw_mul` except performs signed multiplication.
-fn raw_imul(sizecode: u8, a: u64, b: u64) -> (u64, bool) {
+fn raw_imul(sizecode: u8, a: u64, b: u64) -> (u64, u64, bool) {
     match sizecode {
         0 => {
             let full = a as i8 as i16 * b as i8 as i16;
-            (full as u64, full as i8 as i16 != full)
+            ((full >> 8) as u64, full as u64, full as i8 as i16 != full)
         }
         1 => {
             let full = a as i16 as i32 * b as i16 as i32;
-            (full as u64, full as i16 as i32 != full)
+            ((full >> 16) as u64, full as u64, full as i16 as i32 != full)
         }
         2 => {
             let full = a as i32 as i64 * b as i32 as i64;
-            (full as u64, full as i32 as i64 != full)
+            ((full >> 32) as u64, full as u64, full as i32 as i64 != full)
         }
         3 => {
             let full = a as i64 as i128 * b as i64 as i128;
-            (full as u64, full as i64 as i128 != full)
+            ((full >> 64) as u64, full as u64, full as i64 as i128 != full)
         }
         _ => unreachable!(),
     }
@@ -787,8 +788,9 @@ impl Emulator {
     }
     fn store_ternary_op_result(&mut self, s1: u8, s2: u8, s3: u8, m: u64, res1: u64, res2: Option<u64>) -> Result<(), ExecError> {
         let sizecode = (s2 >> 2) & 3;
+        if let Some(res2) = res2 { self.store_binary_op_result(s2, s3, m, res2)? }
         if s1 & 1 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s1 as usize >> 4].raw_set(sizecode, res1); }
-        if let Some(res2) = res2 { self.store_binary_op_result(s2, s3, m, res2) } else { Ok(()) }
+        Ok(())
     }
 
     /*
@@ -1064,119 +1066,63 @@ impl Emulator {
     ext = 0: mul 1
     ext = 1: mul 2
     ext = 2: mul 3
-    ext = 3: imul 1
-    ext = 4: imul 2
-    ext = 5: imul 3
+    ext = 3: mulx (3)
+    ext = 4: imul 1
+    ext = 5: imul 2
+    ext = 6: imul 3
+    ext = 7: imulx (3)
     else: UND
     */
     fn exec_muldiv_family(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
-            0 => self.exec_mul_1(),
-            1 => self.exec_mul_2(),
-            2 => self.exec_mul_3(),
-            3 => self.exec_imul_1(),
-            4 => self.exec_imul_2(),
-            5 => self.exec_imul_3(),
+            0 => self.exec_uimul_1(raw_mul),
+            1 => self.exec_uimul_2(raw_mul),
+            2 => self.exec_uimul_3(raw_mul),
+            3 => self.exec_uimulx(raw_mul),
+            4 => self.exec_uimul_1(raw_imul),
+            5 => self.exec_uimul_2(raw_imul),
+            6 => self.exec_uimul_3(raw_imul),
+            7 => self.exec_uimulx(raw_imul),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
-    fn exec_mul_1(&mut self) -> Result<(), ExecError> {
+    fn exec_uimul_1(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
         let (s, v) = self.read_value_op()?;
-        let overflow = match (s >> 2) & 3 {
-            0 => {
-                let full = self.cpu.get_al() as u16 * v as u16;
-                self.cpu.set_ax(full);
-                full as u8 as u16 != full
-            }
-            1 => {
-                let full = self.cpu.get_ax() as u32 * v as u32;
-                self.cpu.set_dx((full >> 16) as u16);
-                self.cpu.set_ax(full as u16);
-                full as u16 as u32 != full
-            }
-            2 => {
-                let full = self.cpu.get_eax() as u64 * v as u64;
-                self.cpu.set_edx((full >> 32) as u32);
-                self.cpu.set_eax(full as u32);
-                full as u32 as u64 != full
-            }
-            3 => {
-                let full = self.cpu.get_rax() as u128 * v as u128;
-                self.cpu.set_rdx((full >> 64) as u64);
-                self.cpu.set_rax(full as u64);
-                full as u64 as u128 != full
-            }
+        let sizecode = (s >> 2) & 3;
+        let (high, low, overflow) = multiplier(sizecode, self.cpu.get_rax(), v);
+        match sizecode {
+            0 => { self.cpu.set_ax(((high << 8) | low) as u16); }
+            1 => { self.cpu.set_dx(high as u16); self.cpu.set_ax(low as u16); }
+            2 => { self.cpu.set_edx(high as u32); self.cpu.set_eax(low as u32); }
+            3 => { self.cpu.set_rdx(high); self.cpu.set_rax(low); }
             _ => unreachable!(),
-        };
+        }
         let mask_co = mask!(Flags: MASK_CF | MASK_OF);
         if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
         self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
         Ok(())
     }
-    fn exec_mul_2(&mut self) -> Result<(), ExecError> {
+    fn exec_uimul_2(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
         let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
-        let (res, overflow) = raw_mul((s1 >> 2) & 3, a, b);
+        let (_, res, overflow) = multiplier((s1 >> 2) & 3, a, b);
         let mask_co = mask!(Flags: MASK_CF | MASK_OF);
         if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
         self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
         self.store_binary_op_result(s1, s2, m, res)
     }
-    fn exec_mul_3(&mut self) -> Result<(), ExecError> {
+    fn exec_uimul_3(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
         let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None)?;
-        let (res, overflow) = raw_mul((s2 >> 2) & 3, a, b);
+        let (_, res, overflow) = multiplier((s2 >> 2) & 3, a, b);
         let mask_co = mask!(Flags: MASK_CF | MASK_OF);
         if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
         self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
         self.store_ternary_op_result(s1, s2, s3, m, res, None)
     }
-    fn exec_imul_1(&mut self) -> Result<(), ExecError> {
-        let (s, v) = self.read_value_op()?;
-        let overflow = match (s >> 2) & 3 {
-            0 => {
-                let full = self.cpu.get_al() as i8 as i16 * v as i8 as i16;
-                self.cpu.set_ax(full as u16);
-                full as i8 as i16 != full
-            }
-            1 => {
-                let full = self.cpu.get_ax() as i16 as i32 * v as i16 as i32;
-                self.cpu.set_dx((full >> 16) as u16);
-                self.cpu.set_ax(full as u16);
-                full as i16 as i32 != full
-            }
-            2 => {
-                let full = self.cpu.get_eax() as i32 as i64 * v as i32 as i64;
-                self.cpu.set_edx((full >> 32) as u32);
-                self.cpu.set_eax(full as u32);
-                full as i32 as i64 != full
-            }
-            3 => {
-                let full = self.cpu.get_rax() as i64 as i128 * v as i64 as i128;
-                self.cpu.set_rdx((full >> 64) as u64);
-                self.cpu.set_rax(full as u64);
-                full as i64 as i128 != full
-            }
-            _ => unreachable!(),
-        };
-        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
-        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
-        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
-        Ok(())
-    }
-    fn exec_imul_2(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
-        let (res, overflow) = raw_imul((s1 >> 2) & 3, a, b);
-        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
-        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
-        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
-        self.store_binary_op_result(s1, s2, m, res)
-    }
-    fn exec_imul_3(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None)?;
-        let (res, overflow) = raw_imul((s2 >> 2) & 3, a, b);
-        let mask_co = mask!(Flags: MASK_CF | MASK_OF);
-        if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
-        self.randomize_flags(mask!(Flags: MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
-        self.store_ternary_op_result(s1, s2, s3, m, res, None)
+    fn exec_uimulx(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
+        let (s1, s2, s3, m, _, v) = self.read_ternary_op(false, None)?;
+        let sizecode = (s2 >> 2) & 3;
+        let (high, low, _) = multiplier(sizecode, self.cpu.get_rdx(), v);
+        self.store_ternary_op_result(s1, s2, s3, m, high, Some(low))
     }
 
     fn exec_and_helper(&mut self, should_store: bool) -> Result<(), ExecError> {

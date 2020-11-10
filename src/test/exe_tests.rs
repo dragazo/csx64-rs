@@ -729,6 +729,8 @@ fn test_xchg() {
     xchg [val], bh
     mov rcx, [val]
     hlt
+    xchg rcx, rcx
+    hlt
     mov eax, 0
     mov ebx, 0
     syscall
@@ -770,6 +772,10 @@ fn test_xchg() {
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rax(), 0xfffffffe);
     assert_eq!(e.cpu.get_rbx(), 0xffffff43);
+    assert_eq!(e.cpu.get_rcx(), 0xff35);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rcx(), 0xff35);
     assert_eq!(e.flags.0, prev_flags);
 
@@ -1216,7 +1222,6 @@ fn test_mul_1() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdx(), 0xdeadbeefdead0000);
@@ -1263,7 +1268,6 @@ fn test_mul_2() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rbx(), 0xabcd0015);
@@ -1307,7 +1311,6 @@ fn test_mul_3() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdi(), 0xdeadbeefdead0015);
@@ -1324,6 +1327,62 @@ fn test_mul_3() {
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_r10(), 0xfffffffffffff130);
     assert_eq!(e.flags.0 & CO, CO);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_mulx() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov r12, 0xdeadbeefdeadbeef
+    mov edx, 0xabcd0007
+    mulx r12w, r13w, 3
+    hlt
+    mov rdx, r13
+    mov ch, -30
+    mulx r14b, r15b, ch
+    hlt
+    mov rdx, 0xdeadbeefffffffff
+    mulx edi, esi, -1
+    hlt
+    mov rdx, -6
+    mulx rcx, rbx, 632
+    hlt
+    mov rdx, -6
+    mulx rcx, rcx, 632
+    hlt
+    xor rax, rax
+    xor rbx, rbx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let prev_flags = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_r12(), 0xdeadbeefdead0000);
+    assert_eq!(e.cpu.get_r13w(), 0x0015);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_r14b(), 0x12);
+    assert_eq!(e.cpu.get_r15b(), 0x8a);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_edi(), 0xfffffffe);
+    assert_eq!(e.cpu.get_esi(), 1);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0x0000000000000277);
+    assert_eq!(e.cpu.get_rbx(), 0xfffffffffffff130);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0x0000000000000277);
+    assert_eq!(e.flags.0, prev_flags);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
@@ -1351,7 +1410,6 @@ fn test_imul_1() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdx(), 0xdeadbeefdead0000);
@@ -1398,7 +1456,6 @@ fn test_imul_2() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rbx(), 0xabcd0015);
@@ -1442,7 +1499,6 @@ fn test_imul_3() {
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
-    let prev_flags = e.flags.0;
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdi(), 0xdeadbeefdead0015);
@@ -1459,6 +1515,62 @@ fn test_imul_3() {
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_r10(), 0xfffffffffffff130);
     assert_eq!(e.flags.0 & CO, 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_imulx() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov r12, 0xdeadbeefdeadbeef
+    mov edx, 0xabcd0007
+    imulx r12w, r13w, 3
+    hlt
+    mov rdx, r13
+    mov ch, -30
+    imulx r14b, r15b, ch
+    hlt
+    mov rdx, 0xdeadbeefffffffff
+    imulx edi, esi, -1
+    hlt
+    mov rdx, -6
+    imulx rcx, rbx, 632
+    hlt
+    mov rdx, -6
+    imulx rcx, rcx, 632
+    hlt
+    xor rax, rax
+    xor rbx, rbx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let prev_flags = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_r12(), 0xdeadbeefdead0000);
+    assert_eq!(e.cpu.get_r13w(), 0x0015);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_r14b(), 0xfd);
+    assert_eq!(e.cpu.get_r15b(), 0x8a);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_edi(), 0);
+    assert_eq!(e.cpu.get_esi(), 1);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xffffffffffffffff);
+    assert_eq!(e.cpu.get_rbx(), 0xfffffffffffff130);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xffffffffffffffff);
+    assert_eq!(e.flags.0, prev_flags);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
