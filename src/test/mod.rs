@@ -33,3 +33,4 @@ macro_rules! asm_unwrap_link_unwrap {
 mod asm_error_tests;
 mod lnk_error_tests;
 mod exe_tests;
+mod exe_syscall_tests;

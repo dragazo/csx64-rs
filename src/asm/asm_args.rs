@@ -346,7 +346,7 @@ impl AssembleArgs<'_> {
                         let args = self.parse_comma_sep_exprs(raw_line, term_start + paren_pos + 1, term_stop - 1)?;
 
                         match func {
-                            "$ptr" => { // pointer macro - interns a binary value in the rodata segment and returns a pointer to its eventual location
+                            "$bin" => { // interns a binary value in the rodata segment and returns a pointer to its eventual location
                                 if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let arg = args.into_iter().next().unwrap();
 

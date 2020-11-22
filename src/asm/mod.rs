@@ -20,7 +20,7 @@ use caseless::Caseless;
 
 use crate::common::serialization::*;
 use crate::common::f80::F80;
-use crate::common::{OPCode, Executable};
+use crate::common::{OPCode, Executable, Syscall};
 
 /// The types of errors associated with failed address parsing,
 /// but for which we know the argument was intended to be an address.
@@ -871,18 +871,57 @@ struct SegmentBases {
     bss: usize,
 }
 
+/// The symbols to introduce to the assembler prior to parsing any source.
+pub struct Predefines(SymbolTable<usize>);
+impl Predefines {
+    /// Constructs a new set of predefines from a symbol table.
+    pub fn from(symbols: SymbolTable<()>) -> Predefines {
+        let transformed = symbols.raw.into_iter().map(|(key, (value, _))| (key, (value, 0))).collect();
+        Predefines(SymbolTable { raw: transformed })
+    }
+    /// Appends the symbols of another symbol table to the list of predefines.
+    /// This can be used to define additional symbols on top of the default predefines.
+    /// If any new symbol was already defined, returns `Err` with the name of the conflicting symbol.
+    /// In the case of an error, `self` is not modified.
+    pub fn append(&mut self, symbols: SymbolTable<()>) -> Result<(), String> {
+        for key in symbols.raw.keys() {
+            if self.0.is_defined(key) {
+                return Err(key.clone());
+            }
+        }
+        for (key, (val, _)) in symbols.raw.into_iter() {
+            self.0.define(key, val, 0).unwrap();
+        }
+        Ok(())
+    }
+}
+impl Default for Predefines {
+    /// Gets the default predefined symbols
+    fn default() -> Predefines {
+        let mut symbols: SymbolTable<()> = Default::default();
+
+        symbols.define("sys_exit".to_owned(), (Syscall::Exit as u64).into(), ()).unwrap();
+
+        symbols.define("sys_read".to_owned(), (Syscall::Read as u64).into(), ()).unwrap();
+        symbols.define("sys_write".to_owned(), (Syscall::Write as u64).into(), ()).unwrap();
+        symbols.define("sys_seek".to_owned(), (Syscall::Seek as u64).into(), ()).unwrap();
+
+        Predefines::from(symbols)
+    }
+}
+
 /// Attempts to assemble the `asm` source file into an `ObjectFile`.
 /// It is not required that `asm` be an actual file - it can just be in memory.
 /// `asm_name` is the effective name of the source file (the assembly program can access its own file name).
 /// It is recommended that `asm_name` be meaningful, as it is might be used by the `asm` program to construct error messages, but this is not required.
-pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: SymbolTable<usize>) -> Result<ObjectFile, AsmError> {
+pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -> Result<ObjectFile, AsmError> {
     let mut args = AssembleArgs {
         file_name: asm_name,
         file: ObjectFile {
             global_symbols: Default::default(),
             extern_symbols: Default::default(),
 
-            symbols: predefines,
+            symbols: predefines.0,
             binary_set: Default::default(),
 
             text_align: 1,

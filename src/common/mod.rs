@@ -107,6 +107,20 @@ pub enum OPCode
     // DEBUG,
 }
 
+/// The system calls recognized by the emulator.
+/// 
+/// System call codes should be loaded into the `RAX` register.
+/// Because 32-bit writes zero the upper 32-bits and syscall codes are unsigned, it suffices to write to `EAX`.
+/// Arguments to a system call procedure should be loaded into `RBX`, `RCX`, `RDX` (or partitions thereof, depending on procedure).
+#[derive(Clone, Copy, FromPrimitive)]
+#[repr(u32)]
+pub enum Syscall {
+    /// Instructs the emulator to end execution in a non-error state with the `i32` return value in `EBX`.
+    /// This effectively means the program terminated rather than crashing.
+    Exit,
+    Read, Write, Seek,
+}
+
 /// An executable file for use by the [`Emulator`].
 /// 
 /// Executables are produced by [`link`] by combining one or more [`ObjectFile`].

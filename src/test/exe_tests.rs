@@ -1215,6 +1215,9 @@ fn test_mul_1() {
     mov rax, -6
     mul qword 632
     hlt
+    mov al, 2
+    mul byte -1
+    hlt
     xor rax, rax
     xor rbx, rbx
     syscall
@@ -1240,6 +1243,10 @@ fn test_mul_1() {
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdx(), 0x0000000000000277);
     assert_eq!(e.cpu.get_rax(), 0xfffffffffffff130);
+    assert_eq!(e.flags.0 & CO, CO);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x01fe);
     assert_eq!(e.flags.0 & CO, CO);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
@@ -1403,6 +1410,9 @@ fn test_imul_1() {
     mov rax, -6
     imul qword 632
     hlt
+    mov al, 2
+    imul byte -1
+    hlt
     xor rax, rax
     xor rbx, rbx
     syscall
@@ -1428,6 +1438,10 @@ fn test_imul_1() {
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdx(), 0xffffffffffffffff);
     assert_eq!(e.cpu.get_rax(), 0xfffffffffffff130);
+    assert_eq!(e.flags.0 & CO, 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xfffe);
     assert_eq!(e.flags.0 & CO, 0);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));

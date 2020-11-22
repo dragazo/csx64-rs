@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::io::{self, Read, Write};
+use std::iter::FusedIterator;
+use std::slice;
 use crate::common::serialization::*;
 
 #[derive(Clone, Copy)]
@@ -214,7 +216,7 @@ impl BinarySet {
 /// Iterates over the slices of a `BinarySet` in insertion order.
 pub struct Iter<'a> {
     data: &'a [Vec<u8>],
-    iter: std::slice::Iter<'a, SliceInfo>,
+    iter: slice::Iter<'a, SliceInfo>,
 }
 impl<'a> Iterator for Iter<'a> {
     type Item = &'a [u8];
@@ -222,7 +224,7 @@ impl<'a> Iterator for Iter<'a> {
         self.iter.next().map(|s| &self.data[s.src][s.start..s.start+s.length])
     }
 }
-impl<'a> std::iter::FusedIterator for Iter<'a> {}
+impl<'a> FusedIterator for Iter<'a> {}
 
 #[test]
 #[should_panic]

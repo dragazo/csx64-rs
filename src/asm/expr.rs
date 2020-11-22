@@ -9,6 +9,7 @@ use std::io::{self, Read, Write};
 use std::ops::Deref;
 use std::fmt::{self, Debug};
 use std::cmp::Ordering;
+use std::iter::FusedIterator;
 use rug::{Integer, Float};
 
 #[cfg(test)]
@@ -353,7 +354,7 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 /// The way this is done is that any sub-expression in the expression tree which successfully evaluates is replaced with a value node with equivalent content.
 /// Because of this, if an `Expr` is evaluated using a given symbol table, it should typically never be evaluated with any other symbol table, lest the final value be potentially corrupted.
 /// Best practice has that there should be only one symbol table, which is what the assembly and linking functions included in this crate do implicitly.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SymbolTable<T> {
     pub(super) raw: HashMap<String, (Expr, T)>,
 }
@@ -373,11 +374,6 @@ impl<T> Debug for SymbolTable<T> where T: Debug {
             writeln!(f, "{} := {:?}", k, v)?;
         }
         Ok(())
-    }
-}
-impl<T> Default for SymbolTable<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -497,7 +493,7 @@ impl<T> SymbolTable<T> {
     }
     
     /// Iterates over the defined symbols and their values.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &(Expr, T))> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &(Expr, T))> + FusedIterator {
         self.raw.iter()
     }
 }

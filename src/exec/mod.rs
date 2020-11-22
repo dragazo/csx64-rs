@@ -7,17 +7,18 @@ use num_traits::FromPrimitive;
 
 use std::mem;
 use std::iter;
+use std::sync::{Arc, Mutex};
 
 use crate::common::f80::*;
-use crate::common::{OPCode, Executable};
+use crate::common::{OPCode, Executable, Syscall};
 
 pub mod registers;
 pub mod fpu;
-pub mod fd;
+pub mod fs;
 
 use registers::*;
 use fpu::*;
-use fd::*;
+use fs::*;
 
 /// Bitmask denoting Flags that users can modify with instructions like POPF.
 pub const MODIFIABLE_FLAGS: u64 = 0x003f0fd5;
@@ -64,6 +65,12 @@ pub enum ExecError {
     UnrecognizedOpCode,
     /// When a system call was invoked, the requested procedure was not recognized.
     UnrecognizedSyscall,
+    /// An illegal file descriptor was provided to an IO system call.
+    FileDescriptorOutOfBounds,
+    /// Attempt to perform an IO system call on a file descriptor which was not open.
+    FileDescriptorNotOpen,
+    /// Attempt to violate established file permissions.
+    FilePermissions,
 }
 
 /// Reason why execution stopped.
@@ -84,18 +91,6 @@ pub enum StopReason {
     /// For convenince, this variant stores the return code,
     /// but it can also be accessed by testing the emulator state.
     Terminated(i32),
-}
-
-/// The system calls recognized by the emulator.
-/// 
-/// System call codes should be loaded into the `RAX` register.
-/// Because 32-bit writes zero the upper 32-bits and syscall codes are unsigned, it suffices to write to `EAX`.
-/// Arguments to a system call procedure should be loaded into `RBX`, `RCX`, `RDX` (or partitions thereof, depending on procedure).
-#[derive(Clone, Copy, FromPrimitive)]
-pub enum Syscall {
-    /// Instructs the emulator to end execution in a non-error state with the `i32` return value in `EBX`.
-    /// This effectively means the program terminated rather than crashing.
-    Exit,
 }
 
 /// Truncates a value to the given size, which is then zero extended to 64-bit.
@@ -137,7 +132,8 @@ fn is_parity_even(val: u8) -> bool {
 
 /// Computes the unsigned product of `a` and `b`, split into high and low halves.
 /// Bits in `a` and `b` that are outside of `sizecode` are ignored.
-/// For both result halves, bits outside the range of `sizecode` are undefined.
+/// For the low half of the result, bits outside the range of `sizecode` but up to `sizecode+1` are the truncated full value.
+/// For the upper half, bits outside the range of `sizecode` are undefined.
 /// Also returns a flag denoting if the operation overflowed `sizecode`.
 fn raw_mul(sizecode: u8, a: u64, b: u64) -> (u64, u64, bool) {
     match sizecode {
@@ -187,7 +183,7 @@ macro_rules! impl_mem_primitive {
     ($([ $get:ident, $set:ident => $t:ty ]),*$(,)?) => {$(
         pub fn $get(&self, pos: u64) -> Result<$t, ExecError> {
             let mut v = [0; mem::size_of::<$t>()];
-            v.copy_from_slice(self.get(pos, mem::size_of::<$t>())?);
+            v.copy_from_slice(self.get(pos, mem::size_of::<$t>() as u64)?);
             Ok(<$t>::from_le_bytes(v))
         }
         pub fn $set(&mut self, pos: u64, val: $t) -> Result<(), ExecError> {
@@ -202,7 +198,7 @@ macro_rules! impl_stack_primitive {
         }
         pub fn $pop(&mut self) -> Result<$t, ExecError> {
             let mut v = [0; mem::size_of::<$t>()];
-            v.copy_from_slice(self.pop_mem(mem::size_of::<$t>())?);
+            v.copy_from_slice(self.pop_mem(mem::size_of::<$t>() as u64)?);
             Ok(<$t>::from_le_bytes(v))
         }
     )*}
@@ -228,7 +224,7 @@ pub struct EmulatorArgs {
     pub stack_size: Option<usize>,
     /// Max number of file descriptors the program can use at the same time.
     /// If omitted, defaults to `DEFAULT_MAX_FD`.
-    pub max_file_descriptors: Option<usize>,
+    pub max_files: Option<usize>,
     /// The command line arguments to provide the program.
     /// This can be left empty, which is the default,
     /// but many programs expect at least one command line argument (typically, exe command).
@@ -254,9 +250,9 @@ impl Memory {
     }
     /// Grabs a contiguous block of memory.
     /// Fails if the block goes out of bounds.
-    pub fn get(&self, pos: u64, len: usize) -> Result<&[u8], ExecError> {
-        if pos > usize::MAX as u64 { return Err(ExecError::MemOutOfBounds); }
-        let pos = pos as usize;
+    pub fn get(&self, pos: u64, len: u64) -> Result<&[u8], ExecError> {
+        if pos > usize::MAX as u64 || len > usize::MAX as u64 { return Err(ExecError::MemOutOfBounds); }
+        let (pos, len) = (pos as usize, len as usize);
 
         match self.raw.get(pos..pos.wrapping_add(len)) {
             None => Err(ExecError::MemOutOfBounds),
@@ -265,9 +261,9 @@ impl Memory {
     }
     /// Similar to `get` but returns a mutable slice.
     /// Additionally, fails if grabbing from readonly memory.
-    pub fn get_mut(&mut self, pos: u64, len: usize) -> Result<&mut [u8], ExecError> {
-        if pos > usize::MAX as u64 { return Err(ExecError::MemOutOfBounds); }
-        let pos = pos as usize;
+    pub fn get_mut(&mut self, pos: u64, len: u64) -> Result<&mut [u8], ExecError> {
+        if pos > usize::MAX as u64 || len > usize::MAX as u64 { return Err(ExecError::MemOutOfBounds); }
+        let (pos, len) = (pos as usize, len as usize);
 
         if pos < self.readonly_barrier { return Err(ExecError::WriteInReadonlyMemory); }
         match self.raw.get_mut(pos..pos.wrapping_add(len)) {
@@ -279,7 +275,7 @@ impl Memory {
     /// Equivalent to assigning to the result of `get_mut`.
     /// On failure, the internal state is unmodified.
     pub fn set(&mut self, pos: u64, value: &[u8]) -> Result<(), ExecError> {
-        Ok(self.get_mut(pos, value.len())?.copy_from_slice(value))
+        Ok(self.get_mut(pos, value.len() as u64)?.copy_from_slice(value))
     }
     /// Reads a null-terminated binary string starting at the given position.
     /// The null terminator is not included in the result.
@@ -451,6 +447,15 @@ pub struct VPU {
     pub mxcsr: MXCSR,
 }
 
+/// The opened file handles of the client.
+#[derive(Default)]
+pub struct Files {
+    pub handles: Vec<Option<Arc<Mutex<dyn FileHandle>>>>,
+}
+impl Files {
+
+}
+
 /// Processor emulator which runs a compiled program.
 pub struct Emulator {
     pub memory: Memory,
@@ -458,8 +463,7 @@ pub struct Emulator {
     pub vpu: VPU,
     pub fpu: FPU,
     pub flags: Flags,
-    
-    file_descriptors: Vec<Box<dyn FileDescriptor>>,
+    pub files: Files,
 
     instruction_pointer: usize,
     state: State,
@@ -475,8 +479,7 @@ impl Emulator {
             vpu: Default::default(),
             fpu: Default::default(),
             flags: Default::default(),
-
-            file_descriptors: vec![],
+            files: Default::default(),
 
             instruction_pointer: 0,
             state: State::Uninitialized,
@@ -549,6 +552,12 @@ impl Emulator {
         self.cpu.set_rsp(self.memory.stack_base as u64);
         self.cpu.set_rbp(self.memory.len() as u64);
 
+        // set up the files - clear anything we had and set capacity (all empty)
+        self.files.handles.clear();
+        for _ in 0..args.max_files.unwrap_or(DEFAULT_MAX_FD) {
+            self.files.handles.push(None); 
+        }
+
         // finally, prepare for execution
         self.instruction_pointer = 0;
         self.state = State::Running;
@@ -609,6 +618,10 @@ impl Emulator {
                             None => return (cycle, error_state!(self => ExecError::UnrecognizedSyscall)),
                             Some(proc) => match proc {
                                 Syscall::Exit => return (cycle + 1, terminated_state!(self => self.cpu.get_ebx() as i32)), // +1 because this cycle succeeded
+                                
+                                Syscall::Read => self.exec_sys_read(),
+                                Syscall::Write => self.exec_sys_write(),
+                                Syscall::Seek => unimplemented!(),
                             }
                         }
 
@@ -671,9 +684,9 @@ impl Emulator {
     }
     /// Pops a binary value from the stack.
     /// Returns a reference to the (logically) removed block of memory.
-    pub fn pop_mem(&mut self, len: usize) -> Result<&[u8], ExecError> {
+    pub fn pop_mem(&mut self, len: u64) -> Result<&[u8], ExecError> {
         let pos = self.cpu.get_rsp();
-        let next_pos = pos.wrapping_add(len as u64);
+        let next_pos = pos.wrapping_add(len);
         if next_pos > self.memory.stack_base as u64 { return Err(ExecError::StackUnderflow); }
         let res = self.memory.get(pos, len)?;
         self.cpu.set_rsp(next_pos);
@@ -773,6 +786,43 @@ impl Emulator {
         if settings & 1 != 0 { res = res.wrapping_add(self.cpu.regs[regs as usize & 15].raw_get(sizecode)); }
 
         Ok(truncate(res, sizecode)) // make sure result is same size
+    }
+
+    // -------------------------------------------------------------------------------------
+    
+    fn exec_sys_read(&mut self) -> Result<(), ExecError> {
+        let fd = self.cpu.get_rbx();
+        if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
+        let fd = fd as usize;
+        if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
+
+        let count = match &self.files.handles[fd] {
+            None => return Err(ExecError::FileDescriptorNotOpen),
+            Some(handle) => match handle.lock().unwrap().read(self.memory.get_mut(self.cpu.get_rcx(), self.cpu.get_rdx())?) {
+                Ok(n) => n as u64,
+                Err(FileError::Permissions) => return Err(ExecError::FilePermissions),
+                Err(FileError::IOError(_)) => u64::MAX, // failure simply returns -1 to client
+            }
+        };
+        self.cpu.set_rax(count);
+        Ok(())
+    }
+    fn exec_sys_write(&mut self) -> Result<(), ExecError> {
+        let fd = self.cpu.get_rbx();
+        if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
+        let fd = fd as usize;
+        if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
+
+        let count = match &self.files.handles[fd] {
+            None => return Err(ExecError::FileDescriptorNotOpen),
+            Some(handle) => match handle.lock().unwrap().write_all(self.memory.get(self.cpu.get_rcx(), self.cpu.get_rdx())?) {
+                Ok(()) => self.cpu.get_rdx(),
+                Err(FileError::Permissions) => return Err(ExecError::FilePermissions),
+                Err(FileError::IOError(_)) => u64::MAX, // io failure simply returns -1 to client
+            }
+        };
+        self.cpu.set_rax(count);
+        Ok(())
     }
 
     // -------------------------------------------------------------------------------------
@@ -1091,7 +1141,7 @@ impl Emulator {
         let sizecode = (s >> 2) & 3;
         let (high, low, overflow) = multiplier(sizecode, self.cpu.get_rax(), v);
         match sizecode {
-            0 => { self.cpu.set_ax(((high << 8) | low) as u16); }
+            0 => { self.cpu.set_ax(low as u16); } // 16-bit result fits in 64-bit "low" half, so we can ignore high
             1 => { self.cpu.set_dx(high as u16); self.cpu.set_ax(low as u16); }
             2 => { self.cpu.set_edx(high as u32); self.cpu.set_eax(low as u32); }
             3 => { self.cpu.set_rdx(high); self.cpu.set_rax(low); }
