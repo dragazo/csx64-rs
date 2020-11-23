@@ -23,3 +23,8 @@ fn test_mut2() {
         }
     }
 }
+
+/// Returns the quotient and remainder of `a` divided by `b`.
+pub(crate) fn quotient_and_remainder<T>(a: T, b: T) -> (T, T) where T: std::ops::Div<Output = T> + std::ops::Rem<Output = T> + Copy {
+    (a / b, a % b)
+}

@@ -9,6 +9,7 @@ use std::mem;
 use std::iter;
 use std::sync::{Arc, Mutex};
 
+use crate::common::util::*;
 use crate::common::f80::*;
 use crate::common::{OPCode, Executable, Syscall};
 
@@ -63,6 +64,10 @@ pub enum ExecError {
     /// An opcode was not recognized.
     /// Much like `InvalidOpEncoding`, this is impossible with proper usage of the assembler/linker.
     UnrecognizedOpCode,
+    /// A division instruction attempted to divide by zero.
+    DivideByZero,
+    /// An extended division instruction had a quotient which could not be truncated to the normal size.
+    DivisionOverflow,
     /// When a system call was invoked, the requested procedure was not recognized.
     UnrecognizedSyscall,
     /// An illegal file descriptor was provided to an IO system call.
@@ -130,6 +135,13 @@ fn is_parity_even(val: u8) -> bool {
     val.count_ones() % 2 == 0
 }
 
+macro_rules! calc_mul {
+    ($a:ident, $b:ident : $normal:ty, $extended:ty, $normal_bits:literal) => {{
+        let full = $a as $normal as $extended * $b as $normal as $extended;
+        ((full >> $normal_bits) as u64, full as u64, full as $normal as $extended != full)
+    }}
+}
+
 /// Computes the unsigned product of `a` and `b`, split into high and low halves.
 /// Bits in `a` and `b` that are outside of `sizecode` are ignored.
 /// For the low half of the result, bits outside the range of `sizecode` but up to `sizecode+1` are the truncated full value.
@@ -137,44 +149,50 @@ fn is_parity_even(val: u8) -> bool {
 /// Also returns a flag denoting if the operation overflowed `sizecode`.
 fn raw_mul(sizecode: u8, a: u64, b: u64) -> (u64, u64, bool) {
     match sizecode {
-        0 => {
-            let full = a as u8 as u16 * b as u8 as u16;
-            ((full >> 8) as u64, full as u64, full as u8 as u16 != full)
-        }
-        1 => {
-            let full = a as u16 as u32 * b as u16 as u32;
-            ((full >> 16) as u64, full as u64, full as u16 as u32 != full)
-        }
-        2 => {
-            let full = a as u32 as u64 * b as u32 as u64;
-            ((full >> 32) as u64, full as u64, full as u32 as u64 != full)
-        }
-        3 => {
-            let full = a as u64 as u128 * b as u64 as u128;
-            ((full >> 64) as u64, full as u64, full as u64 as u128 != full)
-        }
+        0 => calc_mul!(a, b : u8, u16, 8),
+        1 => calc_mul!(a, b : u16, u32, 16),
+        2 => calc_mul!(a, b : u32, u64, 32),
+        3 => calc_mul!(a, b : u64, u128, 64),
         _ => unreachable!(),
     }
 }
 /// As `raw_mul` except performs signed multiplication.
 fn raw_imul(sizecode: u8, a: u64, b: u64) -> (u64, u64, bool) {
     match sizecode {
-        0 => {
-            let full = a as i8 as i16 * b as i8 as i16;
-            ((full >> 8) as u64, full as u64, full as i8 as i16 != full)
-        }
-        1 => {
-            let full = a as i16 as i32 * b as i16 as i32;
-            ((full >> 16) as u64, full as u64, full as i16 as i32 != full)
-        }
-        2 => {
-            let full = a as i32 as i64 * b as i32 as i64;
-            ((full >> 32) as u64, full as u64, full as i32 as i64 != full)
-        }
-        3 => {
-            let full = a as i64 as i128 * b as i64 as i128;
-            ((full >> 64) as u64, full as u64, full as i64 as i128 != full)
-        }
+        0 => calc_mul!(a, b : i8, i16, 8),
+        1 => calc_mul!(a, b : i16, i32, 16),
+        2 => calc_mul!(a, b : i32, i64, 32),
+        3 => calc_mul!(a, b : i64, i128, 64),
+        _ => unreachable!(),
+    }
+}
+
+macro_rules! calc_div {
+    ($a:ident, $b:ident : $normal:ty, $extended:ty) => {{
+        let (quo, rem) = quotient_and_remainder($a as $extended, $b as $normal as $extended);
+        (quo as u64, rem as u64, quo as $normal as $extended != quo)
+    }}
+}
+
+/// Computes the division of the extended numerator `a` by the denominator `b`.
+/// Returns the low half of the quotient, the remainder, and a flag denoting overflow of the quotient.
+/// Bits outside the range of sizecode+1 (for a), or sizecode (for b) are ignored.
+/// Bits outside the range of sizecode for both results are undefined.
+fn raw_div(sizecode: u8, a: u128, b: u64) -> (u64, u64, bool) {
+    match sizecode {
+        0 => calc_div!(a, b : u8, u16),
+        1 => calc_div!(a, b : u16, u32),
+        2 => calc_div!(a, b : u32, u64),
+        3 => calc_div!(a, b : u64, u128),
+        _ => unreachable!(),
+    }
+}
+fn raw_idiv(sizecode: u8, a: u128, b: u64) -> (u64, u64, bool) {
+    match sizecode {
+        0 => calc_div!(a, b : i8, i16),
+        1 => calc_div!(a, b : i16, i32),
+        2 => calc_div!(a, b : i32, i64),
+        3 => calc_div!(a, b : i64, i128),
         _ => unreachable!(),
     }
 }
@@ -1121,6 +1139,8 @@ impl Emulator {
     ext = 5: imul 2
     ext = 6: imul 3
     ext = 7: imulx (3)
+    ext = 8: div (1)
+    ext = 9: idiv (1)
     else: UND
     */
     fn exec_muldiv_family(&mut self) -> Result<(), ExecError> {
@@ -1133,6 +1153,8 @@ impl Emulator {
             5 => self.exec_uimul_2(raw_imul),
             6 => self.exec_uimul_3(raw_imul),
             7 => self.exec_uimulx(raw_imul),
+            8 => self.exec_uidiv(raw_div),
+            9 => self.exec_uidiv(raw_idiv),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
@@ -1173,6 +1195,30 @@ impl Emulator {
         let sizecode = (s2 >> 2) & 3;
         let (high, low, _) = multiplier(sizecode, self.cpu.get_rdx(), v);
         self.store_ternary_op_result(s1, s2, s3, m, high, Some(low))
+    }
+    fn exec_uidiv(&mut self, divider: fn(u8, u128, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
+        let (s, v) = self.read_value_op()?;
+        let sizecode = (s >> 2) & 3;
+        debug_assert!(truncate(v, sizecode) == v);
+        if v == 0 { return Err(ExecError::DivideByZero); }
+        let num = match sizecode {
+            0 => self.cpu.get_ax() as u128,
+            1 => ((self.cpu.get_dx() as u128) << 16) | self.cpu.get_ax() as u128,
+            2 => ((self.cpu.get_edx() as u128) << 32) | self.cpu.get_eax() as u128,
+            3 => ((self.cpu.get_rdx() as u128) << 64) | self.cpu.get_rax() as u128,
+            _ => unreachable!(),
+        };
+        let (quo, rem, overflow) = divider(sizecode, num, v);
+        if overflow { return Err(ExecError::DivisionOverflow); }
+        match sizecode {
+            0 => self.cpu.set_ax(((rem << 8) | quo) as u16),
+            1 => { self.cpu.set_dx(rem as u16); self.cpu.set_ax(quo as u16); }
+            2 => { self.cpu.set_edx(rem as u32); self.cpu.set_eax(quo as u32); }
+            3 => { self.cpu.set_rdx(rem as u64); self.cpu.set_rax(quo as u64); }
+            _ => unreachable!(),
+        }
+        self.randomize_flags(mask!(Flags: MASK_CF | MASK_OF | MASK_SF | MASK_ZF | MASK_AF | MASK_PF));
+        Ok(())
     }
 
     fn exec_and_helper(&mut self, should_store: bool) -> Result<(), ExecError> {

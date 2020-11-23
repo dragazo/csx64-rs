@@ -1588,3 +1588,155 @@ fn test_imulx() {
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
+
+#[test]
+fn test_div() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 20151
+    div byte 87
+    hlt
+    mov dx, 0xd79e
+    mov ax, 0x21a2
+    mov bx, 60000
+    div bx
+    hlt
+    mov edx, 0x3
+    mov eax, 0xd5eb1dc0
+    div dword ptr [leet]
+    hlt
+    mov rdx, 0xc18d48d68cf6b4a7
+    mov rax, 0xa4cde210190cd45c
+    div qword 17928594385485747293
+    hlt
+    xor rax, rax
+    xor rbx, rbx
+    syscall
+
+    segment rodata
+    leet: dq 1337
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 54);
+    assert_eq!(e.cpu.get_al(), 231);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_dx(), 4738);
+    assert_eq!(e.cpu.get_ax(), 60291);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdx(), 1276);
+    assert_eq!(e.cpu.get_rax(), 12321508);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdx(), 117491172663809773);
+    assert_eq!(e.cpu.get_rax(), 14349959000900009019);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_div_errors() {
+    let tests = &[
+        ("segment text\ndiv byte 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv word 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv dword 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv qword 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\ndiv al", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\ndiv ah", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\ndiv ax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\ndiv eax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\ndiv rax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv byte ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv word ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv dword ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\ndiv qword ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nmov ax, 20151\ndiv byte 78", (1, StopReason::Error(ExecError::DivisionOverflow))),
+    ];
+    let mut e = Emulator::new();
+    for &(prog, expected) in tests {
+        let exe = asm_unwrap_link_unwrap!(prog.to_owned() => None);
+        e.init(&exe, &Default::default());
+        assert_eq!(e.get_state(), State::Running);
+        assert_eq!(e.execute_cycles(u64::MAX), expected);
+    }
+}
+#[test]
+fn test_idiv() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 12151
+    mov ch, 101
+    idiv ch
+    hlt
+    mov dx, 0xd79e
+    mov ax, 0x21a2
+    mov bx, 31563
+    idiv bx
+    hlt
+    mov edx, 0x3
+    mov eax, 0xd5eb1dc0
+    idiv dword ptr [leet]
+    hlt
+    mov rdx, 0xf18d48d68cf6b4a7
+    mov rax, 0xa4cde210190cd45c
+    idiv qword 9928594385485747293
+    hlt
+    xor rax, rax
+    xor rbx, rbx
+    syscall
+
+    segment rodata
+    leet: dq -1337
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 31);
+    assert_eq!(e.cpu.get_al(), 120);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_dx(), 2763u16.wrapping_neg());
+    assert_eq!(e.cpu.get_ax(), 21465u16.wrapping_neg());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdx(), 1276);
+    assert_eq!(e.cpu.get_rax(), 12321508u32.wrapping_neg() as u64);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdx(), 5539981218873602520u64.wrapping_neg());
+    assert_eq!(e.cpu.get_rax(), 2254577513978919876);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_idiv_errors() {
+    let tests = &[
+        ("segment text\nidiv byte 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv word 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv dword 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv qword 0", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\nidiv al", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\nidiv ah", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\nidiv ax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\nidiv eax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nxor rax, rax\nidiv rax", (1, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv byte ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv word ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv dword ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nidiv qword ptr [val]\nsegment bss\nval: resq 1", (0, StopReason::Error(ExecError::DivideByZero))),
+        ("segment text\nmov ax, 20151\nidiv byte 87", (1, StopReason::Error(ExecError::DivisionOverflow))),
+    ];
+    let mut e = Emulator::new();
+    for &(prog, expected) in tests {
+        let exe = asm_unwrap_link_unwrap!(prog.to_owned() => None);
+        e.init(&exe, &Default::default());
+        assert_eq!(e.get_state(), State::Running);
+        assert_eq!(e.execute_cycles(u64::MAX), expected);
+    }
+}

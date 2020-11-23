@@ -1227,6 +1227,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             }
                             Instruction::MULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::IMULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(7), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::DIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(8), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::IDIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(9), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
 
                             Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
                             Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,

@@ -354,7 +354,7 @@ pub(super) enum Instruction {
     MOV, MOVcc(u8), LEA, XCHG,
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
-    MUL, IMUL, MULX, IMULX,
+    MUL, IMUL, MULX, IMULX, DIV, IDIV,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
     INC, DEC, NEG, NOT,
@@ -466,6 +466,9 @@ lazy_static! {
         insert!(m: Caseless("IMUL") => Instruction::IMUL);
         insert!(m: Caseless("MULX") => Instruction::MULX);
         insert!(m: Caseless("IMULX") => Instruction::IMULX);
+
+        insert!(m: Caseless("DIV") => Instruction::DIV);
+        insert!(m: Caseless("IDIV") => Instruction::IDIV);
 
         insert!(m: Caseless("JMP") => Instruction::JMP);
 
