@@ -351,9 +351,10 @@ pub(super) enum Instruction {
     DECLARE(Size), RESERVE(Size),
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
-    MOV, MOVcc(u8), LEA, XCHG,
+    MOV, MOVcc(u8), LEA, XCHG, FLAGBIT(u8),
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
+    SHL, SHR, SAR,
     MUL, IMUL, MULX, IMULX, DIV, IDIV,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
@@ -453,6 +454,19 @@ lazy_static! {
         insert!(m: Caseless("LEA") => Instruction::LEA);
         insert!(m: Caseless("XCHG") => Instruction::XCHG);
 
+        insert!(m: Caseless("STAC") => Instruction::FLAGBIT(0));
+        insert!(m: Caseless("CLAC") => Instruction::FLAGBIT(1));
+        insert!(m: Caseless("CMAC") => Instruction::FLAGBIT(2));
+        insert!(m: Caseless("STC") => Instruction::FLAGBIT(3));
+        insert!(m: Caseless("CLC") => Instruction::FLAGBIT(4));
+        insert!(m: Caseless("CMC") => Instruction::FLAGBIT(5));
+        insert!(m: Caseless("STD") => Instruction::FLAGBIT(6));
+        insert!(m: Caseless("CLD") => Instruction::FLAGBIT(7));
+        insert!(m: Caseless("CMD") => Instruction::FLAGBIT(8));
+        insert!(m: Caseless("STI") => Instruction::FLAGBIT(9));
+        insert!(m: Caseless("CLI") => Instruction::FLAGBIT(10));
+        insert!(m: Caseless("CMI") => Instruction::FLAGBIT(11));
+
         insert!(m: Caseless("ADD") => Instruction::ADD);
         insert!(m: Caseless("SUB") => Instruction::SUB);
         insert!(m: Caseless("CMP") => Instruction::CMP);
@@ -461,6 +475,12 @@ lazy_static! {
         insert!(m: Caseless("OR") => Instruction::OR);
         insert!(m: Caseless("XOR") => Instruction::XOR);
         insert!(m: Caseless("TEST") => Instruction::TEST);
+
+        insert!(m: Caseless("SHL") => Instruction::SHL);
+        insert!(m: Caseless("SHR") => Instruction::SHR);
+        insert!(m: Caseless("SAR") => Instruction::SAR);
+
+        alias!(m: Caseless("SAL") => Caseless("SHL"));
 
         insert!(m: Caseless("MUL") => Instruction::MUL);
         insert!(m: Caseless("IMUL") => Instruction::IMUL);

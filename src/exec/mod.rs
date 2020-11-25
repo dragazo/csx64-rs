@@ -647,16 +647,18 @@ impl Emulator {
                         OPCode::MOV => self.exec_mov(),
                         OPCode::MOVcc => self.exec_movcc(),
                         OPCode::XCHG => self.exec_xchg(),
-
-                        OPCode::ADD => self.exec_add(),
-                        OPCode::SUB => self.exec_sub_helper(true),
-                        OPCode::CMP => self.exec_sub_helper(false),
-                        OPCode::CMPZ => self.exec_cmp0(),
+                        OPCode::REGOP => self.exec_regop(),
 
                         OPCode::AND => self.exec_and_helper(true),
                         OPCode::OR => self.exec_or(),
                         OPCode::XOR => self.exec_xor(),
                         OPCode::TEST => self.exec_and_helper(false),
+                        OPCode::BITWISE => self.exec_bitwise(),
+
+                        OPCode::ADD => self.exec_add(),
+                        OPCode::SUB => self.exec_sub_helper(true),
+                        OPCode::CMP => self.exec_sub_helper(false),
+                        OPCode::CMPZ => self.exec_cmp0(),
 
                         OPCode::MULDIV => self.exec_muldiv_family(),
 
@@ -849,9 +851,9 @@ impl Emulator {
     [4: r1][3:][1: r1h]   [binary a b]
     f(r1, a, b)
     */
-    fn read_ternary_op(&mut self, get_a: bool, force_imm_sizecode: Option<u8>) -> Result<(u8, u8, u8, u64, u64, u64), ExecError> {
+    fn read_ternary_op(&mut self, get_a: bool, force_b_sizecode: Option<u8>) -> Result<(u8, u8, u8, u64, u64, u64), ExecError> {
         let s1 = self.get_mem_adv_u8()?;
-        let (s2, s3, m, a, b) = self.read_binary_op(get_a, force_imm_sizecode)?;
+        let (s2, s3, m, a, b) = self.read_binary_op(get_a, force_b_sizecode)?;
         Ok((s1, s2, s3, m, a, b))
     }
     fn store_ternary_op_result(&mut self, s1: u8, s2: u8, s3: u8, m: u64, res1: u64, res2: Option<u64>) -> Result<(), ExecError> {
@@ -871,38 +873,39 @@ impl Emulator {
     else UND
     (dh and sh mark AH, BH, CH, or DH for dest or src)
     */
-    fn read_binary_op(&mut self, get_a: bool, force_imm_sizecode: Option<u8>) -> Result<(u8, u8, u64, u64, u64), ExecError> {
+    fn read_binary_op(&mut self, get_a: bool, force_b_sizecode: Option<u8>) -> Result<(u8, u8, u64, u64, u64), ExecError> {
         let s1 = self.get_mem_adv_u8()?;
         let s2 = self.get_mem_adv_u8()?;
-        let sizecode = (s1 >> 2) & 3;
+        let a_sizecode = (s1 >> 2) & 3;
+        let b_sizecode = force_b_sizecode.unwrap_or(a_sizecode);
 
         let (m, a, b) = match s2 >> 4 {
             0 => {
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(sizecode) };
-                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(sizecode) };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
+                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
                 (0, a, b)
             }
             1 => {
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(sizecode) };
-                let b = self.raw_get_mem_adv(force_imm_sizecode.unwrap_or(sizecode))?;
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
+                let b = self.raw_get_mem_adv(b_sizecode)?;
                 (0, a, b)
             }
             2 => {
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(sizecode) };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
                 let m = self.get_address_adv()?;
-                let b = self.raw_get_mem(m, sizecode)?;
+                let b = self.raw_get_mem(m, b_sizecode)?;
                 (m, a, b)
             }
             3 => {
                 let m = self.get_address_adv()?;
-                let a = if !get_a { 0 } else { self.raw_get_mem(m, sizecode)? };
-                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(sizecode) };
+                let a = if !get_a { 0 } else { self.raw_get_mem(m, a_sizecode)? };
+                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
                 (m, a, b)
             }
             4 => {
                 let m = self.get_address_adv()?;
-                let a = if !get_a { 0 } else { self.raw_get_mem(m, sizecode)? };
-                let b = self.raw_get_mem_adv(force_imm_sizecode.unwrap_or(sizecode))?;
+                let a = if !get_a { 0 } else { self.raw_get_mem(m, a_sizecode)? };
+                let b = self.raw_get_mem_adv(b_sizecode)?;
                 (m, a, b)
             }
             _ => return Err(ExecError::InvalidOpEncoding),
@@ -1093,6 +1096,40 @@ impl Emulator {
         self.store_binary_lvalue_result(s, sm2, b, a)
     }
 
+    /*
+    [ext]
+    ext =  0: stac
+    ext =  1: clac
+    ext =  2: cmac
+    ext =  3: stc
+    ext =  4: clc
+    ext =  5: cmc
+    ext =  6: std
+    ext =  7: cld
+    ext =  8: cmd
+    ext =  9: sti
+    ext = 10: cli
+    ext = 11: cmi
+    */
+    fn exec_regop(&mut self) -> Result<(), ExecError> {
+        match self.get_mem_adv_u8()? {
+            0 => self.flags.set_ac(),
+            1 => self.flags.reset_ac(),
+            2 => self.flags.flip_ac(),
+            3 => self.flags.set_cf(),
+            4 => self.flags.reset_cf(),
+            5 => self.flags.flip_cf(),
+            6 => self.flags.set_df(),
+            7 => self.flags.reset_df(),
+            8 => self.flags.flip_df(),
+            9 => self.flags.set_if(),
+            10 => self.flags.reset_if(),
+            11 => self.flags.flip_if(),
+            _ => return Err(ExecError::InvalidOpEncoding),
+        }
+        Ok(())
+    }
+
     fn exec_add(&mut self) -> Result<(), ExecError> {
         let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
         let sizecode = (s1 >> 2) & 3;
@@ -1255,6 +1292,52 @@ impl Emulator {
         self.update_flags_zsp(res, sizecode);
         self.randomize_flags(mask!(Flags: MASK_AF));
         
+        self.store_binary_op_result(s1, s2, m, res)
+    }
+
+    /*
+    [ext]
+    ext = 0: shl
+    ext = 1: shr
+    ext = 2: sar
+    */
+    fn exec_bitwise(&mut self) -> Result<(), ExecError> {
+        match self.get_mem_adv_u8()? {
+            0 => self.exec_shift(|sizecode, val, masked| {
+                let bits = 8 << sizecode;
+                let res = val << masked;
+                let carry = if masked <= bits { (val >> (bits - masked)) & 1 != 0 } else { false };
+                let overflow = sign_bit(res, sizecode) ^ carry;
+                (res, carry, overflow)
+            }),
+            1 => self.exec_shift(|sizecode, val, masked| {
+                let res = val >> masked;
+                let carry = (val >> (masked - 1)) & 1 != 0;
+                let overflow = sign_bit(val, sizecode);
+                (res, carry, overflow)
+            }),
+            2 => self.exec_shift(|sizecode, val, masked| {
+                let extended = sign_extend(val, sizecode) as i64;
+                let res = (extended >> masked) as u64;
+                let carry = (extended >> (masked - 1)) & 1 != 0;
+                (res, carry, false)
+            }),
+            _ => Err(ExecError::InvalidOpEncoding),
+        }
+    }
+    fn exec_shift(&mut self, shifter: fn(u8, u64, u32) -> (u64, bool, bool)) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, Some(0))?;
+        let sizecode = (s1 >> 2) & 3;
+        let masked = b as u32 & 0x3f;
+        if masked == 0 { return Ok(()) }
+
+        let (res, carry, overflow) = shifter(sizecode, a, masked);
+        let mut randomize_mask = mask!(Flags: MASK_AF);
+        self.flags.assign_cf(carry); // technically if masked >= bits, CF is UND for SHL and SHR, but not for SAR - we arbitrarily let them all be well-defined
+        if masked == 1 { self.flags.assign_of(overflow); } else { randomize_mask |= mask!(Flags: MASK_OF); }
+        self.update_flags_zsp(res, sizecode);
+        self.randomize_flags(randomize_mask);
+
         self.store_binary_op_result(s1, s2, m, res)
     }
 

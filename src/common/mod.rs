@@ -24,10 +24,10 @@ pub enum OPCode
     LEA,
     MOV, MOVcc,
     XCHG,
+    REGOP,
 
-    ADD, SUB,
-    AND, OR, XOR,
-    CMP, CMPZ, TEST,
+    AND, OR, XOR, TEST, BITWISE,
+    ADD, SUB, CMP, CMPZ,
     MULDIV,
 
     JMP, Jcc, LOOPcc, CALL, RET,

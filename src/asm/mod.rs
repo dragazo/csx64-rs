@@ -144,7 +144,7 @@ pub enum AsmErrorKind {
 
     UnsupportedOperandSize,
     OperandsHadDifferentSizes,
-    SizeSpecOnForcedSize,
+    ForcedSizeViolation,
     CouldNotDeduceOperandSize,
     
     TernaryOpUnsupportedTypes,
@@ -1186,7 +1186,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 args.append_address(addr)?;
                             }
                             Instruction::XCHG => args.process_binary_lvalue_unordered_op(arguments, OPCode::XCHG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            
+                            Instruction::FLAGBIT(ext) => args.process_no_arg_op(arguments, Some(OPCode::REGOP as u8), Some(ext))?,
+
                             Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::CMP => {
@@ -1213,6 +1214,10 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
         
+                            Instruction::SHL => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+                            Instruction::SHR => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+                            Instruction::SAR => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+
                             Instruction::MUL => match arguments.len() {
                                 1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                                 2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
