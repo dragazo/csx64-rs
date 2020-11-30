@@ -22,8 +22,7 @@ pub enum OPCode
     SYSCALL,
 
     LEA,
-    MOV, MOVcc,
-    XCHG,
+    MOV, MOVcc, XCHG,
     REGOP,
 
     AND, OR, XOR, TEST, BITWISE,
@@ -45,8 +44,6 @@ pub enum OPCode
     
 
     // SETcc,
-
-    // SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
 
     // STLDF,
     // FlagManip,
@@ -113,7 +110,6 @@ pub enum OPCode
 /// Because 32-bit writes zero the upper 32-bits and syscall codes are unsigned, it suffices to write to `EAX`.
 /// Arguments to a system call procedure should be loaded into `RBX`, `RCX`, `RDX` (or partitions thereof, depending on procedure).
 #[derive(Clone, Copy, FromPrimitive)]
-#[repr(u32)]
 pub enum Syscall {
     /// Instructs the emulator to end execution in a non-error state with the `i32` return value in `EBX`.
     /// This effectively means the program terminated rather than crashing.

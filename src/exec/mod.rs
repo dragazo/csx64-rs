@@ -1300,38 +1300,99 @@ impl Emulator {
     ext = 0: shl
     ext = 1: shr
     ext = 2: sar
+    ext = 3: rol
+    ext = 4: ror
+    ext = 5: rcl
+    ext = 6: rcr
+    ext = 7: shlx
+    ext = 8: shrx
+    ext = 9: sarx
     */
     fn exec_bitwise(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
-            0 => self.exec_shift(|sizecode, val, masked| {
-                let bits = 8 << sizecode;
+            0 => self.exec_shift(|_, m| m, |sizecode, val, masked, _| {
+                debug_assert!(masked < 64 && masked > 0);
+                let bits = 8u32 << sizecode;
                 let res = val << masked;
-                let carry = if masked <= bits { (val >> (bits - masked)) & 1 != 0 } else { false };
+                let carry = val.wrapping_shr(bits.wrapping_sub(masked)) & 1 != 0;
+                debug_assert!(masked <= bits || !carry); // masked > bits -> !carry
                 let overflow = sign_bit(res, sizecode) ^ carry;
                 (res, carry, overflow)
             }),
-            1 => self.exec_shift(|sizecode, val, masked| {
+            1 => self.exec_shift(|_, m| m, |sizecode, val, masked, _| {
+                debug_assert!(masked < 64 && masked > 0);
                 let res = val >> masked;
                 let carry = (val >> (masked - 1)) & 1 != 0;
                 let overflow = sign_bit(val, sizecode);
                 (res, carry, overflow)
             }),
-            2 => self.exec_shift(|sizecode, val, masked| {
+            2 => self.exec_shift(|_, m| m, |sizecode, val, masked, _| {
+                debug_assert!(masked < 64 && masked > 0);
                 let extended = sign_extend(val, sizecode) as i64;
                 let res = (extended >> masked) as u64;
                 let carry = (extended >> (masked - 1)) & 1 != 0;
                 (res, carry, false)
             }),
+            3 => self.exec_shift(|sizecode, masked| masked & ((8 << sizecode) - 1), |sizecode, val, masked, _| {
+                debug_assert!(masked < 64 && masked > 0);
+                let res = match sizecode {
+                    0 => (val as u8).rotate_left(masked) as u64,
+                    1 => (val as u16).rotate_left(masked) as u64,
+                    2 => (val as u32).rotate_left(masked) as u64,
+                    3 => (val as u64).rotate_left(masked) as u64,
+                    _ => unreachable!(),
+                };
+                let carry = res & 1 != 0;
+                let overflow = sign_bit(res, sizecode) ^ carry;
+                (res, carry, overflow)
+            }),
+            4 => self.exec_shift(|sizecode, masked| masked & ((8 << sizecode) - 1), |sizecode, val, masked, _| {
+                debug_assert!(masked < 64 && masked > 0);
+                let res = match sizecode {
+                    0 => (val as u8).rotate_right(masked) as u64,
+                    1 => (val as u16).rotate_right(masked) as u64,
+                    2 => (val as u32).rotate_right(masked) as u64,
+                    3 => (val as u64).rotate_right(masked) as u64,
+                    _ => unreachable!(),
+                };
+                let carry = (val >> (masked - 1)) & 1 != 0;
+                let overflow = sign_bit(res ^ (res << 1), sizecode);
+                (res, carry, overflow)
+            }),
+            5 => self.exec_shift(|sizecode, masked| masked % ((8 << sizecode) + 1), |sizecode, val, masked, cf| {
+                let bits = (8 << sizecode) + 1;
+                debug_assert!(masked < bits && masked < 64 && masked > 0); // should be guaranteed by maskmod
+                let lower = if masked > 1 { val >> (bits - masked) } else { 0 };
+                let upper = ((val << 1) | (if cf { 1 } else { 0 })) << (masked - 1);
+                let res = upper | lower;
+                let carry = (val >> (bits - masked - 1)) & 1 != 0;
+                let overflow = sign_bit(res, sizecode) ^ carry;
+                (res, carry, overflow)
+            }),
+            6 => self.exec_shift(|sizecode, masked| masked % ((8 << sizecode) + 1), |sizecode, val, masked, cf| {
+                let bits = (8 << sizecode) + 1;
+                debug_assert!(masked < bits && masked < 64 && masked > 0); // should be guaranteed by maskmod
+                let lower = ((val >> 1) | (if cf { 1 << (bits - 2) } else { 0 })) >> (masked - 1);
+                let upper = if masked > 1 { val << (bits - masked) } else { 0 };
+                let res = upper | lower;
+                let carry = (val >> (masked - 1)) & 1 != 0;
+                let overflow = sign_bit(res ^ (res << 1), sizecode);
+                (res, carry, overflow)
+            }),
+            7 => self.exec_shiftx(|_, val, masked| val << masked),
+            8 => self.exec_shiftx(|_, val, masked| val >> masked),
+            9 => self.exec_shiftx(|sizecode, val, masked| ((sign_extend(val, sizecode) as i64) >> masked) as u64),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
-    fn exec_shift(&mut self, shifter: fn(u8, u64, u32) -> (u64, bool, bool)) -> Result<(), ExecError> {
+    fn exec_shift(&mut self, maskmod: fn(u8, u32) -> u32, shifter: fn(u8, u64, u32, bool) -> (u64, bool, bool)) -> Result<(), ExecError> {
         let (s1, s2, m, a, b) = self.read_binary_op(true, Some(0))?;
         let sizecode = (s1 >> 2) & 3;
-        let masked = b as u32 & 0x3f;
+        let masked = maskmod(sizecode, b as u32 & (if sizecode >= 3 { 0x3f } else { 0x1f }));
         if masked == 0 { return Ok(()) }
+        debug_assert_eq!(a, truncate(a, sizecode)); // shifters assume this
 
-        let (res, carry, overflow) = shifter(sizecode, a, masked);
+        let (res, carry, overflow) = shifter(sizecode, a, masked, self.flags.get_cf());
         let mut randomize_mask = mask!(Flags: MASK_AF);
         self.flags.assign_cf(carry); // technically if masked >= bits, CF is UND for SHL and SHR, but not for SAR - we arbitrarily let them all be well-defined
         if masked == 1 { self.flags.assign_of(overflow); } else { randomize_mask |= mask!(Flags: MASK_OF); }
@@ -1339,6 +1400,13 @@ impl Emulator {
         self.randomize_flags(randomize_mask);
 
         self.store_binary_op_result(s1, s2, m, res)
+    }
+    fn exec_shiftx(&mut self, shifter: fn(u8, u64, u32) -> u64) -> Result<(), ExecError> {
+        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, Some(0))?;
+        let sizecode = (s2 >> 2) & 3;
+        let masked = b as u32 & (if sizecode >= 3 { 0x3f } else { 0x1f });
+        let res = shifter(sizecode, a, masked);
+        self.store_ternary_op_result(s1, s2, s3, m, res, None)
     }
 
     fn exec_jmp(&mut self) -> Result<(), ExecError> {

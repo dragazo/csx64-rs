@@ -1214,9 +1214,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
         
-                            Instruction::SHL => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
-                            Instruction::SHR => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
-                            Instruction::SAR => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+                            Instruction::SHIFT(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+                            Instruction::SHIFTX(ext) => args.process_ternary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
 
                             Instruction::MUL => match arguments.len() {
                                 1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,

@@ -1895,6 +1895,12 @@ fn test_shl() {
     mov eax, 0xdeadbeef
     shl eax, 0
     hlt
+    mov ah, 0xff
+    shl ah, 31
+    hlt
+    mov rbx, -1
+    shl bx, 31
+    hlt
     mov eax, sys_exit
     xor ebx, ebx
     syscall
@@ -1964,6 +1970,14 @@ fn test_shl() {
     assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
     assert_eq!(e.flags.0, prev_flags);
 
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rbx(), 0xffffffffffff0000);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
+
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
 #[test]
@@ -1996,8 +2010,14 @@ fn test_shr() {
     mov eax, 0xdeadbeef
     shr eax, 32
     hlt
-    mov eax, 0x5eadbeef
-    shr eax, 32
+    mov ax, 0xbeef
+    shr ax, 30
+    hlt
+    mov ax, 0xbeef
+    shr ax, 16
+    hlt
+    mov ax, 0x5eef
+    shr ax, 16
     hlt
     mov eax, 0xdeadbeef
     shr eax, 0
@@ -2043,21 +2063,30 @@ fn test_shr() {
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF | MASK_CF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.cpu.get_rax(), 0xdeadbe);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_PF | MASK_CF));
+    let prev_flags_1 = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.cpu.get_ax(), 0);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF | MASK_CF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.cpu.get_ax(), 0);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
 
-    let prev_flags = e.flags.0;
+    let prev_flags_2 = e.flags.0;
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
-    assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.flags.0, prev_flags_2);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }
@@ -2086,18 +2115,22 @@ fn test_sar() {
     mov eax, 0x40384837
     sar eax, 40
     hlt
-    mov eax, 0x80384837
-    mov bh, 40
+    mov ax, 0x4837
+    mov bh, 30
+    sar eax, bh
+    hlt
+    mov ax, 0x4837
+    mov bh, 16
+    sar eax, bh
+    hlt
+    mov ax, 0xc837
     sar eax, bh
     hlt
     mov eax, 0x40384837
     sar eax, 32
     hlt
-    mov eax, 0x80384837
-    sar eax, [thirtytwo]
-    hlt
-    mov eax, 0xdeadbeef
-    sar eax, 0
+    mov rax, 0xdeadbeefdeadbeef
+    sar rax, 0
     hlt
     mov eax, sys_exit
     xor ebx, ebx
@@ -2136,25 +2169,642 @@ fn test_sar() {
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.cpu.get_rax(), 0x403848);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_PF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0xffffffff);
-    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
-
-    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.cpu.get_ax(), 0);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
-    assert_eq!(e.cpu.get_rax(), 0xffffffff);
-    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_ZF | MASK_PF | MASK_CF));
+    let prev_flags_1 = e.flags.0;
 
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x40384837);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeefdeadbeef);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
+fn test_shlx() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 0x20
+    shlx bx, ax, 1
+    hlt
+    mov ax, 0x4000
+    shlx di, ax, [one]
+    hlt
+    shlx ax, di, 1
+    hlt
+    mov eax, 5
+    shlx eax, eax, 16
+    hlt
+    shlx eax, eax, 14
+    hlt
+    mov dh, 1
+    shlx ebx, eax, dh
+    hlt
+    shlx eax, ebx, dh
+    hlt
+    shlx eax, eax, 1
+    hlt
+    mov rax, 0xc000000000000000
+    shlx r8, rax, 1
+    hlt
+    shlx rax, r8, 1
+    hlt
+    mov ax, 0x3585
+    shlx ax, ax, 20
+    hlt
+    mov ax, 0xffff
+    shlx si, ax, byte ptr [sixteen]
+    hlt
+    mov ax, 0xfffe
+    shlx ax, ax, [sixteen]
+    hlt
+    mov eax, 0xdeadbeef
+    shlx eax, eax, 0
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment rodata
+    sixteen: db 16
+    one: db 1
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
     let prev_flags = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x20);
+    assert_eq!(e.cpu.get_bx(), 0x40);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x4000);
+    assert_eq!(e.cpu.get_di(), 0x8000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.cpu.get_di(), 0x8000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x00050000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x40000000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rbx(), 0x80000000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xc000000000000000);
+    assert_eq!(e.cpu.get_r8(), 0x8000000000000000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffff);
+    assert_eq!(e.cpu.get_si(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
     assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_shrx() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 0xc000
+    shrx ax, ax, 1
+    hlt
+    shrx ax, ax, 1
+    hlt
+    shrx ax, ax, 1
+    hlt
+    mov ax, 0x8000
+    shrx ax, ax, 1
+    hlt
+    mov eax, 0xab10
+    shrx eax, eax, 4
+    hlt
+    shrx eax, eax, 1
+    hlt
+    mov dil, 6
+    shrx eax, eax, dil
+    hlt
+    shrx eax, eax, 5
+    hlt
+    mov eax, 0xdeadbeef
+    shrx eax, eax, 40
+    hlt
+    mov eax, 0xdeadbeef
+    shrx eax, eax, 32
+    hlt
+    mov ax, 0xbeef
+    shrx ax, ax, 30
+    hlt
+    mov ax, 0xbeef
+    shrx ax, ax, 16
+    hlt
+    mov ax, 0x5eef
+    shrx ax, ax, 16
+    hlt
+    mov eax, 0xdeadbeef
+    shrx eax, eax, 0
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let prev_flags = e.flags.0;
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x6000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x3000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x1800);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x4000);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xab1);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x558);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x15);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbe);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_sarx() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, -1
+    sarx ax, ax, 1
+    hlt
+    mov ax, -2
+    sarx ax, ax, byte ptr [one]
+    hlt
+    mov ax, 0x7800
+    sarx ax, ax, 11
+    hlt
+    mov ax, 0x7800
+    sarx ax, ax, 12
+    hlt
+    mov ax, 0x8000
+    sarx ax, ax, 15
+    hlt
+    mov ax, 0x8000
+    sarx ax, ax, 16
+    hlt
+    mov eax, 0x40384837
+    sarx eax, eax, 40
+    hlt
+    mov ax, 0x4837
+    mov bh, 30
+    sarx eax, eax, bh
+    hlt
+    mov ax, 0x4837
+    mov bh, 16
+    sarx eax, eax, bh
+    hlt
+    mov ax, 0xc837
+    sarx eax, eax, bh
+    hlt
+    mov eax, 0x40384837
+    sarx eax, eax, 32
+    hlt
+    mov rax, 0xdeadbeefdeadbeef
+    sarx rax, rax, 0
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment rodata
+    one: db 1
+    thirtytwo: db 32
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let prev_flags = e.flags.0;
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xf);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x7);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffff);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x403848);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x40384837);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeefdeadbeef);
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
+fn test_rol() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 0x0140
+    rol ax, 8
+    hlt
+    mov ax, 0
+    rol ax, 16
+    hlt
+    mov al, 0xc0
+    rol al, 1
+    hlt
+    mov al, 0xa0
+    rol al, 1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x4001);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_CF));
+    let prev_flags_1 = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_al(), 0x81);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_al(), 0x41);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_PF | MASK_CF | MASK_OF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_ror() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov ax, 0x0140
+    ror ax, 8
+    hlt
+    mov ax, 0
+    ror ax, 16
+    hlt
+    mov ah, 0x81
+    ror ah, 1
+    hlt
+    mov ah, 1
+    ror ah, 1
+    hlt
+    mov rax, 0x808000000000dead
+    clc
+    ror rax, 1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x4001);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!());
+    let prev_flags_1 = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0xc0);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0x80);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_CF | MASK_OF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xc040000000006f56);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
+fn test_rcl() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov eax, 0x12345678
+    stc
+    rcl eax, 7
+    hlt
+    mov eax, 0x12345678
+    clc
+    rcl eax, 7
+    hlt
+    mov ax, 0xdead
+    clc
+    rcl ax, 16
+    hlt
+    mov ax, 0xdead
+    stc
+    rcl ax, 16
+    hlt
+    mov ax, 0xffee
+    rcl ax, 17
+    hlt
+    mov ah, 0xfe
+    rcl ah, 9
+    hlt
+    mov eax, 0xffee
+    rcl eax, 0
+    hlt
+    mov rax, 0xffee1
+    rcl rax, 0
+    hlt
+    mov ah, 0xc0
+    clc
+    rcl ah, 1
+    hlt
+    mov ah, 0xc0
+    stc
+    rcl ah, 1
+    hlt
+    mov rbx, 0xb000000000000000
+    clc
+    rcl rbx, 1
+    hlt
+    mov rbx, 0xb000000000000000
+    stc
+    rcl rbx, 1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x1a2b3c44);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x1a2b3c04);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0x6f56);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xef56);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+    let prev_flags_1 = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ax(), 0xffee);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0xfe);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xffee);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xffee1);
+    assert_eq!(e.flags.0, prev_flags_1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0x80);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0x81);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rbx(), 0x6000000000000000);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_PF | MASK_CF | MASK_OF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rbx(), 0x6000000000000001);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_CF | MASK_OF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_rcr() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov eax, 0x12345678
+    stc
+    rcr eax, 7
+    hlt
+    mov eax, 0x12345678
+    clc
+    rcr eax, 7
+    hlt
+    mov eax, 0x12345678
+    stc
+    rcr eax, 8
+    hlt
+    mov eax, 0x12345678
+    clc
+    rcr eax, 8
+    hlt
+    mov ah, 0x6e
+    clc
+    rcr ah, 8
+    hlt
+    mov ah, 0x6e
+    stc
+    rcr ah, 8
+    hlt
+    mov rax, 0x8143646638765475
+    stc
+    rcr rax, 1
+    hlt
+    mov rax, 0x8143646638765475
+    clc
+    rcr rax, 1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+    ".to_owned() => None);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xe22468ac);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xe02468ac);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xf1123456);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xf0123456);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0xdc);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 0xdd);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF), mask!(Flags: MASK_SF | MASK_PF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xc0a1b2331c3b2a3a);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_SF | MASK_PF | MASK_CF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0x40a1b2331c3b2a3a);
+    assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_PF | MASK_CF | MASK_OF));
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }

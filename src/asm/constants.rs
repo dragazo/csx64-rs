@@ -354,7 +354,7 @@ pub(super) enum Instruction {
     MOV, MOVcc(u8), LEA, XCHG, FLAGBIT(u8),
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
-    SHL, SHR, SAR,
+    SHIFT(u8), SHIFTX(u8),
     MUL, IMUL, MULX, IMULX, DIV, IDIV,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
@@ -476,11 +476,21 @@ lazy_static! {
         insert!(m: Caseless("XOR") => Instruction::XOR);
         insert!(m: Caseless("TEST") => Instruction::TEST);
 
-        insert!(m: Caseless("SHL") => Instruction::SHL);
-        insert!(m: Caseless("SHR") => Instruction::SHR);
-        insert!(m: Caseless("SAR") => Instruction::SAR);
+        insert!(m: Caseless("SHL") => Instruction::SHIFT(0));
+        insert!(m: Caseless("SHR") => Instruction::SHIFT(1));
+        insert!(m: Caseless("SAR") => Instruction::SHIFT(2));
+        
+        insert!(m: Caseless("ROL") => Instruction::SHIFT(3));
+        insert!(m: Caseless("ROR") => Instruction::SHIFT(4));
+        insert!(m: Caseless("RCL") => Instruction::SHIFT(5));
+        insert!(m: Caseless("RCR") => Instruction::SHIFT(6));
+
+        insert!(m: Caseless("SHLX") => Instruction::SHIFTX(7));
+        insert!(m: Caseless("SHRX") => Instruction::SHIFTX(8));
+        insert!(m: Caseless("SARX") => Instruction::SHIFTX(9));
 
         alias!(m: Caseless("SAL") => Caseless("SHL"));
+        alias!(m: Caseless("SALX") => Caseless("SHLX"));
 
         insert!(m: Caseless("MUL") => Instruction::MUL);
         insert!(m: Caseless("IMUL") => Instruction::IMUL);
