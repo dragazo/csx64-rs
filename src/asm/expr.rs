@@ -100,6 +100,7 @@ fn test_invalid_op_decode() {
 pub enum ValueType {
     Logical,
     Pointer,
+    Character,
     Integer,
     Float,
     Binary,
@@ -109,6 +110,7 @@ pub enum ValueType {
 pub enum Value {
     Logical(bool),
     Pointer(u64),
+    Character(char),
     Integer(Integer),
     Float(Float),
     Binary(Vec<u8>),
@@ -124,16 +126,20 @@ impl BinaryWrite for Value {
                 2u8.bin_write(f)?;
                 v.bin_write(f)
             }
-            Value::Integer(v) => {
+            Value::Character(v) => {
                 3u8.bin_write(f)?;
                 v.bin_write(f)
             }
-            Value::Float(v) => {
+            Value::Integer(v) => {
                 4u8.bin_write(f)?;
                 v.bin_write(f)
             }
-            Value::Binary(v) => {
+            Value::Float(v) => {
                 5u8.bin_write(f)?;
+                v.bin_write(f)
+            }
+            Value::Binary(v) => {
+                6u8.bin_write(f)?;
                 v.bin_write(f)
             }
         }
@@ -145,9 +151,10 @@ impl BinaryRead for Value {
             0 => Ok(Value::Logical(false)),
             1 => Ok(Value::Logical(true)),
             2 => Ok(Value::Pointer(BinaryRead::bin_read(f)?)),
-            3 => Ok(Value::Integer(BinaryRead::bin_read(f)?)),
-            4 => Ok(Value::Float(BinaryRead::bin_read(f)?)),
-            5 => Ok(Value::Binary(BinaryRead::bin_read(f)?)),
+            3 => Ok(Value::Character(BinaryRead::bin_read(f)?)),
+            4 => Ok(Value::Integer(BinaryRead::bin_read(f)?)),
+            5 => Ok(Value::Float(BinaryRead::bin_read(f)?)),
+            6 => Ok(Value::Binary(BinaryRead::bin_read(f)?)),
             _ => Err(io::ErrorKind::InvalidData.into()),
         }
     }
@@ -155,6 +162,11 @@ impl BinaryRead for Value {
 impl From<bool> for Value {
     fn from(val: bool) -> Self {
         Value::Logical(val)
+    }
+}
+impl From<char> for Value {
+    fn from(val: char) -> Self {
+        Value::Character(val)
     }
 }
 impl From<Integer> for Value {
@@ -189,6 +201,7 @@ impl Value {
         match self {
             Value::Logical(_) => ValueType::Logical,
             Value::Pointer(_) => ValueType::Pointer,
+            Value::Character(_) => ValueType::Character,
             Value::Integer(_) => ValueType::Integer,
             Value::Float(_) => ValueType::Float,
             Value::Binary(_) => ValueType::Binary,
@@ -220,20 +233,24 @@ impl BinaryWrite for ExprData {
                 0xfdu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Value(Value::Integer(value)) => {
+            ExprData::Value(Value::Character(value)) => {
                 0xfcu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Value(Value::Float(value)) => {
+            ExprData::Value(Value::Integer(value)) => {
                 0xfbu8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Value(Value::Binary(value)) => {
+            ExprData::Value(Value::Float(value)) => {
                 0xfau8.bin_write(f)?;
                 value.bin_write(f)
             }
-            ExprData::Ident(ident) => {
+            ExprData::Value(Value::Binary(value)) => {
                 0xf9u8.bin_write(f)?;
+                value.bin_write(f)
+            }
+            ExprData::Ident(ident) => {
+                0xf8u8.bin_write(f)?;
                 ident.bin_write(f)
             }
             ExprData::Uneval { op, left, right } => {
@@ -259,10 +276,11 @@ impl BinaryRead for ExprData {
             0xff => Ok(false.into()),
             0xfe => Ok(true.into()),
             0xfd => Ok(Value::Pointer(BinaryRead::bin_read(f)?).into()),
-            0xfc => Ok(Value::Integer(BinaryRead::bin_read(f)?).into()),
-            0xfb => Ok(Value::Float(BinaryRead::bin_read(f)?).into()),
-            0xfa => Ok(Value::Binary(BinaryRead::bin_read(f)?).into()),
-            0xf9 => Ok(ExprData::Ident(String::bin_read(f)?)),
+            0xfc => Ok(Value::Character(BinaryRead::bin_read(f)?).into()),
+            0xfb => Ok(Value::Integer(BinaryRead::bin_read(f)?).into()),
+            0xfa => Ok(Value::Float(BinaryRead::bin_read(f)?).into()),
+            0xf9 => Ok(Value::Binary(BinaryRead::bin_read(f)?).into()),
+            0xf8 => Ok(ExprData::Ident(String::bin_read(f)?)),
             x => match OP::from_u8(x & 0x7f) {
                 None => Err(io::ErrorKind::InvalidData.into()),
                 Some(op) => {

@@ -110,7 +110,7 @@ fn test_mov_basic() {
     mov ebx, 0xfe630756
     syscall
     times 256 nop
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -251,7 +251,7 @@ fn test_mov() {
     align 4
     dest1: resd 1
     dest2: resd 1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -294,7 +294,7 @@ fn test_mov_cc() {
     xor eax, eax
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -345,7 +345,7 @@ fn test_add() {
     syscall
     segment data
     val: dq 0x623
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -425,7 +425,7 @@ fn test_sub_cmp() {
     mov eax, 0
     mov ebx, -1
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -491,7 +491,7 @@ fn test_and_or_xor_test() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -532,7 +532,7 @@ fn test_binary_high_regs() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -571,7 +571,7 @@ fn test_binary_addr_imm_size_combos() {
 
     segment bss
     val: resq 1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -657,7 +657,7 @@ fn test_lea() {
     mov eax, 0
     mov ebx, 0
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -771,7 +771,7 @@ fn test_xchg() {
 
     segment data
     val: dq 0x3543
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -850,7 +850,7 @@ fn test_jmp() {
 
     segment rodata
     finally: dq stop
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -902,7 +902,7 @@ fn test_jcc() {
 
     segment rodata
     finally: dq stop
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -949,7 +949,7 @@ fn test_call_ret_loop() {
     ret
     times 16 nop
     hlt
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -992,7 +992,7 @@ fn test_push_pop() {
     segment data
     thing: dq 0x0102030405060708
     other: dq -1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1023,7 +1023,7 @@ fn test_stack_underflow() {
     let exe = asm_unwrap_link_unwrap!(r"
     segment text
     pop ax
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1045,7 +1045,7 @@ fn test_stack_overflow() {
     
     segment bss
     thing: resb 1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1083,7 +1083,7 @@ fn test_inc() {
 
     segment data
     val: dw 0x7fff
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1134,7 +1134,7 @@ fn test_dec() {
 
     segment data
     val: dw 0x8000
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1180,7 +1180,7 @@ fn test_neg() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1215,7 +1215,7 @@ fn test_not() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1255,7 +1255,7 @@ fn test_mul_1() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1305,7 +1305,7 @@ fn test_mul_2() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1348,7 +1348,7 @@ fn test_mul_3() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1395,7 +1395,7 @@ fn test_mulx() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1450,7 +1450,7 @@ fn test_imul_1() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1500,7 +1500,7 @@ fn test_imul_2() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1543,7 +1543,7 @@ fn test_imul_3() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1590,7 +1590,7 @@ fn test_imulx() {
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1649,7 +1649,7 @@ fn test_div() {
 
     segment rodata
     leet: dq 1337
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1692,7 +1692,7 @@ fn test_div_errors() {
     ];
     let mut e = Emulator::new();
     for &(prog, expected) in tests {
-        let exe = asm_unwrap_link_unwrap!(prog.to_owned() => None);
+        let exe = asm_unwrap_link_unwrap!(prog);
         e.init(&exe, &Default::default());
         assert_eq!(e.get_state(), State::Running);
         assert_eq!(e.execute_cycles(u64::MAX), expected);
@@ -1725,7 +1725,7 @@ fn test_idiv() {
 
     segment rodata
     leet: dq -1337
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1768,7 +1768,7 @@ fn test_idiv_errors() {
     ];
     let mut e = Emulator::new();
     for &(prog, expected) in tests {
-        let exe = asm_unwrap_link_unwrap!(prog.to_owned() => None);
+        let exe = asm_unwrap_link_unwrap!(prog);
         e.init(&exe, &Default::default());
         assert_eq!(e.get_state(), State::Running);
         assert_eq!(e.execute_cycles(u64::MAX), expected);
@@ -1820,7 +1820,7 @@ fn test_bit_regops() {
 
     segment rodata
     leet: dq -1337
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -1908,7 +1908,7 @@ fn test_shl() {
     segment rodata
     sixteen: db 16
     one: db 1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2025,7 +2025,7 @@ fn test_shr() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2139,7 +2139,7 @@ fn test_sar() {
     segment rodata
     one: db 1
     thirtytwo: db 32
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2244,7 +2244,7 @@ fn test_shlx() {
     segment rodata
     sixteen: db 16
     one: db 1
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2358,7 +2358,7 @@ fn test_shrx() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2471,7 +2471,7 @@ fn test_sarx() {
     segment rodata
     one: db 1
     thirtytwo: db 32
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2547,7 +2547,7 @@ fn test_rol() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2594,7 +2594,7 @@ fn test_ror() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2674,7 +2674,7 @@ fn test_rcl() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2769,7 +2769,7 @@ fn test_rcr() {
     mov eax, sys_exit
     xor ebx, ebx
     syscall
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -2805,6 +2805,54 @@ fn test_rcr() {
     assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rax(), 0x40a1b2331c3b2a3a);
     assert_eq!(e.flags.0 & mask!(Flags: MASK_SF | MASK_ZF | MASK_PF | MASK_CF | MASK_OF), mask!(Flags: MASK_PF | MASK_CF | MASK_OF));
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
+fn test_setcc() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    clc
+    setc eax
+    hlt
+    stc
+    setc eax
+    hlt
+    mov eax, 358485
+    cmp eax, 0
+    sets qword ptr [val]
+    mov rbx, [val]
+    hlt
+    mov ah, -5
+    cmp ah, 0
+    setl byte ptr [val]
+    mov bh, [val]
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment data
+    val: dq 3572785835
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 358485);
+    assert_eq!(e.cpu.get_rbx(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_ah(), 5u8.wrapping_neg());
+    assert_eq!(e.cpu.get_bh(), 1);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
 }

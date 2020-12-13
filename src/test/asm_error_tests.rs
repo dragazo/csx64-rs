@@ -1,30 +1,29 @@
-use super::*;
 use crate::asm::{*, expr::ValueType};
 use crate::asm::expr::*;
 
 #[test]
 fn test_empty_source() {
-    if let Err(e) = assemble("test.asm", &mut readable("".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
 }
 
 #[test]
 fn test_shebang() {
-    if let Err(e) = assemble("test.asm", &mut readable("#!csx -s".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "#!csx -s".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    if let Ok(_) = assemble("test.asm", &mut readable("\n#!csx -s".into()), Default::default()) {
+    if let Ok(_) = assemble("test.asm", &mut "\n#!csx -s".as_bytes(), Default::default()) {
         panic!();
     }
 }
 
 #[test]
 fn test_segment() {
-    if let Err(e) = assemble("test.asm", &mut readable("segMent tExT".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "segMent tExT".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("segment eegrf".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment eegrf".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ExpectedSegment));
@@ -33,7 +32,7 @@ fn test_segment() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text dsdef".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text dsdef".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ExtraContentAfterArgs));
@@ -42,7 +41,7 @@ fn test_segment() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text, dsdef".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text, dsdef".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[1])));
@@ -51,7 +50,7 @@ fn test_segment() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment tExT\nsegment text".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment tExT\nsegment text".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::SegmentAlreadyCompleted));
@@ -60,10 +59,10 @@ fn test_segment() {
             assert!(e.inner_err.is_none());
         }
     }
-    if let Err(e) = assemble("test.asm", &mut readable("segment tExT\nsegment data\nsegment rodata\nsegment bss".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "segment tExT\nsegment data\nsegment rodata\nsegment bss".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("segment tExT\nlabel: segment data".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment tExT\nlabel: segment data".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::LabelOnSegmentLine));
@@ -76,7 +75,7 @@ fn test_segment() {
 
 #[test]
 fn test_ins_outside_text_seg() {
-    match assemble("test.asm", &mut readable("mov eax, 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "mov eax, 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::InstructionOutsideOfTextSegment));
@@ -85,7 +84,7 @@ fn test_ins_outside_text_seg() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment data\nmov eax, 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment data\nmov eax, 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::InstructionOutsideOfTextSegment));
@@ -94,7 +93,7 @@ fn test_ins_outside_text_seg() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment rodata\nmov eax, 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment rodata\nmov eax, 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::InstructionOutsideOfTextSegment));
@@ -103,7 +102,7 @@ fn test_ins_outside_text_seg() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment bss\nmov eax, 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment bss\nmov eax, 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::InstructionOutsideOfTextSegment));
@@ -116,10 +115,10 @@ fn test_ins_outside_text_seg() {
 
 #[test]
 fn test_no_arg_ops() {
-    if let Err(e) = assemble("test.asm", &mut readable("segment text\nnop".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "segment text\nnop".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("segment text\nnop 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nnop 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[0])));
@@ -132,10 +131,10 @@ fn test_no_arg_ops() {
 
 #[test]
 fn test_binary_ops() {
-    if let Err(e) = assemble("test.asm", &mut readable("segment text\nmov rax, 0".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "segment text\nmov rax, 0".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("segment text\n   mov rax, 0 0".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\n   mov rax, 0 0".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ExtraContentAfterArgs));
@@ -144,17 +143,17 @@ fn test_binary_ops() {
             assert!(e.inner_err.is_none());
         }
     }
-    if let Err(e) = assemble("test.asm", &mut readable("segment text\n   mov rax,0;0".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "segment text\n   mov rax,0;0".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
 }
 
 #[test]
 fn test_assert() {
-    if let Err(e) = assemble("test.asm", &mut readable("static_assert true".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "static_assert true".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("static_assert qword true".into()), Default::default()) {
+    match assemble("test.asm", &mut "static_assert qword true".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::AssertArgHadSizeSpec));
@@ -163,7 +162,7 @@ fn test_assert() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("  static_assert false".into()), Default::default()) {
+    match assemble("test.asm", &mut "  static_assert false".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::AssertFailure));
@@ -172,7 +171,7 @@ fn test_assert() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("  static_assert abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "  static_assert abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::FailedCriticalExpression(_)));
@@ -181,7 +180,7 @@ fn test_assert() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("  static_assert 1; hello".into()), Default::default()) {
+    match assemble("test.asm", &mut "  static_assert 1; hello".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::AssertArgNotLogical(ValueType::Integer)));
@@ -190,7 +189,7 @@ fn test_assert() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("  static_assert;".into()), Default::default()) {
+    match assemble("test.asm", &mut "  static_assert;".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             assert!(matches!(e.kind, AsmErrorKind::ArgsExpectedCount(&[1])));
@@ -203,10 +202,10 @@ fn test_assert() {
 
 #[test]
 fn test_global_uses_extern() {
-    if let Err(e) = assemble("test.asm", &mut readable("extern abc\nval: equ abc".into()), Default::default()) {
+    if let Err(e) = assemble("test.asm", &mut "extern abc\nval: equ abc".as_bytes(), Default::default()) {
         panic!("{:?}", e);
     }
-    match assemble("test.asm", &mut readable("global val\nextern abc\nval: equ abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "global val\nextern abc\nval: equ abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -224,7 +223,7 @@ fn test_global_uses_extern() {
 
 #[test]
 fn test_double_global_extern() {
-    match assemble("test.asm", &mut readable("global abc\nglobal abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "global abc\nglobal abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -236,7 +235,7 @@ fn test_double_global_extern() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("extern abc\nextern abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "extern abc\nextern abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -248,7 +247,7 @@ fn test_double_global_extern() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("global abc, abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "global abc, abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -260,7 +259,7 @@ fn test_double_global_extern() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("extern abc, abc".into()), Default::default()) {
+    match assemble("test.asm", &mut "extern abc, abc".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -276,7 +275,7 @@ fn test_double_global_extern() {
 
 #[test]
 fn test_addr_8bit() {
-    match assemble("test.asm", &mut readable("segment text\nmov eax, [ah + al]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nmov eax, [ah + al]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -288,7 +287,7 @@ fn test_addr_8bit() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nmov eax, [al]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nmov eax, [al]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -300,7 +299,7 @@ fn test_addr_8bit() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nmov eax, [byte 0]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nmov eax, [byte 0]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -316,7 +315,7 @@ fn test_addr_8bit() {
 
 #[test]
 fn test_bad_addr() {
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [rax + rbx + rcx]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [rax + rbx + rcx]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -328,7 +327,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [dword bx]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [dword bx]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -340,7 +339,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [bx + rcx]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [bx + rcx]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -352,7 +351,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [2*rax + 2*rbx]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [2*rax + 2*rbx]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -364,7 +363,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [6*rax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [6*rax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -376,7 +375,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [0*eax + 1*rax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [0*eax + 1*rax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -388,7 +387,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [1 / eax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [1 / eax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -400,7 +399,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax >> 2]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [eax >> 2]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -412,7 +411,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax * eax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [eax * eax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
             assert_eq!(e.line_num, 2);
@@ -420,7 +419,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [eax * ebx]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [eax * ebx]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
             assert_eq!(e.line_num, 2);
@@ -428,7 +427,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [ebx * eax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [ebx * eax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => { // TODO: at this point i'm not 100% sure what the error message should be - for now, just make sure this fails
             assert_eq!(e.line_num, 2);
@@ -436,7 +435,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [2.0 * rax]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [2.0 * rax]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -451,7 +450,7 @@ fn test_bad_addr() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, []".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, []".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -470,7 +469,7 @@ fn test_bad_addr() {
             assert!(inner.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nlea rax, [dword]".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nlea rax, [dword]".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -493,7 +492,7 @@ fn test_bad_addr() {
 
 #[test]
 fn test_late_expr_errors() {
-    match assemble("test.asm", &mut readable("val: equ 1.0 + foo\nfoo: equ 2\n\n\n\n\n\n\n\n\n\n".into()), Default::default()) {
+    match assemble("test.asm", &mut "val: equ 1.0 + foo\nfoo: equ 2\n\n\n\n\n\n\n\n\n\n".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -509,7 +508,7 @@ fn test_late_expr_errors() {
 
 #[test]
 fn test_value_unknown_size() {
-    match assemble("test.asm", &mut readable("segment text\npush 5".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\npush 5".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -521,7 +520,7 @@ fn test_value_unknown_size() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nmul 5".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nmul 5".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {
@@ -533,7 +532,7 @@ fn test_value_unknown_size() {
             assert!(e.inner_err.is_none());
         }
     }
-    match assemble("test.asm", &mut readable("segment text\nimul 5".into()), Default::default()) {
+    match assemble("test.asm", &mut "segment text\nimul 5".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
             match e.kind {

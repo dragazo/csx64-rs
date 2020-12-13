@@ -351,7 +351,8 @@ pub(super) enum Instruction {
     DECLARE(Size), RESERVE(Size),
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
-    MOV, MOVcc(u8), LEA, XCHG, FLAGBIT(u8),
+    MOV, MOVcc(u8), SETcc(u8), LEA, XCHG,
+    FLAGBIT(u8),
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
     SHIFT(u8), SHIFTX(u8),
@@ -453,6 +454,38 @@ lazy_static! {
         
         insert!(m: Caseless("LEA") => Instruction::LEA);
         insert!(m: Caseless("XCHG") => Instruction::XCHG);
+
+        insert!(m: Caseless("SETZ") => Instruction::SETcc(0));
+        insert!(m: Caseless("SETNZ") => Instruction::SETcc(1));
+        insert!(m: Caseless("SETS") => Instruction::SETcc(2));
+        insert!(m: Caseless("SETNS") => Instruction::SETcc(3));
+        insert!(m: Caseless("SETP") => Instruction::SETcc(4));
+        insert!(m: Caseless("SETNP") => Instruction::SETcc(5));
+        insert!(m: Caseless("SETO") => Instruction::SETcc(6));
+        insert!(m: Caseless("SETNO") => Instruction::SETcc(7));
+        insert!(m: Caseless("SETC") => Instruction::SETcc(8));
+        insert!(m: Caseless("SETNC") => Instruction::SETcc(9));
+        insert!(m: Caseless("SETB") => Instruction::SETcc(10));
+        insert!(m: Caseless("SETBE") => Instruction::SETcc(11));
+        insert!(m: Caseless("SETA") => Instruction::SETcc(12));
+        insert!(m: Caseless("SETAE") => Instruction::SETcc(13));
+        insert!(m: Caseless("SETL") => Instruction::SETcc(14));
+        insert!(m: Caseless("SETLE") => Instruction::SETcc(15));
+        insert!(m: Caseless("SETG") => Instruction::SETcc(16));
+        insert!(m: Caseless("SETGE") => Instruction::SETcc(17));
+
+        alias!(m: Caseless("SETE") => Caseless("SETZ"));
+        alias!(m: Caseless("SETNE") => Caseless("SETNZ"));
+        alias!(m: Caseless("SETPE") => Caseless("SETP"));
+        alias!(m: Caseless("SETPO") => Caseless("SETNP"));
+        alias!(m: Caseless("SETNAE") => Caseless("SETB"));
+        alias!(m: Caseless("SETNA") => Caseless("SETBE"));
+        alias!(m: Caseless("SETBNE") => Caseless("SETA"));
+        alias!(m: Caseless("SETNB") => Caseless("SETAE"));
+        alias!(m: Caseless("SETNGE") => Caseless("SETL"));
+        alias!(m: Caseless("SETNG") => Caseless("SETLE"));
+        alias!(m: Caseless("SETNLE") => Caseless("SETG"));
+        alias!(m: Caseless("SETNL") => Caseless("SETGE"));
 
         insert!(m: Caseless("STAC") => Instruction::FLAGBIT(0));
         insert!(m: Caseless("CLAC") => Instruction::FLAGBIT(1));

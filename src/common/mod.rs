@@ -22,7 +22,7 @@ pub enum OPCode
     SYSCALL,
 
     LEA,
-    MOV, MOVcc, XCHG,
+    MOV, MOVcc, SETcc, XCHG,
     REGOP,
 
     AND, OR, XOR, TEST, BITWISE,
@@ -43,7 +43,6 @@ pub enum OPCode
 
     
 
-    // SETcc,
 
     // STLDF,
     // FlagManip,

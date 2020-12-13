@@ -165,7 +165,7 @@ impl AssembleArgs<'_> {
                         match pos.next() {
                             None => return Err(AsmError { kind: AsmErrorKind::IncompleteEscape, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None }),
                             Some((_, esc)) => {
-                                if let Some(mapped) = match esc {
+                                let mapped = match esc {
                                     '\\' => Some('\\'),
                                     '\'' => Some('\''),
                                     '"' => Some('"'),
@@ -186,7 +186,8 @@ impl AssembleArgs<'_> {
                                         None
                                     }
                                     _ => return Err(AsmError { kind: AsmErrorKind::InvalidEscape, line_num: self.line_num, pos: Some(raw_start + p), inner_err: None }),
-                                } {
+                                };
+                                if let Some(mapped) = mapped {
                                     res.extend(mapped.encode_utf8(&mut buf).as_bytes());
                                 }
                             }
@@ -246,6 +247,7 @@ impl AssembleArgs<'_> {
                     Some((_, x)) if x.is_whitespace() || x == '+' => (), // whitespace and unary plus do nothing
                     Some((_, '-')) => unary_stack.push(OP::Neg),         // push unary ops onto the stack
                     Some((_, '!')) => unary_stack.push(OP::Not),
+                    Some((p, '~')) => return Err(AsmError { kind: AsmErrorKind::UseOfTildeNot, line_num: self.line_num, pos: Some(parsing_pos + p), inner_err: None }),
                     Some((p, c)) => break (parsing_pos + p, c.is_digit(10)), // otherwise is a token, which also means end of term
                 }
                 chars.next(); // if we get here, we consumed it
@@ -390,10 +392,25 @@ impl AssembleArgs<'_> {
                         }
                     }
                 }
-                '\'' | '"' => { // if it's a string literal
+                str_char @ '\'' | str_char @ '"' => {
                     debug_assert_eq!(term.chars().rev().next().unwrap(), term.chars().next().unwrap()); // first and last char should be the same
                     let (content, _) = self.extract_string(raw_line, term_start, term_stop)?;
-                    ExprData::Value(Value::Binary(content)).into()
+                    match str_char {
+                        '"' => ExprData::Value(Value::Binary(content)).into(),
+                        '\'' => match String::from_utf8(content) {
+                            Err(_) => return Err(AsmError { kind: AsmErrorKind::CharacterLiteralNotUnicode, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
+                            Ok(string) => {
+                                let mut chars = string.chars();
+                                let res = chars.next();
+                                if res.is_none() || chars.next().is_some() {
+                                    return Err(AsmError { kind: AsmErrorKind::CharacterLiteralNotSingleChar, line_num: self.line_num, pos: Some(term_start), inner_err: None });
+                                }
+                                ExprData::Value(Value::Character(res.unwrap())).into()
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    
                 }
                 '0'..='9' => { // if it's a numeric constant
                     let (term_fix, radix) = match term { // check for radix prefix and remove it if present
@@ -1603,7 +1620,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("  'hello world'  ", 1, 17) {
+    match c.extract_expr("  \"hello world\"  ", 1, 17) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 15);
             match expr.into_eval(&c.file.symbols).unwrap() {
@@ -1613,7 +1630,7 @@ fn test_extr_expr() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_expr("  'hello;world'  ", 1, 17) {
+    match c.extract_expr("  \"hello;world\"  ", 1, 17) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 15);
             match expr.into_eval(&c.file.symbols).unwrap() {
@@ -2185,7 +2202,7 @@ fn test_parse_arg() {
             assert!(matches!(e.kind, AsmErrorKind::ExpectedExprTerm));
         }
     }
-    match c.extract_arg("  '[]'  ", 1, 8) {
+    match c.extract_arg("  \"[]\"  ", 1, 8) {
         Ok((x, aft)) => {
             assert_eq!(aft, 6);
             match x {
@@ -2201,7 +2218,7 @@ fn test_parse_arg() {
         }
         Err(e) => panic!("{:?}", e),
     }
-    match c.extract_arg("  dword '[]'  ", 1, 14) {
+    match c.extract_arg("  dword \"[]\"  ", 1, 14) {
         Ok((x, aft)) => {
             assert_eq!(aft, 12);
             match x {
@@ -2216,6 +2233,48 @@ fn test_parse_arg() {
             }
         }
         Err(e) => panic!("{:?}", e),
+    }
+}
+#[test]
+fn test_tilde_parse() {
+    let mut c = create_context();
+    match c.extract_arg("  !32  ", 1, 7) {
+        Ok((x, aft)) => {
+            assert_eq!(aft, 5);
+            match x {
+                Argument::Imm(imm) => {
+                    assert_eq!(imm.size, None);
+                    match &*imm.expr.eval(&c.file.symbols).unwrap() {
+                        Value::Integer(v) => assert_eq!(*v, !32),
+                        x => panic!("{:?}", x),
+                    }
+                }
+                _ => panic!("{:?}", x),
+            }
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+    match c.extract_arg("  ~32  ", 1, 7) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, Some(2));
+            assert!(e.inner_err.is_none());
+            match e.kind {
+                AsmErrorKind::UseOfTildeNot => (),
+                x => panic!("{:?}", x),
+            }
+        }
+    }
+    match c.extract_arg("      +  --~-32  ", 3, 17) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert_eq!(e.pos, Some(11));
+            assert!(e.inner_err.is_none());
+            match e.kind {
+                AsmErrorKind::UseOfTildeNot => (),
+                x => panic!("{:?}", x),
+            }
+        }
     }
 }
 #[test]

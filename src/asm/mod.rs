@@ -96,6 +96,8 @@ pub enum AsmErrorKind {
     ExpectedCommaBeforeToken,
     UnrecognizedMacroInvocation,
 
+    UseOfTildeNot,
+
     IllFormedNumericLiteral,
     NumericLiteralWithZeroPrefix,
     
@@ -105,6 +107,9 @@ pub enum AsmErrorKind {
 
     ExpectedBinaryValue,
     EmptyBinaryValue,
+
+    CharacterLiteralNotUnicode,
+    CharacterLiteralNotSingleChar,
 
     LabelOutsideOfSegment,
     SymbolAlreadyDefined,
@@ -215,6 +220,7 @@ pub enum LinkError {
     EntryPointTargetNotValidIdent,
     EntryPointTargetWasReservedSymbol,
     EntryPointTargetAlreadyExisted,
+    EntryPointTargetNotDefined,
 
     GlobalSymbolMultipleSources { ident: String, src1: (String, usize), src2: (String, usize) },
     ExternSymbolNotDefined { ident: String, required_by: String },
@@ -339,6 +345,7 @@ fn test_reserved_symname() {
     assert!(is_reserved_symbol_name("False"));
     assert!(is_reserved_symbol_name("nUll"));
     assert!(is_reserved_symbol_name("pTr"));
+    assert!(!is_reserved_symbol_name("main"));
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -714,6 +721,25 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
     };
 
     match &*val {
+        Value::Character(v) => {
+            if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
+                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
+            }
+            let iv = *v as u32;
+            match hole.size {
+                Size::Byte => {
+                    if iv > u8::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    segment_write_bin(seg, &(iv as u8).to_le_bytes(), hole.address)
+                }
+                Size::Word => {
+                    if iv > u16::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    segment_write_bin(seg, &(iv as u16).to_le_bytes(), hole.address)
+                }
+                Size::Dword => segment_write_bin(seg, &(iv as u32).to_le_bytes(), hole.address),
+                Size::Qword => segment_write_bin(seg, &(iv as u64).to_le_bytes(), hole.address),
+                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
+            }
+        }
         Value::Integer(v) => {
             if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
@@ -1186,6 +1212,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 args.append_address(addr)?;
                             }
                             Instruction::XCHG => args.process_binary_lvalue_unordered_op(arguments, OPCode::XCHG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
+                            Instruction::SETcc(ext) => args.process_unary_op(arguments, OPCode::SETcc as u8, Some(ext), &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::FLAGBIT(ext) => args.process_no_arg_op(arguments, Some(OPCode::REGOP as u8), Some(ext))?,
 
                             Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
@@ -1294,7 +1321,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         if !objs[0].1.extern_symbols.contains_key(from) { return Err(LinkError::EntryPointSourceNotExtern); }
 
         if !is_valid_symbol_name(to) { return Err(LinkError::EntryPointTargetNotValidIdent); }
-        if !is_reserved_symbol_name(to) { return Err(LinkError::EntryPointTargetWasReservedSymbol); }
+        if is_reserved_symbol_name(to) { return Err(LinkError::EntryPointTargetWasReservedSymbol); }
 
         match objs[0].1.rename_symbol(from, to) {
             Ok(()) => (),
@@ -1305,6 +1332,10 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
             }
         }
     }
+    let is_entry_point = |s: &str| match entry_point {
+        None => false,
+        Some((_, p)) => p == s,
+    };
 
     // map all global symbols to their index in objs array - handle duplicate exports
     let mut global_to_obj: HashMap<String, usize> = Default::default();
@@ -1362,7 +1393,10 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         // for any external symbol we have, schedule the (single) associated object file defining it for inclusion
         for (req, _) in obj.extern_symbols.iter() {
             match global_to_obj.get(req) {
-                None => return Err(LinkError::ExternSymbolNotDefined { ident: req.to_owned(), required_by: obj_name.to_owned() }),
+                None => match is_entry_point(req) {
+                    false => return Err(LinkError::ExternSymbolNotDefined { ident: req.to_owned(), required_by: obj_name.to_owned() }),
+                    true => return Err(LinkError::EntryPointTargetNotDefined),
+                }
                 Some(other_index) => if !included.contains_key(other_index) && !include_queue.contains(other_index) {
                     include_queue.push_back(*other_index); // only schedule for inclusion if not already included and not already scheduled
                 }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::asm::*;
 use crate::exec::*;
 use crate::exec::fs::*;
 
@@ -20,18 +19,18 @@ fn setup_standard_memory_streams(e: &mut Emulator) -> (StdStream, StdStream, Std
 
 #[test]
 fn test_write() {
-    let exe = asm_unwrap_link_unwrap!(r"
+    let exe = asm_unwrap_link_unwrap!(r#"
     segment text
     mov eax, sys_write
     mov ebx, 1 ; stdout
-    mov rcx, $bin('hello world\n\0hello')
+    mov rcx, $bin("hello world\n\0hello")
     mov edx, 18
     syscall
     hlt
     xor rax, rax
     xor rbx, rbx
     syscall
-    ".to_owned() => None);
+    "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
@@ -67,7 +66,7 @@ fn test_read() {
     segment bss
     buf: resb 1024
     .len: equ $-buf
-    ".to_owned() => None);
+    ");
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);

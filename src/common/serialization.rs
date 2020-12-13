@@ -100,6 +100,20 @@ macro_rules! extended_int_impl {
 }
 extended_int_impl!(usize => u64, isize => i64);
 
+impl BinaryWrite for char {
+    fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
+        (*self as u32).bin_write(f)
+    }
+}
+impl BinaryRead for char {
+    fn bin_read<F: Read>(f: &mut F) -> io::Result<char> {
+        match std::char::from_u32(u32::bin_read(f)?) {
+            None => Err(io::ErrorKind::InvalidData.into()),
+            Some(c) => Ok(c),
+        }
+    }
+}
+
 #[test]
 fn test_serialize_int() {
     let vals = [u64::MIN, u64::MAX, 0xdeadbeefdeadbeef, 0x0102030405060708];
