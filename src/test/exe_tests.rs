@@ -1,5 +1,4 @@
 use super::*;
-use crate::asm::*;
 use crate::exec::*;
 use crate::exec::registers::Flags;
 

@@ -927,10 +927,10 @@ impl Default for Predefines {
         let mut symbols: SymbolTable<()> = Default::default();
 
         symbols.define("sys_exit".to_owned(), (Syscall::Exit as u64).into(), ()).unwrap();
-
         symbols.define("sys_read".to_owned(), (Syscall::Read as u64).into(), ()).unwrap();
         symbols.define("sys_write".to_owned(), (Syscall::Write as u64).into(), ()).unwrap();
-        symbols.define("sys_seek".to_owned(), (Syscall::Seek as u64).into(), ()).unwrap();
+        symbols.define("sys_lseek".to_owned(), (Syscall::Seek as u64).into(), ()).unwrap();
+        symbols.define("sys_brk".to_owned(), (Syscall::Break as u64).into(), ()).unwrap();
 
         Predefines::from(symbols)
     }

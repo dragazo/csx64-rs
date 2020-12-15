@@ -84,3 +84,91 @@ fn test_read() {
     assert_eq!(stdout.lock().unwrap().get_ref(), "him name greg\n".as_bytes());
     assert_eq!(stderr.lock().unwrap().get_ref(), "".as_bytes());
 }
+
+#[test]
+fn test_brk() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov eax, sys_brk
+    mov ebx, 0
+    syscall
+    hlt
+    mov eax, sys_brk
+    mov ebx, 1
+    syscall
+    hlt
+    mov eax, sys_brk
+    lea rbx, [rbp - 1]
+    syscall
+    hlt
+    mov eax, sys_brk
+    mov rbx, !0
+    syscall
+    hlt
+    mov eax, sys_brk
+    mov rbx, rbp
+    syscall
+    hlt
+    mov eax, sys_brk
+    lea rbx, [rbp + 107]
+    syscall
+    hlt
+    mov eax, sys_brk
+    xor ebx, ebx
+    syscall
+    hlt
+    mov eax, sys_brk
+    lea rbx, [rbp + 66]
+    syscall
+    hlt
+    mov eax, sys_brk
+    lea rbx, [rbp - 1]
+    syscall
+    hlt
+    xor rax, rax
+    xor rbx, rbx
+    syscall
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let base = e.cpu.get_rbp();
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), base);
+    assert_eq!(e.memory.len() as u64, base);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), !0);
+    assert_eq!(e.memory.len() as u64, base);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), !0);
+    assert_eq!(e.memory.len() as u64, base);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), !0);
+    assert_eq!(e.memory.len() as u64, base);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.memory.len() as u64, base);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.memory.len() as u64, base + 107);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), base + 107);
+    assert_eq!(e.memory.len() as u64, base + 107);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.memory.len() as u64, base + 66);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), !0);
+    assert_eq!(e.memory.len() as u64, base + 66);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}

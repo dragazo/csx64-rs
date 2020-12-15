@@ -640,6 +640,8 @@ impl Emulator {
                                 Syscall::Read => self.exec_sys_read(),
                                 Syscall::Write => self.exec_sys_write(),
                                 Syscall::Seek => unimplemented!(),
+
+                                Syscall::Break => self.exec_sys_brk(),
                             }
                         }
 
@@ -843,6 +845,27 @@ impl Emulator {
             }
         };
         self.cpu.set_rax(count);
+        Ok(())
+    }
+
+    fn exec_sys_brk(&mut self) -> Result<(), ExecError> {
+        let pos = self.cpu.get_rbx();
+        if pos == 0 {
+            self.cpu.set_rax(self.memory.len() as u64);
+            return Ok(());
+        }
+        if pos > usize::MAX as u64 {
+            self.cpu.set_rax(!0);
+            return Ok(());
+        }
+        let pos = pos as usize;
+        if pos < self.memory.min || pos > self.memory.max {
+            self.cpu.set_rax(!0);
+            return Ok(());
+        }
+        self.reallocate_random(pos);
+        debug_assert_eq!(self.memory.len(), pos);
+        self.cpu.set_rax(0);
         Ok(())
     }
 

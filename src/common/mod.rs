@@ -114,6 +114,7 @@ pub enum Syscall {
     /// This effectively means the program terminated rather than crashing.
     Exit,
     Read, Write, Seek,
+    Break,
 }
 
 /// An executable file for use by the [`Emulator`].
