@@ -355,7 +355,7 @@ pub(super) enum Instruction {
     FLAGBIT(u8),
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
-    SHIFT(u8), SHIFTX(u8),
+    SHIFT(u8), SHIFTX(u8), BTX(u8),
     MUL, IMUL, MULX, IMULX, DIV, IDIV,
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
@@ -524,6 +524,11 @@ lazy_static! {
 
         alias!(m: Caseless("SAL") => Caseless("SHL"));
         alias!(m: Caseless("SALX") => Caseless("SHLX"));
+
+        insert!(m: Caseless("BT") => Instruction::BTX(10));
+        insert!(m: Caseless("BTC") => Instruction::BTX(11));
+        insert!(m: Caseless("BTR") => Instruction::BTX(12));
+        insert!(m: Caseless("BTS") => Instruction::BTX(13));
 
         insert!(m: Caseless("MUL") => Instruction::MUL);
         insert!(m: Caseless("IMUL") => Instruction::IMUL);

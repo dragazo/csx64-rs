@@ -2212,10 +2212,10 @@ fn test_shlx() {
     hlt
     shlx eax, eax, 14
     hlt
-    mov dh, 1
-    shlx ebx, eax, dh
+    mov dl, 1
+    shlx ebx, eax, edx
     hlt
-    shlx eax, ebx, dh
+    shlx eax, ebx, edx
     hlt
     shlx eax, eax, 1
     hlt
@@ -2228,7 +2228,7 @@ fn test_shlx() {
     shlx ax, ax, 20
     hlt
     mov ax, 0xffff
-    shlx si, ax, byte ptr [sixteen]
+    shlx si, ax, word ptr [sixteen]
     hlt
     mov ax, 0xfffe
     shlx ax, ax, [sixteen]
@@ -2332,7 +2332,7 @@ fn test_shrx() {
     shrx eax, eax, 1
     hlt
     mov dil, 6
-    shrx eax, eax, dil
+    shrx eax, eax, edi
     hlt
     shrx eax, eax, 5
     hlt
@@ -2429,7 +2429,7 @@ fn test_sarx() {
     sarx ax, ax, 1
     hlt
     mov ax, -2
-    sarx ax, ax, byte ptr [one]
+    sarx ax, ax, word ptr [one]
     hlt
     mov ax, 0x7800
     sarx ax, ax, 11
@@ -2447,15 +2447,15 @@ fn test_sarx() {
     sarx eax, eax, 40
     hlt
     mov ax, 0x4837
-    mov bh, 30
-    sarx eax, eax, bh
+    mov bl, 30
+    sarx eax, eax, ebx
     hlt
     mov ax, 0x4837
     mov bh, 16
-    sarx eax, eax, bh
+    sarx eax, eax, ebx
     hlt
     mov ax, 0xc837
-    sarx eax, eax, bh
+    sarx eax, eax, ebx
     hlt
     mov eax, 0x40384837
     sarx eax, eax, 32
@@ -2854,4 +2854,347 @@ fn test_setcc() {
     assert_eq!(e.cpu.get_bh(), 1);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+
+#[test]
+fn test_bt() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    call check1
+    call check1
+    call check1
+
+    mov edx, 0xdeadbeef
+    call check2
+
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    check1:
+    xor ecx, ecx
+    .top:
+        bt [arr], ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    check2:
+    xor ecx, ecx
+    .top:
+        bt edx, ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    segment rodata
+    align 4
+    arr: db 0x00, 0x69, 0x20, 0x0f, 0x00, 0xab, 0x56, 0x12, 0xff, 0x3c, 0x12, 0xd7
+    align 4
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    for _ in 0..3 {
+        for &(mut expect32) in &[0x0f206900u32, 0x1256ab00, 0xd7123cff] {
+            for _ in 0..32 {
+                assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+                assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+                expect32 >>= 1;
+            }
+        }
+    }
+
+    for &(mut expect32) in &[0xdeadbeefu32, 0xdeadbeef, 0xdeadbeef] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
+}
+#[test]
+fn test_btc() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov rcx, 0xdeadbeef01020304
+    btc rcx, 53
+    hlt
+    btc rcx, 64
+    hlt
+    btc rcx, 0
+    hlt
+
+    call check1
+    call check1
+    call check1
+
+    mov edx, 0xdeadbeef
+    call check2
+
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    check1:
+    xor ecx, ecx
+    .top:
+        btc [arr], ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    check2:
+    xor ecx, ecx
+    .top:
+        btc edx, ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    segment data
+    align 4
+    arr: db 0x00, 0x69, 0x20, 0x0f, 0x00, 0xab, 0x56, 0x12, 0xff, 0x3c, 0x12, 0xd7
+    align 4
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xde8dbeef01020304);
+    assert!(e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xde8dbeef01020305);
+    assert!(!e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rcx(), 0xde8dbeef01020304);
+    assert!(e.flags.get_cf());
+
+    for &(mut expect32) in &[0x0f206900u32, 0x1256ab00, 0xd7123cff] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+    for &(mut expect32) in &[0xf0df96ffu32, 0xeda954ff, 0x28edc300] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+    for &(mut expect32) in &[0x0f206900u32, 0x1256ab00, 0xd7123cff] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+
+    for &(mut expect32) in &[0xdeadbeefu32, 0x21524110, 0xdeadbeef] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
+}
+#[test]
+fn test_bts() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov cx, 0x5476
+    bts cx, 20
+    hlt
+    bts cx, 9
+    hlt
+    bts cx, 9
+    hlt
+
+    call check1
+    call check1
+    call check1
+
+    mov edx, 0xdeadbeef
+    call check2
+
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    check1:
+    xor ecx, ecx
+    .top:
+        bts [arr], ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    check2:
+    xor ecx, ecx
+    .top:
+        bts edx, ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    segment data
+    align 4
+    arr: db 0x00, 0x69, 0x20, 0x0f, 0x00, 0xab, 0x56, 0x12, 0xff, 0x3c, 0x12, 0xd7
+    align 4
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_cx(), 0x5476);
+    assert!(e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_cx(), 0x5676);
+    assert!(!e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_cx(), 0x5676);
+    assert!(e.flags.get_cf());
+
+    for &(mut expect32) in &[0x0f206900u32, 0x1256ab00, 0xd7123cff] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+    for _ in 0..2 {
+        for &(mut expect32) in &[0xffffffffu32, 0xffffffff, 0xffffffff] {
+            for _ in 0..32 {
+                assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+                assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+                expect32 >>= 1;
+            }
+        }
+    }
+
+    for &(mut expect32) in &[0xdeadbeefu32, 0xffffffff, 0xffffffff] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
+}
+#[test]
+fn test_btr() {
+    let exe = asm_unwrap_link_unwrap!(r"
+    segment text
+    mov dl, 0x67
+    btr dl, 10
+    hlt
+    btr dl, 0
+    hlt
+    btr dl, 0
+    hlt
+
+    call check1
+    call check1
+    call check1
+
+    mov edx, 0xdeadbeef
+    call check2
+
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    check1:
+    xor ecx, ecx
+    .top:
+        btr [arr], ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    check2:
+    xor ecx, ecx
+    .top:
+        btr edx, ecx
+        hlt
+    inc ecx
+    cmp ecx, 96
+    jb .top
+    ret
+
+    segment data
+    align 4
+    arr: db 0x00, 0x69, 0x20, 0x0f, 0x00, 0xab, 0x56, 0x12, 0xff, 0x3c, 0x12, 0xd7
+    align 4
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_dl(), 0x63);
+    assert!(e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_dl(), 0x62);
+    assert!(e.flags.get_cf());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_dl(), 0x62);
+    assert!(!e.flags.get_cf());
+
+    for &(mut expect32) in &[0x0f206900u32, 0x1256ab00, 0xd7123cff] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+    for _ in 0..2 {
+        for &(mut expect32) in &[0u32, 0, 0] {
+            for _ in 0..32 {
+                assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+                assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+                expect32 >>= 1;
+            }
+        }
+    }
+
+    for &(mut expect32) in &[0xdeadbeefu32, 0, 0] {
+        for _ in 0..32 {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.flags.get_cf(), expect32 & 1 != 0);
+            expect32 >>= 1;
+        }
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
 }

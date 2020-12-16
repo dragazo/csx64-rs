@@ -995,7 +995,7 @@ impl AssembleArgs<'_> {
         if let Some(ext) = ext_op { self.append_byte(ext)? }
         Ok(())
     }
-    pub(super) fn process_ternary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_size: Option<Size>) -> Result<(), AsmError> {
+    pub(super) fn process_ternary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_rm_size: Option<Size>, force_b_imm_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
         if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[3]), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
@@ -1022,11 +1022,12 @@ impl AssembleArgs<'_> {
         };
         if mismatched_sizes { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
 
-        self.process_binary_op(vec![arg2, arg3], pseudo_op, None, allowed_type, allowed_sizes, force_b_size) // we validated everything we need, so hand over to the binary formatter
+        // we validated everything we need, so hand over to the binary formatter
+        self.process_binary_op(vec![arg2, arg3], pseudo_op, None, allowed_type, allowed_sizes, force_b_rm_size, force_b_imm_size)
     }
     /// Attempts to assemble an operation which uses the binary op format.
     /// `force_b_size` can be set to artificially force the size of the second argument (e.g. shifts uses an 8-bit second argument regardless of the first argument).
-    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_size: Option<Size>) -> Result<(), AsmError> {
+    pub(super) fn process_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], force_b_rm_size: Option<Size>, force_b_imm_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
         if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
         let mut args = args.into_iter();
@@ -1038,7 +1039,7 @@ impl AssembleArgs<'_> {
 
         match (arg1, arg2) {
             (Argument::CPURegister(dest), Argument::CPURegister(src)) => {
-                match force_b_size {
+                match force_b_rm_size {
                     Some(b_size) => if src.size != b_size { return Err(AsmError { kind: AsmErrorKind::ForcedSizeViolation, line_num: self.line_num, pos: None, inner_err: None }); }
                     None => if src.size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
                 }
@@ -1048,7 +1049,7 @@ impl AssembleArgs<'_> {
             }
             (Argument::CPURegister(dest), Argument::Address(src)) => {
                 if let Some(src_size) = src.pointed_size {
-                    match force_b_size {
+                    match force_b_rm_size {
                         Some(b_size) => if src_size != b_size { return Err(AsmError { kind: AsmErrorKind::ForcedSizeViolation, line_num: self.line_num, pos: None, inner_err: None }); }
                         None => if src_size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); }
                     }
@@ -1059,7 +1060,7 @@ impl AssembleArgs<'_> {
                 self.append_address(src)?;
             }
             (Argument::CPURegister(dest), Argument::Imm(mut src)) => {
-                match (force_b_size, src.size) {
+                match (force_b_imm_size, src.size) {
                     (Some(b_size), Some(src_size)) => if src_size != b_size { return Err(AsmError { kind: AsmErrorKind::ForcedSizeViolation, line_num: self.line_num, pos: None, inner_err: None }); }
                     (Some(b_size), None) => src.size = Some(b_size),
                     (None, Some(src_size)) => if src_size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes, line_num: self.line_num, pos: None, inner_err: None }); },
@@ -1071,7 +1072,7 @@ impl AssembleArgs<'_> {
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
             (Argument::Address(dest), Argument::CPURegister(src)) => {
-                let a_size = match force_b_size {
+                let a_size = match force_b_rm_size {
                     Some(b_size) => {
                         if src.size != b_size { return Err(AsmError { kind: AsmErrorKind::ForcedSizeViolation, line_num: self.line_num, pos: None, inner_err: None }); }
                         match dest.pointed_size {
@@ -1092,7 +1093,7 @@ impl AssembleArgs<'_> {
                 self.append_address(dest)?;
             }
             (Argument::Address(dest), Argument::Imm(mut src)) => {
-                let a_size = match force_b_size {
+                let a_size = match force_b_imm_size {
                     Some(b_size) => {
                         match src.size {
                             Some(size) => if size != b_size { return Err(AsmError { kind: AsmErrorKind::ForcedSizeViolation, line_num: self.line_num, pos: None, inner_err: None }); }

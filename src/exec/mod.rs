@@ -875,9 +875,9 @@ impl Emulator {
     [4: r1][3:][1: r1h]   [binary a b]
     f(r1, a, b)
     */
-    fn read_ternary_op(&mut self, get_a: bool, force_b_sizecode: Option<u8>) -> Result<(u8, u8, u8, u64, u64, u64), ExecError> {
+    fn read_ternary_op(&mut self, get_a: bool, force_b_rm_sizecode: Option<u8>, force_b_imm_sizecode: Option<u8>) -> Result<(u8, u8, u8, u64, u64, u64), ExecError> {
         let s1 = self.get_mem_adv_u8()?;
-        let (s2, s3, m, a, b) = self.read_binary_op(get_a, force_b_sizecode)?;
+        let (s2, s3, m, a, b) = self.read_binary_op(get_a, force_b_rm_sizecode, force_b_imm_sizecode)?;
         Ok((s1, s2, s3, m, a, b))
     }
     fn store_ternary_op_result(&mut self, s1: u8, s2: u8, s3: u8, m: u64, res1: u64, res2: Option<u64>) -> Result<(), ExecError> {
@@ -897,36 +897,40 @@ impl Emulator {
     else UND
     (dh and sh mark AH, BH, CH, or DH for dest or src)
     */
-    fn read_binary_op(&mut self, get_a: bool, force_b_sizecode: Option<u8>) -> Result<(u8, u8, u64, u64, u64), ExecError> {
+    fn read_binary_op(&mut self, get_a: bool, force_b_rm_sizecode: Option<u8>, force_b_imm_sizecode: Option<u8>) -> Result<(u8, u8, u64, u64, u64), ExecError> {
         let s1 = self.get_mem_adv_u8()?;
         let s2 = self.get_mem_adv_u8()?;
         let a_sizecode = (s1 >> 2) & 3;
-        let b_sizecode = force_b_sizecode.unwrap_or(a_sizecode);
 
         let (m, a, b) = match s2 >> 4 {
             0 => {
+                let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
                 let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
                 let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
                 (0, a, b)
             }
             1 => {
+                let b_sizecode = force_b_imm_sizecode.unwrap_or(a_sizecode);
                 let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
                 let b = self.raw_get_mem_adv(b_sizecode)?;
                 (0, a, b)
             }
             2 => {
+                let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
                 let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
                 let m = self.get_address_adv()?;
                 let b = self.raw_get_mem(m, b_sizecode)?;
                 (m, a, b)
             }
             3 => {
+                let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
                 let m = self.get_address_adv()?;
                 let a = if !get_a { 0 } else { self.raw_get_mem(m, a_sizecode)? };
                 let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
                 (m, a, b)
             }
             4 => {
+                let b_sizecode = force_b_imm_sizecode.unwrap_or(a_sizecode);
                 let m = self.get_address_adv()?;
                 let a = if !get_a { 0 } else { self.raw_get_mem(m, a_sizecode)? };
                 let b = self.raw_get_mem_adv(b_sizecode)?;
@@ -1106,12 +1110,12 @@ impl Emulator {
     }
 
     fn exec_mov(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
+        let (s1, s2, m, _, b) = self.read_binary_op(false, None, None)?;
         self.store_binary_op_result(s1, s2, m, b)
     }
     fn exec_movcc(&mut self) -> Result<(), ExecError> {
         let cnd = self.read_standard_condition()?;
-        let (s1, s2, m, _, b) = self.read_binary_op(false, None)?;
+        let (s1, s2, m, _, b) = self.read_binary_op(false, None, None)?;
         if cnd { self.store_binary_op_result(s1, s2, m, b) } else { Ok(()) }
     }
     fn exec_setcc(&mut self) -> Result<(), ExecError> {
@@ -1159,7 +1163,7 @@ impl Emulator {
     }
 
     fn exec_add(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let sizecode = (s1 >> 2) & 3;
 
         let res = truncate(a.wrapping_add(b), sizecode); // has to be truncated for CF logic
@@ -1173,7 +1177,7 @@ impl Emulator {
         self.store_binary_op_result(s1, s2, m, res)
     }
     fn exec_sub_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let sizecode = (s1 >> 2) & 3;
 
         let res = a.wrapping_sub(b);
@@ -1240,7 +1244,7 @@ impl Emulator {
         Ok(())
     }
     fn exec_uimul_2(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let (_, res, overflow) = multiplier((s1 >> 2) & 3, a, b);
         let mask_co = mask!(Flags: MASK_CF | MASK_OF);
         if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
@@ -1248,7 +1252,7 @@ impl Emulator {
         self.store_binary_op_result(s1, s2, m, res)
     }
     fn exec_uimul_3(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
-        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None)?;
+        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None, None)?;
         let (_, res, overflow) = multiplier((s2 >> 2) & 3, a, b);
         let mask_co = mask!(Flags: MASK_CF | MASK_OF);
         if overflow { self.flags.0 |= mask_co } else { self.flags.0 &= !mask_co }
@@ -1256,7 +1260,7 @@ impl Emulator {
         self.store_ternary_op_result(s1, s2, s3, m, res, None)
     }
     fn exec_uimulx(&mut self, multiplier: fn(u8, u64, u64) -> (u64, u64, bool)) -> Result<(), ExecError> {
-        let (s1, s2, s3, m, _, v) = self.read_ternary_op(false, None)?;
+        let (s1, s2, s3, m, _, v) = self.read_ternary_op(false, None, None)?;
         let sizecode = (s2 >> 2) & 3;
         let (high, low, _) = multiplier(sizecode, self.cpu.get_rdx(), v);
         self.store_ternary_op_result(s1, s2, s3, m, high, Some(low))
@@ -1287,7 +1291,7 @@ impl Emulator {
     }
 
     fn exec_and_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let sizecode = (s1 >> 2) & 3;
 
         let res = a & b;
@@ -1299,7 +1303,7 @@ impl Emulator {
         if should_store { self.store_binary_op_result(s1, s2, m, res) } else { Ok(()) }
     }
     fn exec_or(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let sizecode = (s1 >> 2) & 3;
 
         let res = a | b;
@@ -1311,7 +1315,7 @@ impl Emulator {
         self.store_binary_op_result(s1, s2, m, res)
     }
     fn exec_xor(&mut self) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None)?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
         let sizecode = (s1 >> 2) & 3;
 
         let res = a ^ b;
@@ -1335,6 +1339,10 @@ impl Emulator {
     ext = 7: shlx
     ext = 8: shrx
     ext = 9: sarx
+    ext = 10: bt
+    ext = 11: btc
+    ext = 12: btr
+    ext = 13: bts
     */
     fn exec_bitwise(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
@@ -1410,11 +1418,35 @@ impl Emulator {
             7 => self.exec_shiftx(|_, val, masked| val << masked),
             8 => self.exec_shiftx(|_, val, masked| val >> masked),
             9 => self.exec_shiftx(|sizecode, val, masked| ((sign_extend(val, sizecode) as i64) >> masked) as u64),
+            10 => self.exec_bit_test(None),
+            11 => self.exec_bit_test(Some(|v, m| v ^ m)),
+            12 => self.exec_bit_test(Some(|v, m| v & !m)),
+            13 => self.exec_bit_test(Some(|v, m| v | m)),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
+    fn exec_bit_test(&mut self, mutator: Option<fn(u64, u64) -> u64>) -> Result<(), ExecError> {
+        let (s1, s2, mut m, mut a, b) = self.read_binary_op(true, None, Some(0))?;
+        let sizecode = (s1 >> 2) & 3;
+        let bits = 1 << (3 + sizecode);
+        debug_assert!(s2 >> 4 <= 4); // future proof for any new binary op modes
+
+        // if it's a memory operation on a non-local block
+        if s2 >> 4 >= 3 && b >= bits {
+            m = m.wrapping_add((b >> (3 + sizecode)) << sizecode); // (b / bits) * bytes
+            a = self.raw_get_mem(m, sizecode)?;
+        }
+
+        let mask = 1 << (b & (bits - 1));
+        self.flags.assign_cf(a & mask != 0);
+        self.randomize_flags(mask!(Flags: MASK_OF | MASK_SF | MASK_AF | MASK_PF));
+        match mutator {
+            Some(f) => self.store_binary_op_result(s1, s2, m, f(a, mask)),
+            None => Ok(())
+        }
+    }
     fn exec_shift(&mut self, maskmod: fn(u8, u32) -> u32, shifter: fn(u8, u64, u32, bool) -> (u64, bool, bool)) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, Some(0))?;
+        let (s1, s2, m, a, b) = self.read_binary_op(true, Some(0), Some(0))?;
         let sizecode = (s1 >> 2) & 3;
         let masked = maskmod(sizecode, b as u32 & (if sizecode >= 3 { 0x3f } else { 0x1f }));
         if masked == 0 { return Ok(()) }
@@ -1430,7 +1462,7 @@ impl Emulator {
         self.store_binary_op_result(s1, s2, m, res)
     }
     fn exec_shiftx(&mut self, shifter: fn(u8, u64, u32) -> u64) -> Result<(), ExecError> {
-        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, Some(0))?;
+        let (s1, s2, s3, m, a, b) = self.read_ternary_op(true, None, Some(0))?;
         let sizecode = (s2 >> 2) & 3;
         let masked = b as u32 & (if sizecode >= 3 { 0x3f } else { 0x1f });
         let res = shifter(sizecode, a, masked);

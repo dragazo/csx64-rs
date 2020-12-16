@@ -1189,8 +1189,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::SFENCE => args.process_no_arg_op(arguments, None, None)?,
                             Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
         
-                            Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::LEA => {
                                 if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: args.line_num, pos: None, inner_err: None }); }
                                 let mut arguments = arguments.into_iter();
@@ -1215,8 +1215,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::SETcc(ext) => args.process_unary_op(arguments, OPCode::SETcc as u8, Some(ext), &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::FLAGBIT(ext) => args.process_no_arg_op(arguments, Some(OPCode::REGOP as u8), Some(ext))?,
 
-                            Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::CMP => {
                                 let is_cmpz = arguments.len() == 2 && match &arguments[1] {
                                     Argument::Imm(imm) => match imm.expr.eval(&args.file.symbols) {
@@ -1233,31 +1233,32 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                     arguments.pop();
                                     args.process_unary_op(arguments, OPCode::CMPZ as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?
                                 }
-                                else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)? }
+                                else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)? }
                             }
         
-                            Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
         
-                            Instruction::SHIFT(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
-                            Instruction::SHIFTX(ext) => args.process_ternary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte))?,
+                            Instruction::SHIFT(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte), Some(Size::Byte))?,
+                            Instruction::SHIFTX(ext) => args.process_ternary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, Some(Size::Byte))?,
+                            Instruction::BTX(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, Some(Size::Byte))?,
 
                             Instruction::MUL => match arguments.len() {
                                 1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
                             Instruction::IMUL => match arguments.len() {
                                 1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
-                            Instruction::MULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::IMULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(7), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
+                            Instruction::MULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::IMULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(7), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::DIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(8), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
                             Instruction::IDIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(9), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
 
