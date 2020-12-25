@@ -168,14 +168,14 @@ fn test_zmm_register() {
 }
 
 macro_rules! impl_flag {
-    ($mask_name:ident, $set:ident, $reset:ident, $flip:ident, $get:ident, $assign:ident => $from:ty [ $mask:literal ]) => {
+    ($mask_name:ident, $set:ident, $clear:ident, $flip:ident, $get:ident, $assign:ident => $from:ty [ $mask:literal ]) => {
         pub const $mask_name: $from = $mask;
         pub fn $set(&mut self) { self.0 |= $mask }
-        pub fn $reset(&mut self) { self.0 &= !$mask }
+        pub fn $clear(&mut self) { self.0 &= !$mask }
         pub fn $flip(&mut self) { self.0 ^= $mask }
         pub const fn $get(self) -> bool { (self.0 & $mask) != 0 }
         pub fn $assign(&mut self, value: bool) {
-            if value { self.$set() } else { self.$reset() }
+            if value { self.$set() } else { self.$clear() }
         }
     }
 }
@@ -196,24 +196,28 @@ macro_rules! impl_field {
 #[derive(Default, Clone, Copy)]
 pub struct Flags(pub u64);
 impl Flags {
-    impl_flag! { MASK_CF, set_cf, reset_cf, flip_cf, get_cf, assign_cf       => u64 [0x0000000000000001] }
-    impl_flag! { MASK_PF, set_pf, reset_pf, flip_pf, get_pf, assign_pf       => u64 [0x0000000000000004] }
-    impl_flag! { MASK_AF, set_af, reset_af, flip_af, get_af, assign_af       => u64 [0x0000000000000010] }
-    impl_flag! { MASK_ZF, set_zf, reset_zf, flip_zf, get_zf, assign_zf       => u64 [0x0000000000000040] }
-    impl_flag! { MASK_SF, set_sf, reset_sf, flip_sf, get_sf, assign_sf       => u64 [0x0000000000000080] }
-    impl_flag! { MASK_TF, set_tf, reset_tf, flip_tf, get_tf, assign_tf       => u64 [0x0000000000000100] }
-    impl_flag! { MASK_IF, set_if, reset_if, flip_if, get_if, assign_if       => u64 [0x0000000000000200] }
-    impl_flag! { MASK_DF, set_df, reset_df, flip_df, get_df, assign_df       => u64 [0x0000000000000400] }
-    impl_flag! { MASK_OF, set_of, reset_of, flip_of, get_of, assign_of       => u64 [0x0000000000000800] }
-    impl_flag! { MASK_NT, set_nt, reset_nt, flip_nt, get_nt, assign_nt       => u64 [0x0000000000004000] }
-    impl_flag! { MASK_RF, set_rf, reset_rf, flip_rf, get_rf, assign_rf       => u64 [0x0000000000010000] }
-    impl_flag! { MASK_VM, set_vm, reset_vm, flip_vm, get_vm, assign_vm       => u64 [0x0000000000020000] }
-    impl_flag! { MASK_AC, set_ac, reset_ac, flip_ac, get_ac, assign_ac       => u64 [0x0000000000040000] }
-    impl_flag! { MASK_VIF, set_vif, reset_vif, flip_vif, get_vif, assign_vif => u64 [0x0000000000080000] }
-    impl_flag! { MASK_VIP, set_vip, reset_vip, flip_vip, get_vip, assign_vip => u64 [0x0000000000100000] }
-    impl_flag! { MASK_ID, set_id, reset_id, flip_id, get_id, assign_id       => u64 [0x0000000000200000] }
+    impl_flag! { MASK_CF, set_cf, clear_cf, flip_cf, get_cf, assign_cf       => u64 [0x0000000000000001] }
+    impl_flag! { MASK_PF, set_pf, clear_pf, flip_pf, get_pf, assign_pf       => u64 [0x0000000000000004] }
+    impl_flag! { MASK_AF, set_af, clear_af, flip_af, get_af, assign_af       => u64 [0x0000000000000010] }
+    impl_flag! { MASK_ZF, set_zf, clear_zf, flip_zf, get_zf, assign_zf       => u64 [0x0000000000000040] }
+    impl_flag! { MASK_SF, set_sf, clear_sf, flip_sf, get_sf, assign_sf       => u64 [0x0000000000000080] }
+    impl_flag! { MASK_TF, set_tf, clear_tf, flip_tf, get_tf, assign_tf       => u64 [0x0000000000000100] }
+    impl_flag! { MASK_IF, set_if, clear_if, flip_if, get_if, assign_if       => u64 [0x0000000000000200] }
+    impl_flag! { MASK_DF, set_df, clear_df, flip_df, get_df, assign_df       => u64 [0x0000000000000400] }
+    impl_flag! { MASK_OF, set_of, clear_of, flip_of, get_of, assign_of       => u64 [0x0000000000000800] }
+    impl_flag! { MASK_NT, set_nt, clear_nt, flip_nt, get_nt, assign_nt       => u64 [0x0000000000004000] }
+    impl_flag! { MASK_RF, set_rf, clear_rf, flip_rf, get_rf, assign_rf       => u64 [0x0000000000010000] }
+    impl_flag! { MASK_VM, set_vm, clear_vm, flip_vm, get_vm, assign_vm       => u64 [0x0000000000020000] }
+    impl_flag! { MASK_AC, set_ac, clear_ac, flip_ac, get_ac, assign_ac       => u64 [0x0000000000040000] }
+    impl_flag! { MASK_VIF, set_vif, clear_vif, flip_vif, get_vif, assign_vif => u64 [0x0000000000080000] }
+    impl_flag! { MASK_VIP, set_vip, clear_vip, flip_vip, get_vip, assign_vip => u64 [0x0000000000100000] }
+    impl_flag! { MASK_ID, set_id, clear_id, flip_id, get_id, assign_id       => u64 [0x0000000000200000] }
 
     impl_field! { MASK_IOPL, get_iopl, assign_iopl => u64 [ 12 => 0b11 ] u8 }
+
+    // -------------------------------------------------------------------------------------
+
+    impl_flag! { MASK_OTS, set_ots, clear_ots, flip_ots, get_ots, assign_ots => u64 [0x0000000100000000] }
 
     // -------------------------------------------------------------------------------------
 
@@ -249,14 +253,14 @@ impl MXCSR {
 #[derive(Clone, Copy)]
 pub struct Control(pub u16);
 impl Control {
-    impl_flag! { MASK_IM, set_im, reset_im, flip_im, get_im, assign_im       => u16 [0x0001] }
-    impl_flag! { MASK_DM, set_dm, reset_dm, flip_dm, get_dm, assign_dm       => u16 [0x0002] }
-    impl_flag! { MASK_ZM, set_zm, reset_zm, flip_zm, get_zm, assign_zm       => u16 [0x0004] }
-    impl_flag! { MASK_OM, set_om, reset_om, flip_om, get_om, assign_om       => u16 [0x0008] }
-    impl_flag! { MASK_UM, set_um, reset_um, flip_um, get_um, assign_um       => u16 [0x0010] }
-    impl_flag! { MASK_PM, set_pm, reset_pm, flip_pm, get_pm, assign_pm       => u16 [0x0020] }
-    impl_flag! { MASK_IEM, set_iem, reset_iem, flip_iem, get_iem, assign_iem => u16 [0x0080] }
-    impl_flag! { MASK_IC, set_ic, reset_ic, flip_ic, get_ic, assign_ic       => u16 [0x1000] }
+    impl_flag! { MASK_IM, set_im, clear_im, flip_im, get_im, assign_im       => u16 [0x0001] }
+    impl_flag! { MASK_DM, set_dm, clear_dm, flip_dm, get_dm, assign_dm       => u16 [0x0002] }
+    impl_flag! { MASK_ZM, set_zm, clear_zm, flip_zm, get_zm, assign_zm       => u16 [0x0004] }
+    impl_flag! { MASK_OM, set_om, clear_om, flip_om, get_om, assign_om       => u16 [0x0008] }
+    impl_flag! { MASK_UM, set_um, clear_um, flip_um, get_um, assign_um       => u16 [0x0010] }
+    impl_flag! { MASK_PM, set_pm, clear_pm, flip_pm, get_pm, assign_pm       => u16 [0x0020] }
+    impl_flag! { MASK_IEM, set_iem, clear_iem, flip_iem, get_iem, assign_iem => u16 [0x0080] }
+    impl_flag! { MASK_IC, set_ic, clear_ic, flip_ic, get_ic, assign_ic       => u16 [0x1000] }
 
     impl_field! { MASK_PC, get_pc, assign_pc => u16 [ 8 => 0b11 ] u8 }
     impl_field! { MASK_RC, get_rc, assign_rc => u16 [ 10 => 0b11 ] u8 }
@@ -288,19 +292,19 @@ impl Control {
 #[derive(Clone, Copy)]
 pub struct Status(pub u16);
 impl Status {
-    impl_flag! { MASK_I, set_i, reset_i, flip_i, get_i, assign_i       => u16 [0x0001] }
-    impl_flag! { MASK_D, set_d, reset_d, flip_d, get_d, assign_d       => u16 [0x0002] }
-    impl_flag! { MASK_Z, set_z, reset_z, flip_z, get_z, assign_z       => u16 [0x0004] }
-    impl_flag! { MASK_O, set_o, reset_o, flip_o, get_o, assign_o       => u16 [0x0008] }
-    impl_flag! { MASK_U, set_u, reset_u, flip_u, get_u, assign_u       => u16 [0x0010] }
-    impl_flag! { MASK_P, set_p, reset_p, flip_p, get_p, assign_p       => u16 [0x0020] }
-    impl_flag! { MASK_SF, set_sf, reset_sf, flip_sf, get_sf, assign_sf => u16 [0x0040] }
-    impl_flag! { MASK_IR, set_ir, reset_ir, flip_ir, get_ir, assign_ir => u16 [0x0080] }
-    impl_flag! { MASK_C0, set_c0, reset_c0, flip_c0, get_c0, assign_c0 => u16 [0x0100] }
-    impl_flag! { MASK_C1, set_c1, reset_c1, flip_c1, get_c1, assign_c1 => u16 [0x0200] }
-    impl_flag! { MASK_C2, set_c2, reset_c2, flip_c2, get_c2, assign_c2 => u16 [0x0400] }
-    impl_flag! { MASK_C3, set_c3, reset_c3, flip_c3, get_c3, assign_c3 => u16 [0x4000] }
-    impl_flag! { MASK_B, set_b, reset_b, flip_b, get_b, assign_b       => u16 [0x8000] }
+    impl_flag! { MASK_I, set_i, clear_i, flip_i, get_i, assign_i       => u16 [0x0001] }
+    impl_flag! { MASK_D, set_d, clear_d, flip_d, get_d, assign_d       => u16 [0x0002] }
+    impl_flag! { MASK_Z, set_z, clear_z, flip_z, get_z, assign_z       => u16 [0x0004] }
+    impl_flag! { MASK_O, set_o, clear_o, flip_o, get_o, assign_o       => u16 [0x0008] }
+    impl_flag! { MASK_U, set_u, clear_u, flip_u, get_u, assign_u       => u16 [0x0010] }
+    impl_flag! { MASK_P, set_p, clear_p, flip_p, get_p, assign_p       => u16 [0x0020] }
+    impl_flag! { MASK_SF, set_sf, clear_sf, flip_sf, get_sf, assign_sf => u16 [0x0040] }
+    impl_flag! { MASK_IR, set_ir, clear_ir, flip_ir, get_ir, assign_ir => u16 [0x0080] }
+    impl_flag! { MASK_C0, set_c0, clear_c0, flip_c0, get_c0, assign_c0 => u16 [0x0100] }
+    impl_flag! { MASK_C1, set_c1, clear_c1, flip_c1, get_c1, assign_c1 => u16 [0x0200] }
+    impl_flag! { MASK_C2, set_c2, clear_c2, flip_c2, get_c2, assign_c2 => u16 [0x0400] }
+    impl_flag! { MASK_C3, set_c3, clear_c3, flip_c3, get_c3, assign_c3 => u16 [0x4000] }
+    impl_flag! { MASK_B, set_b, clear_b, flip_b, get_b, assign_b       => u16 [0x8000] }
 
     impl_field! { MASK_TOP, get_top, assign_top => u16 [ 11 => 0b111 ] u8 }
 }

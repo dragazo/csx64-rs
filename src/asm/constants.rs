@@ -360,6 +360,7 @@ pub(super) enum Instruction {
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
     INC, DEC, NEG, NOT,
+    MOVS(Size),
 }
 
 lazy_static! {
@@ -593,6 +594,11 @@ lazy_static! {
         insert!(m: Caseless("NEG") => Instruction::NEG);
         insert!(m: Caseless("NOT") => Instruction::NOT);
 
+        insert!(m: Caseless("MOVSB") => Instruction::MOVS(Size::Byte));
+        insert!(m: Caseless("MOVSW") => Instruction::MOVS(Size::Word));
+        insert!(m: Caseless("MOVSD") => Instruction::MOVS(Size::Dword));
+        insert!(m: Caseless("MOVSQ") => Instruction::MOVS(Size::Qword));
+
         m
     };
 }
@@ -628,6 +634,7 @@ lazy_static! {
         s.extend(FPU_REGISTER_INFO.keys().copied());
         s.extend(VPU_REGISTER_INFO.keys().copied());
         s.extend(SEGMENTS.keys().copied());
+        s.extend(PREFIXES.keys().copied());
         s.extend(INSTRUCTIONS.keys().copied());
 
         s

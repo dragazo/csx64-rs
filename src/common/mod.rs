@@ -34,9 +34,7 @@ pub enum OPCode
 
     INC, DEC, NEG, NOT,
 
-
-
-
+    STRING,
 
 
     
@@ -50,8 +48,6 @@ pub enum OPCode
     // BSWAP, BEXTR, BLSI, BLSMSK, BLSR, ANDN, BTx,
     // Cxy, MOVxX,
     // ADXX, AAX,
-
-    // STRING,
 
     // BSx, TZCNT,
 

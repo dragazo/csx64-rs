@@ -193,6 +193,8 @@ pub enum AsmErrorKind {
 
     GlobalSymbolWasNotDefined,
     UnknownSymbol(String),
+
+    StringDeclareNotByteSize,
 }
 impl From<BadAddress> for AsmErrorKind {
     fn from(reason: BadAddress) -> Self {
@@ -1042,6 +1044,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                     let mut arguments = args.extract_arguments(&line, header_aft)?;
                     match prefix { // then we proceed into the handlers
                         Some((Prefix::REP, prefix_pos)) => match instruction {
+                            Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((1 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPZ, prefix_pos)) => match instruction {
@@ -1148,7 +1151,27 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                     match arg {
                                         Argument::Imm(imm) => {
                                             if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::DeclareValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
-                                            args.append_val(size, imm.expr, HoleType::Any)?;
+                                            let handled = match imm.expr.eval(&args.file.symbols) {
+                                                Ok(val) => match &*val {
+                                                    Value::Binary(content) => {
+                                                        if size != Size::Byte { return Err(AsmError { kind: AsmErrorKind::StringDeclareNotByteSize, line_num: args.line_num, pos: None, inner_err: None }); }
+                                                        let seg = match args.current_seg {
+                                                            Some(seg) => match seg {
+                                                                AsmSegment::Text => &mut args.file.text,
+                                                                AsmSegment::Rodata => &mut args.file.rodata,
+                                                                AsmSegment::Data => &mut args.file.data,
+                                                                AsmSegment::Bss => return Err(AsmError { kind: AsmErrorKind::WriteInBssSegment, line_num: args.line_num, pos: None, inner_err: None }),
+                                                            }
+                                                            None => return Err(AsmError { kind: AsmErrorKind::WriteOutsideOfSegment, line_num: args.line_num, pos: None, inner_err: None }),
+                                                        };
+                                                        seg.extend_from_slice(content);
+                                                        true
+                                                    }
+                                                    _ => false,
+                                                }
+                                                Err(_) => false,
+                                            };
+                                            if !handled { args.append_val(size, imm.expr, HoleType::Any)?; }
                                         }
                                         _ => return Err(AsmError { kind: AsmErrorKind::DeclareValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
@@ -1275,6 +1298,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::DEC => args.process_unary_op(arguments, OPCode::DEC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::NEG => args.process_unary_op(arguments, OPCode::NEG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
                             Instruction::NOT => args.process_unary_op(arguments, OPCode::NOT as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
+
+                            Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some(size.basic_sizecode().unwrap()))?,
                         }
                     }
         

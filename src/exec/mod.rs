@@ -231,6 +231,24 @@ macro_rules! impl_mem_adv_primitive {
     )*}
 }
 
+macro_rules! impl_string_repeat {
+    ($self:ident, $sizecode:ident, $func:ident, $cond:expr) => {{
+        let mut rcx;
+        if $self.flags.get_ots() {
+            while { rcx = $self.cpu.get_rcx(); rcx != 0 } {
+                $func($self, $sizecode)?;
+                $self.cpu.set_rcx(rcx - 1);
+                if !$cond { break }
+            }
+        } else if {rcx = $self.cpu.get_rcx(); rcx != 0 } {
+            $func($self, $sizecode)?;
+            $self.cpu.set_rcx(rcx - 1);
+            if $cond { $self.instruction_pointer -= 2; }
+        }
+        Ok(())
+    }}
+}
+
 /// Holds options for initializing an emulator.
 #[derive(Default)]
 pub struct EmulatorArgs {
@@ -306,7 +324,7 @@ impl Memory {
         if pos >= self.raw.len() { return Err(ExecError::MemOutOfBounds); }
         match memchr(0, &self.raw[pos..]) {
             None => Err(ExecError::MemOutOfBounds),
-            Some(stop) => Ok(&self.raw[pos..stop]),
+            Some(stop) => Ok(&self.raw[pos..pos + stop]),
         }
     }
     /// Writes a null-terminated binary string to the given position.
@@ -678,6 +696,8 @@ impl Emulator {
                         OPCode::DEC => self.exec_dec(),
                         OPCode::NEG => self.exec_neg(),
                         OPCode::NOT => self.exec_not(),
+
+                        OPCode::STRING => self.exec_string(),
                     }
                 }
             };
@@ -1146,16 +1166,16 @@ impl Emulator {
     fn exec_regop(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
             0 => self.flags.set_ac(),
-            1 => self.flags.reset_ac(),
+            1 => self.flags.clear_ac(),
             2 => self.flags.flip_ac(),
             3 => self.flags.set_cf(),
-            4 => self.flags.reset_cf(),
+            4 => self.flags.clear_cf(),
             5 => self.flags.flip_cf(),
             6 => self.flags.set_df(),
-            7 => self.flags.reset_df(),
+            7 => self.flags.clear_df(),
             8 => self.flags.flip_df(),
             9 => self.flags.set_if(),
-            10 => self.flags.reset_if(),
+            10 => self.flags.clear_if(),
             11 => self.flags.flip_if(),
             _ => return Err(ExecError::InvalidOpEncoding),
         }
@@ -1556,6 +1576,53 @@ impl Emulator {
     fn exec_not(&mut self) -> Result<(), ExecError> {
         let (s, m, v) = self.read_unary_op(true)?;
         self.store_unary_op_result(s, m, !v)
+    }
+
+    fn exec_string_rep(&mut self, sizecode: u8, func: fn(&mut Self, u8) -> Result<(), ExecError>) -> Result<(), ExecError> { impl_string_repeat!(self, sizecode, func, true) }
+    fn exec_string_repe(&mut self, sizecode: u8, func: fn(&mut Self, u8) -> Result<(), ExecError>) -> Result<(), ExecError> { impl_string_repeat!(self, sizecode, func, self.flags.get_zf()) }
+    fn exec_string_repne(&mut self, sizecode: u8, func: fn(&mut Self, u8) -> Result<(), ExecError>) -> Result<(), ExecError> { impl_string_repeat!(self, sizecode, func, !self.flags.get_zf()) }
+
+    /*
+    [6: mode][2: size]
+        mode = 0:        MOVS
+        mode = 1:  REP   MOVS
+        mode = 2:        CMPS
+        mode = 3:  REPE  CMPS
+        mode = 4:  REPNE CMPS
+        mode = 5:        LODS
+        mode = 6:  REP   LODS
+        mode = 7:        STOS
+        mode = 8:  REP   STOS
+        mode = 9:        SCAS
+        mode = 10: REPE  SCAS
+        mode = 11: REPNE SCAS
+        else UND
+    */
+    fn exec_string(&mut self) -> Result<(), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let sizecode = s & 3;
+        match s >> 2 {
+            0 => self.exec_string_movs(sizecode),
+            1 => self.exec_string_rep(sizecode, Self::exec_string_movs),
+            _ => Err(ExecError::InvalidOpEncoding),
+        }
+    }
+    fn exec_string_movs(&mut self, sizecode: u8) -> Result<(), ExecError> {
+        let rdi = self.cpu.get_rdi();
+        let rsi = self.cpu.get_rsi();
+
+        let temp = self.raw_get_mem(rsi, sizecode)?;
+        self.raw_set_mem(rdi, sizecode, temp)?;
+
+        if self.flags.get_df() {
+            self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode));
+            self.cpu.set_rsi(rsi.wrapping_sub(1 << sizecode));
+        } else {
+            self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode));
+            self.cpu.set_rsi(rsi.wrapping_add(1 << sizecode));
+        }
+
+        Ok(())
     }
 }
 impl Default for Emulator {
