@@ -1,47 +1,42 @@
-; source http://www.cplusplus.com/reference/cstdlib/
-
 global malloc
 global free
+global realloc
 ; global calloc
-; global realloc
 
 ; these are global but you should never modify them.
 ; should only by touched once by start.asm for initialization.
-global __malloc_beg, __malloc_end
+global __malloc_beg, __malloc_end, __malloc_align
 
 segment text
 
-; void *_align(void *ptr, u64 align);
+; void *_align(void *ptr, u64 align)
 ; align value must be a power of 2
 _align:
-    ; make a copy of ptr in the return value
     mov rax, rdi
-
-    ; compute the required alignment offset
     neg rdi
     dec rsi
     and rdi, rsi
-
-    ; apply the offset and return the aligned pointer
     add rax, rdi
     ret
 
 ; the amount of memory for malloc to request at a time (must be a power of 2)
-_malloc_step: equ 1 * 1024 * 1024 ; 1 MB
+__malloc_step: equ 1 * 1024 * 1024 ; 1 MB
+; alignment requirement of a malloc allocation (must be a power of 2)
+__malloc_align: equ 16
 
-; custom (naive) malloc impl structure:
-;            V initial sys brk (base of stack space)
+; malloc linked list structure:
+;            v initial sys brk (base of stack space)
 ; <--- stack | ([void *next][void *prev][... data ...])...
 ;              ^ doubly-linked list of zero or more malloc data blocks
 ; 
-; we shall assume no one else will be manipulating memory beyond the initial breakpoint
-; pointers will be 8-byte aligned.
-; bit 0 of next will hold 1 if this block is occupied.
+; we shall assume no one else will be manipulating memory beyond the initial breakpoint.
+; the start of each block will be aligned to __malloc_align.
+; bit 0 of the 'next' field will hold 1 if the block is occupied.
 ; 
-; void *malloc(u64 size);
+; void *malloc(u64 size)
 ; allocates contiguous memory in dynamically-allocated space via sys_brk.
 ; you should not directly call sys_brk at any time (except in the case where it just returns the current break).
-; the memory returned is aligned on 8-byte boundaries.
+; the memory returned is aligned on 16-byte boundaries.
 ; the pointer returned by this function must later be dealocated by calling free().
 ; allocating 0 bytes returns null.
 ; upon failure (e.g. sys_brk refused), returns null.
@@ -55,40 +50,21 @@ malloc:
     ret
     
     .beg:
-    ; align request size to 8-byte blocks
-    mov esi, 8
+    ; align the request size
+    mov esi, __malloc_align
     call _align
     mov rdi, rax
     
     ; get the beg/end positions
     mov rsi, [__malloc_beg]
     mov r8,  [__malloc_end]
-    ; if beg was nonzero, we're good
-    cmp rsi, 0
-    jnz .ok
-    
-    ; otherwise initialize beg/end and reload
-    ; this just sets beg/end - doesn't allocate any space
-    mov r11, rdi
-    mov eax, sys_brk
-    xor ebx, ebx
-    syscall
-    mov rdi, rax
-    mov esi, 8
-    call _align
-    mov [__malloc_beg], rax
-    mov [__malloc_end], rax
-    mov rsi, rax
-    mov r8, rax
-    mov rdi, r11
 
-    .ok:
     ; look through the list for an available block of sufficient size
     ; for(void *prev = 0, *pos = beg; pos < end; prev = pos, pos = pos->next)
-    ; -- prev = r12
+    ; -- prev = r11
     ; -- pos = rsi
     ; -- end = r8
-    xor r12, r12
+    xor r11, r11
     jmp .aft
     .top:
         ; get the next pointer
@@ -108,25 +84,24 @@ malloc:
         ; -- yay we got one -- ;
         
         ; split the block if it's large enough (that the split block's size > 0)
-        ; if (block_size >= request + 24)
-        mov rax, rdi
-        add rax, 24
+        ; if (block_size > request + 16)
+        lea rax, [rdi + 16]
         cmp rcx, rax
-        jb .nosplit
+        jbe .nosplit
         
         ; splitting block - get pointer to start of split
-        lea rbx, [rsi + 16 + rdi]
+        lea rax, [rsi + 16 + rdi]
         
         ; update split's next/prev (unoccupied)
-        mov [rbx], rdx
-        mov [rbx + 8], rsi
+        mov [rax], rdx
+        mov [rax + 8], rsi
         
         ; if next is in bounds, update next->prev
         cmp rdx, r8
-        movb [rdx + 8], rbx
+        movb [rdx + 8], rax
         
         ; update register that holds our next
-        mov rdx, rbx
+        mov rdx, rax
         
         .nosplit:
         or dl, 1 ; mark this block as occupied
@@ -135,7 +110,7 @@ malloc:
         ret
         
     .cont:
-        mov r12, rsi
+        mov r11, rsi
         mov rsi, rdx
     .aft:
         cmp rsi, r8
@@ -144,12 +119,12 @@ malloc:
     ; -- if we got here, we went out of range of the malloc field -- ;
     
     ; put position to add block in r8 (overwrite prev if not in use, otherwise __malloc_end)
-    cmp r12, 0
+    cmp r11, 0
     jz .begin_add
-    mov rax, [r12]
+    mov rax, [r11]
     bt rax, 0
-    movnc r8, r12
-    movnc r12, [r8 + 8]
+    movnc r8, r11
+    movnc r11, [r8 + 8]
     
     .begin_add:
     ; get program break
@@ -165,20 +140,20 @@ malloc:
     .enough_space:
     ; we have enough space - create the new block on the end (occupied)
     mov [__malloc_end], r10
-    or r10b, 1
+    bts r10, 0
     mov [r8], r10
-    mov [r8 + 8], r12
+    mov [r8 + 8], r11
     lea rax, [r8 + 16]
     ret
     
     .nospace:
     ; otherwise we have no space - get amount of space to allocate (multiple of step)
-    mov r11, rdi
+    mov rcx, rdi
     mov rdi, r10
     sub rdi, rax
-    mov rsi, _malloc_step
+    mov rsi, __malloc_step
     call _align
-    mov rdi, r11
+    mov rdi, rcx
 
     ; add that much memory
     mov r9, rax
@@ -195,11 +170,162 @@ malloc:
     ; otherwise it failed - return null
     xor rax, rax
     ret
-; void *calloc(qword size);
+
+; void *realloc(void *ptr, qword size)
+; creates a new aray with the specified size and copies over the contents.
+; the resulting array is identical up to the lesser of the two sizes.
+; if posible, the resize is performed in-place.
+; returns a pointer to the new array.
+; reallocating a null pointer is equivalent to calling malloc()
+; reallocating to a size of zero is equivalent to calling free() (and returns null).
+realloc:
+    ; if pointer is null, call malloc()
+    cmp rdi, 0
+    jnz .non_null
+    mov rdi, rsi
+    call malloc
+    ret
+    .non_null:
+    
+    ; if size is zero, call free()
+    cmp rsi, 0
+    jnz .resize
+    call free
+    xor rax, rax
+    ret
+    .resize:
+    
+    ; align the size (for later)
+    mov r8, rdi
+    mov rdi, rsi
+    mov esi, __malloc_align
+    call _align
+    mov rsi, rax ; aligned size back in rsi
+    mov rdi, r8  ; pointer back in rdi
+    
+    ; compute the size of this block
+    mov rcx, [rdi - 16]
+    and cl, !1
+    mov rbx, rcx ; save a copy of next in rbx
+    sub rcx, rdi
+    
+    ; if we already have enough space, we're good
+    cmp rcx, rsi
+    jae .ret
+    ; compute the smaller size into rcx
+    mova rcx, rsi
+    
+    ; we're going down the route of needing a new array
+    ; if next is __malloc_end, we can still do it in-place
+    cmp rbx, [__malloc_end]
+    jne .new_array
+    
+    mov eax, sys_brk
+    xor ebx, ebx
+    syscall             ; current break point in rax
+    lea r8, [rdi + rsi] ; break point needed in r8 (this is why we aligned size earlier)
+    
+    ; if we have enough room, just move __malloc_end
+    cmp r8, rax
+    ja .more_mem
+    
+    .good_mem:
+    mov [__malloc_end], r8
+    or r8b, 1
+    mov [rdi - 16], r8
+    mov rax, rdi
+    ret
+    
+    .more_mem:
+    ; otherwise we need to allocate more space
+    ; align request size to a multiple of __malloc_step
+    mov r10, rdi
+    mov r11, rax ; save current break in r11
+    mov rdi, r8
+    sub rdi, rax
+    mov rsi, __malloc_step
+    call _align
+    ; and allocate that much extra memory
+    mov rbx, rax
+    add rbx, r11
+    mov eax, sys_brk
+    syscall
+    mov rdi, r10
+    
+    ; if it succeeded, we're done
+    cmp rax, 0
+    jz .good_mem
+    ; otherwise it failed - return null
+    xor rax, rax
+    ret
+    
+    .new_array: ; sad days, everybody, we need a new array
+    push rcx
+    push rdi
+    mov rdi, rsi
+    call malloc
+    mov rdi, rax ; new array in rdi
+    pop rsi      ; old array in rsi
+    pop rcx      ; smaller size in rcx
+    
+    ; copy the contents up to the smaller size (this is why we aligned the size earlier)
+    shr rcx, 3
+    cld
+    rep movsq
+
+    ; free the old array
+    push rdi
+    mov rdi, rsi
+    call free
+    pop rax
+    ret
+    
+    .ret:
+    mov rax, rdi
+    ret
+
+; void free(void *ptr)
+; deallocated resources that were allocated by malloc/calloc/realloc.
+; the specified pointer must be exactly what was returned by the allocation function.
+; freeing the same allocation twice is undefined behavior.
+; freeing null is no-op.
+free:
+    cmp rdi, 0
+    jz .ret
+
+    ; get the meta block
+    sub rdi, 16
+    ; get next in rdx
+    mov rdx, [rdi]
+    btr rdx, 0
+    ; if next is in range and not in use, get next->next in rdx (we'll merge right)
+    cmp rdx, [__malloc_end]
+    jae .nomerge_right
+    mov rcx, [rdx]
+    bt rcx, 0
+    movnc rdx, rcx
+    .nomerge_right:
+    
+    ; get prev in rcx
+    mov rcx, [rdi + 8]
+    ; if prev is in range and not in use, merge with it
+    cmp rcx, 0
+    jz .nomerge_left
+    bt qword ptr [rcx], 0
+    jc .nomerge_left
+    mov rdi, rcx
+    .nomerge_left:
+
+    ; perform all the merging we need
+    mov [rdi], rdx
+    mov [rdx + 8], rdi
+    .ret: ret
+
+; void *calloc(qword size)
 ; as malloc except that it also zeroes the contents.
 ; calloc:
 ;     ; align the size (for later)
-;     mov esi, 8
+;     mov esi, __malloc_align
 ;     call _align
 ;     push rax
     
@@ -217,166 +343,14 @@ malloc:
 ;     mov rdi, rax ; set fill destination
 ;     xor rax, rax ; set fill value
 ;     shr rcx, 3   ; get # of 64-bit blocks to fill
-; 	cld          ; set forward fill mode
+;     cld          ; set forward fill mode
 ;     rep stosq    ; fill with zero
 ;     mov rax, r8  ; restore return value
     
 ;     .ret: ret
-; void *realloc(void *ptr, qword size);
-; creates a new aray with the specified size and copies over the contents.
-; the resulting array is identical up to the lesser of the two sizes.
-; if posible, the resize is performed in-place.
-; returns a pointer to the new array.
-; reallocating a null pointer is equivalent to calling malloc()
-; reallocating to a size of zero is equivalent to calling free() (and returns null).
-; realloc:
-;     ; if pointer is null, call malloc()
-;     cmp rdi, 0
-;     jnz .non_null
-;     mov rdi, rsi
-;     call malloc
-;     ret
-;     .non_null:
-    
-;     ; if size is zero, call free()
-;     cmp rsi, 0
-;     jnz .resize
-;     call free
-;     xor rax, rax
-;     ret
-;     .resize:
-    
-;     ; align the size (for later)
-;     mov r8, rdi
-;     mov rdi, rsi
-;     mov esi, 8
-;     call _align
-;     mov rsi, rax ; aligned size back in rsi
-;     mov rdi, r8  ; pointer back in rdi
-    
-;     ; compute the size of this block
-;     mov rcx, [rdi - 16]
-;     and cl, ~1
-;     mov rbx, rcx ; save a copy of next in rbx
-;     sub rcx, rdi
-    
-;     ; if we already have enough space, we're good
-;     cmp rcx, rsi
-;     jae .ret
-;     ; compute the smaller size into rcx
-;     mova rcx, rsi
-    
-;     ; we're going down the route of needing a new array
-;     ; if next is __malloc_end, we can still do it in-place
-;     cmp rbx, [__malloc_end]
-;     jne .new_array
-    
-;     mov eax, sys_brk
-;     xor ebx, ebx
-;     syscall             ; current break point in rax
-;     lea r8, [rdi + rsi] ; break point needed in r8 (this is why we aligned size earlier)
-    
-;     ; if we have enough room, just move __malloc_end
-;     cmp r8, rax
-;     ja .more_mem
-    
-;     .good_mem:
-;     mov [__malloc_end], r8
-;     or r8b, 1
-;     mov [rdi - 16], r8
-;     mov rax, rdi
-;     ret
-    
-;     .more_mem:
-;     ; otherwise we need to allocate more space
-;     ; align request size to a multiple of _malloc_step
-;     mov r10, rdi
-;     mov r11, rax ; save current break in r11
-;     mov rdi, r8
-;     sub rdi, rax
-;     mov rsi, _malloc_step
-;     call _align
-;     ; and allocate that much extra memory
-;     mov rbx, rax
-;     add rbx, r11
-;     mov eax, sys_brk
-;     syscall
-;     mov rdi, r10
-    
-;     ; if it succeeded, we're done
-;     cmp rax, 0
-;     jz .good_mem
-;     ; otherwise it failed - return null
-;     xor rax, rax
-;     ret
-    
-;     .new_array: ; sad days, everybody, we need a new array
-    
-;     ; otherwise we need a new array
-;     push rcx
-;     push rdi
-;     mov rdi, rsi
-;     call malloc
-;     mov rsi, rax ; new array in rsi
-;     pop rdi      ; old array in rdi
-;     pop rcx      ; smaller size in rcx
-    
-;     ; copy the contents up to the smaller size
-;     ; (this is why we aligned the size earlier)
-;     jrcxz .done ; hopefully refundant but safer to check
-;     .loop:
-;         sub rcx, 8
-;         mov rax, [rdi + rcx]
-;         mov [rsi + rcx], rax
-;         jnz .loop
-    
-;     .done:
-;     ; free the old array
-;     push rsi
-;     call free
-;     pop rax
-;     ret
-    
-;     .ret:
-;     mov rax, rdi
-;     ret
-; void free(void *ptr);
-; deallocated resources that were allocated by malloc.
-; the specified pointer must be exactly what was returned by malloc.
-; freeing the same pointer twice is undefined behavior
-free:
-    ; get the raw pointer
-    sub rdi, 16
-    
-    ; get next in rdx
-    mov rdx, [rdi]
-    and dl, ~1
-    ; if next is in range and not in use, get next->next in rdx (we'll merge right)
-    cmp rdx, [__malloc_end]
-    jae .nomerge_right
-    mov rcx, [rdx]
-    bt rcx, 0
-    movnc rdx, rcx
-    .nomerge_right:
-    
-    ; get prev in rcx
-    mov rcx, [rdi + 8]
-    ; if prev is in range and not in use, merge with it
-    cmp rcx, 0
-    jz .nomerge_left
-    mov rbx, [rcx]
-    bt rbx, 0
-    jc .nomerge_left
-    mov [rcx], rdx ; this merges left and right simultaneously
-    ret
-    
-    .nomerge_left:
-    ; if we're not merging left, we still need to merge right (even if just to mark as not in use)
-    mov [rdi], rdx
-    ret
 
 segment bss
 
-align 8
-__malloc_beg: resq 1 ; starting address for malloc
-__malloc_end: resq 1 ; stopping address for malloc
+align 8 ; begin/end address for malloc data structure
+__malloc_beg: resq 1
+__malloc_end: resq 1

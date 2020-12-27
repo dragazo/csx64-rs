@@ -698,6 +698,8 @@ impl Emulator {
                         OPCode::NOT => self.exec_not(),
 
                         OPCode::STRING => self.exec_string(),
+                        
+                        OPCode::DEBUG => self.exec_debug(),
                     }
                 }
             };
@@ -1622,6 +1624,34 @@ impl Emulator {
             self.cpu.set_rsi(rsi.wrapping_add(1 << sizecode));
         }
 
+        Ok(())
+    }
+
+    fn get_debug_string(&self) -> String {
+        format!(
+r"rax: {:016x}  r8: {:016x}
+rbx: {:016x}  r9: {:016x}
+rcx: {:016x} r10: {:016x}
+rdx: {:016x} r11: {:016x}
+rsi: {:016x} r12: {:016x}
+rdi: {:016x} r13: {:016x}
+rbp: {:016x} r14: {:016x}
+rsp: {:016x} r15: {:016x}",
+            self.cpu.get_rax(), self.cpu.get_r8(),
+            self.cpu.get_rbx(), self.cpu.get_r9(),
+            self.cpu.get_rcx(), self.cpu.get_r10(),
+            self.cpu.get_rdx(), self.cpu.get_r11(),
+            self.cpu.get_rsi(), self.cpu.get_r12(),
+            self.cpu.get_rdi(), self.cpu.get_r13(),
+            self.cpu.get_rbp(), self.cpu.get_r14(),
+            self.cpu.get_rsp(), self.cpu.get_r15(),
+        )
+    }
+    fn exec_debug(&mut self) -> Result<(), ExecError> {
+        match self.get_mem_adv_u8()? {
+            0 => eprintln!("\n{}", self.get_debug_string()),
+            _ => return Err(ExecError::InvalidOpEncoding),
+        }
         Ok(())
     }
 }

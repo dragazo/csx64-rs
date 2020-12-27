@@ -18,7 +18,7 @@ fn assemble_stdlib() -> Vec<(String, ObjectFile)> {
     vec![
         assemble_physical_file!("start.asm"),
         assemble_physical_file!("ctype.asm"),
-        //assemble_physical_file!("malloc.asm"),
+        assemble_physical_file!("malloc.asm"),
     ]
 }
 

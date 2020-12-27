@@ -361,6 +361,7 @@ pub(super) enum Instruction {
     PUSH, POP,
     INC, DEC, NEG, NOT,
     MOVS(Size),
+    DEBUG(u8),
 }
 
 lazy_static! {
@@ -598,6 +599,8 @@ lazy_static! {
         insert!(m: Caseless("MOVSW") => Instruction::MOVS(Size::Word));
         insert!(m: Caseless("MOVSD") => Instruction::MOVS(Size::Dword));
         insert!(m: Caseless("MOVSQ") => Instruction::MOVS(Size::Qword));
+
+        insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
 
         m
     };

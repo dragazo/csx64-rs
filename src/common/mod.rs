@@ -36,7 +36,7 @@ pub enum OPCode
 
     STRING,
 
-
+    DEBUG,
     
 
     

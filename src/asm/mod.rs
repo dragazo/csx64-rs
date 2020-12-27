@@ -1300,6 +1300,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::NOT => args.process_unary_op(arguments, OPCode::NOT as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
 
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some(size.basic_sizecode().unwrap()))?,
+
+                            Instruction::DEBUG(ext) => args.process_no_arg_op(arguments, Some(OPCode::DEBUG as u8), Some(ext))?,
                         }
                     }
         
