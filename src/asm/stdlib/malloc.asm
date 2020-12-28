@@ -70,38 +70,22 @@ malloc:
         ; get the next pointer
         mov rdx, [rsi]
         btr rdx, 0
-        
-        ; if it's occupied, skip
-        jc .cont
+        jc .cont ; if it's occupied, skip
         
         ; compute size - if it's not big enough, it won't work
         mov rcx, rdx
         sub rcx, rsi
         sub rcx, 16
         cmp rcx, rdi
-        jb .cont
+        jb .cont ; if it's too small, skip it
+        je .nosplit
         
-        ; -- yay we got one -- ;
-        
-        ; split the block if it's large enough (that the split block's size > 0)
-        ; if (block_size > request + 16)
-        lea rax, [rdi + 16]
-        cmp rcx, rax
-        jbe .nosplit
-        
-        ; splitting block - get pointer to start of split
-        lea rax, [rsi + 16 + rdi]
-        
-        ; update split's next/prev (unoccupied)
-        mov [rax], rdx
-        mov [rax + 8], rsi
-        
-        ; if next is in bounds, update next->prev
+        lea rax, [rsi + 16 + rdi] ; start of split
+        mov [rax], rdx      ; update split's next (vacant)
+        mov [rax + 8], rsi  ; update split's prev
         cmp rdx, r8
-        movb [rdx + 8], rax
-        
-        ; update register that holds our next
-        mov rdx, rax
+        movb [rdx + 8], rax ; if next is in bounds, update next->prev
+        mov rdx, rax        ; update register that holds our next
         
         .nosplit:
         or dl, 1 ; mark this block as occupied
@@ -205,21 +189,28 @@ realloc:
     
     ; compute the size of this block
     mov rcx, [rdi - 16]
-    and cl, !1
+    btr rcx, 0
     mov rbx, rcx ; save a copy of next in rbx
     sub rcx, rdi
     
     ; if we already have enough space, we're good
     cmp rcx, rsi
-    jae .ret
+    jae .enough_space
     ; compute the smaller size into rcx
     mova rcx, rsi
     
-    ; we're going down the route of needing a new array
-    ; if next is __malloc_end, we can still do it in-place
+    ; we now know we're resizing to be larger - decide what we can do
     cmp rbx, [__malloc_end]
-    jne .new_array
-    
+    je .inplace_tail ; if next is __malloc_end we can do it in-place as a tail extension
+    mov r11, [rbx] ; next->next in r11
+    btr r11, 0
+    jc .new_array ; if next is occupied, we need a new array
+    sub r11, rdi ; compute size of merging with (vacant) bucket to the right
+    cmp r11, rsi
+    jae .inplace_merge ; if merged has enough space, we can still do it inplace
+    jmp .new_array ; otherwise we need a new array
+
+    .inplace_tail:
     mov eax, sys_brk
     xor ebx, ebx
     syscall             ; current break point in rax
@@ -259,6 +250,15 @@ realloc:
     xor rax, rax
     ret
     
+    .inplace_merge:
+    lea rax, [rdi - 16] ; my meta block
+    mov rcx, [rbx]      ; next->next in rcx (at this point next is guaranteed to be vacant)
+    mov [rax], rcx
+    bts qword ptr [rax], 0
+    mov [rcx + 8], rax
+    sub rcx, rdi
+    jmp .enough_space ; we've now merged with the vacant block, so we can just truncate this expanded block
+
     .new_array: ; sad days, everybody, we need a new array
     push rcx
     push rdi
@@ -271,7 +271,11 @@ realloc:
     ; copy the contents up to the smaller size (this is why we aligned the size earlier)
     shr rcx, 3
     cld
+    push rdi
+    push rsi
     rep movsq
+    pop rsi
+    pop rdi
 
     ; free the old array
     push rdi
@@ -280,7 +284,24 @@ realloc:
     pop rax
     ret
     
-    .ret:
+    .enough_space: ; rcx has (full) size of this block, rsi has aligned requested size (less than or equal to block size), rdi has allocated pointer
+    cmp rcx, rsi
+    je .no_split
+    lea r8, [rdi - 16]    ; my meta block
+    lea r9, [rdi + rsi]   ; split point meta block
+    mov rax, [r8]         ; my meta next
+    mov [r8], r9          ; my next is the split block
+    bts qword ptr [r8], 0 ; mark myself as allocated (in-place realloc)
+    mov [r9], rax         ; split next is my meta next (occupied because we are occupied - then we'll free it to perform the merge operation)
+    mov [r9 + 8], r8      ; split prev is my meta block
+    mov [rax - 1 + 8], r9 ; split->next->prev = split
+    push rdi
+    lea rdi, [r9 + 16]
+    call free ; free the split block (marked as allocated) to perform any required merging and pruning operations
+    pop rax
+    ret
+
+    .no_split:
     mov rax, rdi
     ret
 
@@ -317,8 +338,11 @@ free:
     .nomerge_left:
 
     ; perform all the merging we need
-    mov [rdi], rdx
-    mov [rdx + 8], rdi
+    mov [rdi], rdx          ; update our next pointer
+    cmp rdx, [__malloc_end] ; check for the end pointer condition
+    movne [rdx + 8], rdi    ; rdx could be the end pointer, in which case don't dereference it (could be out of bounds)
+    jne .ret                ; if our updated next pointer is not the end pointer, we're done
+    mov [__malloc_end], rdi ; otherwise eliminate this block from the list
     .ret: ret
 
 ; void *calloc(qword size)

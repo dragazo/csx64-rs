@@ -1627,7 +1627,7 @@ impl Emulator {
         Ok(())
     }
 
-    fn get_debug_string(&self) -> String {
+    fn get_cpu_debug_string(&self) -> String {
         format!(
 r"rax: {:016x}  r8: {:016x}
 rbx: {:016x}  r9: {:016x}
@@ -1649,7 +1649,7 @@ rsp: {:016x} r15: {:016x}",
     }
     fn exec_debug(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
-            0 => eprintln!("\n{}", self.get_debug_string()),
+            0 => eprintln!("\n{}", self.get_cpu_debug_string()),
             _ => return Err(ExecError::InvalidOpEncoding),
         }
         Ok(())
