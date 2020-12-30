@@ -3297,6 +3297,7 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello world this is a message to the world".as_bytes());
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a mesis a from the other world".as_bytes());
     assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     e.flags.set_ots();
     assert_eq!(e.execute_cycles(u64::MAX), (6, StopReason::ForfeitTimeslot));
@@ -3305,6 +3306,7 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hheell  old this is a message to the world".as_bytes());
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a mesis a from the other world".as_bytes());
     assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_OTS));
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     assert_eq!(e.execute_cycles(u64::MAX), (6, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rsi(), arr1 + 10);
@@ -3313,6 +3315,7 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a mesis a from the other world".as_bytes());
     assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_OTS | MASK_DF));
     e.flags.clear_ots();
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     assert_eq!(e.execute_cycles(u64::MAX), (26, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rsi(), arr2 + 20);
@@ -3320,6 +3323,7 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hheell  old this a mageage the he worldrld".as_bytes());
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a r worler worler worler world".as_bytes());
     assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF));
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rsi(), arr2 + 20);
@@ -3327,6 +3331,7 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hheell  old this a mageage the he worldrld".as_bytes());
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a r worler worler worler world".as_bytes());
     assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF));
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     e.flags.set_ots();
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
@@ -3335,6 +3340,156 @@ fn test_movs() {
     assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hheell  old this a mageage the he worldrld".as_bytes());
     assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "tttttttwnot a r worler worler worler world".as_bytes());
     assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_OTS | MASK_DF));
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
+}
+#[test]
+fn test_stos() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    mov rsi, arr1
+    mov rdi, arr2
+    hlt
+    lea rdi, [arr1 + 7]
+    mov rax, 0x41_62_43_64_45_66_47_68 ; AbCdEfGh
+    cld
+    stosb
+    hlt
+    lea rdi, [arr2 + 14]
+    stosd
+    hlt
+    lea rdi, [arr1 + 24]
+    std
+    stosq
+    hlt
+    stosw
+    hlt
+    lea rdi, [arr2 + 3]
+    cld
+    mov ecx, 7
+    rep stosb
+    hlt
+    lea rdi, [arr1 + 7]
+    mov ecx, 17
+    rep stosb
+    hlt
+    lea rdi, [arr1 + 35]
+    std
+    mov ecx, 5
+    rep stosw
+    hlt
+    lea rdi, [arr2 + 34]
+    mov ecx, 3
+    rep stosq
+    hlt
+    lea rdi, [arr1 + 2]
+    mov ecx, 0
+    rep stosb
+    hlt
+    cld
+    rep stosw
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment data
+    arr1: db "hello world this is a message to the world\0"
+    arr2: db "this is not a message from the other world\0"
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    assert_eq!(e.flags.0 >> 32, 0);
+    let prev_flags = e.flags.0;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    let arr1 = e.cpu.get_rsi();
+    let arr2 = e.cpu.get_rdi();
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello world this is a message to the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "this is not a message from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whrld this is a message to the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "this is not a message from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.cpu.get_rdi(), arr1 + 8);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whrld this is a message to the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "this is not a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.cpu.get_rdi(), arr2 + 18);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whrld this is a mehGfEdCbA the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "this is not a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF));
+    assert_eq!(e.cpu.get_rdi(), arr1 + 16);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whrld thishGs a mehGfEdCbA the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "this is not a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF));
+    assert_eq!(e.cpu.get_rdi(), arr1 + 14);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (12, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whrld thishGs a mehGfEdCbA the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.cpu.get_rdi(), arr2 + 10);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    e.flags.set_ots();
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whhhhhhhhhhhhhhhhhhGfEdCbA the world".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_OTS));
+    assert_eq!(e.cpu.get_rdi(), arr1 + 24);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    e.flags.clear_ots();
+    assert_eq!(e.execute_cycles(u64::MAX), (10, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whhhhhhhhhhhhhhhhhhGfhGhGhGhGhGworld".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEage from the other world".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF));
+    assert_eq!(e.cpu.get_rdi(), arr1 + 25);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    e.flags.set_ots();
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whhhhhhhhhhhhhhhhhhGfhGhGhGhGhGworld".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEhGfEdCbAhGfEdCbAhGfEdCbA".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF | MASK_OTS));
+    assert_eq!(e.cpu.get_rdi(), arr2 + 10);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whhhhhhhhhhhhhhhhhhGfhGhGhGhGhGworld".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEhGfEdCbAhGfEdCbAhGfEdCbA".as_bytes());
+    assert_eq!(e.flags.0, prev_flags | mask!(Flags: MASK_DF | MASK_OTS));
+    assert_eq!(e.cpu.get_rdi(), arr1 + 2);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
+
+    e.flags.clear_ots();
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_null_terminated(arr1).unwrap(), "hello whhhhhhhhhhhhhhhhhhGfhGhGhGhGhGworld".as_bytes());
+    assert_eq!(e.memory.get_null_terminated(arr2).unwrap(), "thihhhhhhht a hGfEhGfEdCbAhGfEdCbAhGfEdCbA".as_bytes());
+    assert_eq!(e.flags.0, prev_flags);
+    assert_eq!(e.cpu.get_rdi(), arr1 + 2);
+    assert_eq!(e.cpu.get_rsi(), arr1);
+    assert_eq!(e.cpu.get_rcx(), 0);
 
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
 }

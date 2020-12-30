@@ -165,17 +165,14 @@ malloc:
 realloc:
     ; if pointer is null, call malloc()
     cmp rdi, 0
-    jnz .non_null
-    mov rdi, rsi
-    call malloc
-    ret
-    .non_null:
+    movz rdi, rsi
+    jz malloc
     
     ; if size is zero, call free()
     cmp rsi, 0
     jnz .resize
     call free
-    xor rax, rax
+    xor rax, rax ; we need to return null
     ret
     .resize:
     

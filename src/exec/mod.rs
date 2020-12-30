@@ -1606,6 +1606,8 @@ impl Emulator {
         match s >> 2 {
             0 => self.exec_string_movs(sizecode),
             1 => self.exec_string_rep(sizecode, Self::exec_string_movs),
+            7 => self.exec_string_stos(sizecode),
+            8 => self.exec_string_rep(sizecode, Self::exec_string_stos),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
@@ -1622,6 +1624,20 @@ impl Emulator {
         } else {
             self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode));
             self.cpu.set_rsi(rsi.wrapping_add(1 << sizecode));
+        }
+
+        Ok(())
+    }
+    fn exec_string_stos(&mut self, sizecode: u8) -> Result<(), ExecError> {
+        let rdi = self.cpu.get_rdi();
+        let val = self.cpu.get_rax();
+
+        self.raw_set_mem(rdi, sizecode, val)?;
+
+        if self.flags.get_df() {
+            self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode));
+        } else {
+            self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode));
         }
 
         Ok(())

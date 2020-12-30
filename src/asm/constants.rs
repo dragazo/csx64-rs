@@ -360,7 +360,7 @@ pub(super) enum Instruction {
     JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
     PUSH, POP,
     INC, DEC, NEG, NOT,
-    MOVS(Size),
+    MOVS(Size), STOS(Size),
     DEBUG(u8),
 }
 
@@ -599,6 +599,11 @@ lazy_static! {
         insert!(m: Caseless("MOVSW") => Instruction::MOVS(Size::Word));
         insert!(m: Caseless("MOVSD") => Instruction::MOVS(Size::Dword));
         insert!(m: Caseless("MOVSQ") => Instruction::MOVS(Size::Qword));
+
+        insert!(m: Caseless("STOSB") => Instruction::STOS(Size::Byte));
+        insert!(m: Caseless("STOSW") => Instruction::STOS(Size::Word));
+        insert!(m: Caseless("STOSD") => Instruction::STOS(Size::Dword));
+        insert!(m: Caseless("STOSQ") => Instruction::STOS(Size::Qword));
 
         insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
 
