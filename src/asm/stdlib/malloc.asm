@@ -33,12 +33,12 @@ __malloc_align: equ 16
 ; void *malloc(u64 size)
 ; allocates contiguous memory in dynamically-allocated space via sys_brk.
 ; you should not directly call sys_brk at any time (except in the case where it just returns the current break).
-; the memory returned is aligned on 16-byte boundaries.
+; the memory returned is aligned on 16-byte boundaries, making it suitable for all primitive types (including aligned xmm values).
 ; the pointer returned by this function must later be dealocated by calling free().
 ; allocating 0 bytes returns null.
 ; upon failure (e.g. sys_brk refused), returns null.
-; upon success, returns a pointer to the allocated memory.
-; dereferencing this pointer out of bounds is undefined behavior.
+; upon success, returns a (non-null) pointer to the allocated memory, valid over the address space [0, size).
+; dereferencing this pointer out of bounds is undefined behavior - importantly, this can corrupt the malloc data structure.
 malloc:
     ; allocating 0 returns null
     cmp rdi, 0
@@ -99,14 +99,6 @@ malloc:
     
     ; -- if we got here, we went out of range of the malloc field -- ;
     
-    ; put position to add block in r8 (overwrite prev if not in use, otherwise __malloc_end)
-    cmp r11, 0
-    jz .begin_add
-    mov rax, [r11]
-    bt rax, 0
-    movnc r8, r11
-    movnc r11, [r8 + 8]
-    
     .begin_add:
     ; get program break
     mov eax, sys_brk
@@ -128,22 +120,15 @@ malloc:
     ret
     
     .nospace:
-    ; otherwise we have no space - get amount of space to allocate (multiple of step)
+    ; otherwise we have no space - allocate more to make new break (r10) valid
     mov rcx, rdi
     mov rdi, r10
-    sub rdi, rax
     mov rsi, __malloc_step
     call _align
+    mov rbx, rax
+    mov eax, sys_brk
+    syscall
     mov rdi, rcx
-
-    ; add that much memory
-    mov r9, rax
-    mov eax, sys_brk
-    xor ebx, ebx
-    syscall
-    lea rbx, [rax + r9]
-    mov eax, sys_brk
-    syscall
 
     ; if we got a zero return, we're good
     cmp rax, 0
@@ -222,17 +207,12 @@ realloc:
     ret
     
     .more_mem:
-    ; otherwise we need to allocate more space
-    ; align request size to a multiple of __malloc_step
+    ; otherwise we need to allocate more space to make new break (r8) valid
     mov r10, rdi
-    mov r11, rax ; save current break in r11
     mov rdi, r8
-    sub rdi, rax
     mov rsi, __malloc_step
     call _align
-    ; and allocate that much extra memory
     mov rbx, rax
-    add rbx, r11
     mov eax, sys_brk
     syscall
     mov rdi, r10
@@ -281,14 +261,15 @@ realloc:
     .enough_space: ; rcx has (full) size of this block, rsi has aligned requested size (less than or equal to block size), rdi has allocated pointer
     cmp rcx, rsi
     je .no_split
-    lea r8, [rdi - 16]    ; my meta block
-    lea r9, [rdi + rsi]   ; split point meta block
-    mov rax, [r8]         ; my meta next
-    mov [r8], r9          ; my next is the split block
-    bts qword ptr [r8], 0 ; mark myself as allocated (in-place realloc)
-    mov [r9], rax         ; split next is my meta next (occupied because we are occupied - then we'll free it to perform the merge operation)
-    mov [r9 + 8], r8      ; split prev is my meta block
-    mov [rax - 1 + 8], r9 ; split->next->prev = split
+    lea r8, [rdi - 16]      ; my meta block
+    lea r9, [rdi + rsi]     ; split point meta block
+    mov rax, [r8]           ; rax is my meta next (has the occupied flag)
+    mov [r8], r9            ; my next is the split block
+    bts qword ptr [r8], 0   ; mark myself as allocated (in-place realloc)
+    mov [r9], rax           ; split next is my meta next (occupied because we are occupied - then we'll free it to perform the merge operation)
+    mov [r9 + 8], r8        ; split prev is my meta block
+    cmp rax, [__malloc_end] ; make sure next line is in bounds
+    movb [rax - 1 + 8], r9  ; split->next->prev = split   PROBLEM HERE
     push rdi
     lea rdi, [r9 + 16]
     call free ; free the split block (marked as allocated) to perform any required merging and pruning operations

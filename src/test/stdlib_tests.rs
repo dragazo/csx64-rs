@@ -1,4 +1,5 @@
 use std::iter;
+use rand::prelude::*;
 
 use super::*;
 use crate::exec::*;
@@ -366,6 +367,9 @@ fn test_toupper() {
 }
 
 const MALLOC_ALIGN: u64 = 16;
+fn align_to(val: u64, align: u64) -> u64 {
+    val + (val.wrapping_neg() & (align - 1))
+}
 
 struct MallocEntry {
     pos: u64,
@@ -586,6 +590,7 @@ fn test_malloc() {
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
     let first = e.cpu.get_rax();
     assert!(first >= base);
+    assert_eq!(first, align_to(base, MALLOC_ALIGN) + 16);
     assert_eq!(first % MALLOC_ALIGN, 0);
     assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 32)]);
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
@@ -900,6 +905,7 @@ fn test_malloc_realloc() {
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
     let first = e.cpu.get_rax();
     assert!(first >= base);
+    assert_eq!(first, align_to(base, MALLOC_ALIGN) + 16);
     assert_eq!(first % MALLOC_ALIGN, 0);
     assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 16)]);
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
@@ -1105,6 +1111,7 @@ fn test_malloc_calloc() {
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
     let first = e.cpu.get_rax();
     assert!(first >= base);
+    assert_eq!(first, align_to(base, MALLOC_ALIGN) + 16);
     assert_eq!(first % MALLOC_ALIGN, 0);
     assert!(e.memory.get(first, 645).unwrap().iter().all(|&x| x == 0));
     assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 656)]);
@@ -1145,4 +1152,106 @@ fn test_malloc_calloc() {
     assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[]);
 
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(77));
+}
+#[test]
+fn test_malloc_rand() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern realloc
+    extern __malloc_beg, __malloc_end
+    segment text
+    main:
+    mov rax, __malloc_beg
+    mov rbx, __malloc_end
+
+    top:
+    hlt
+    call realloc
+    jmp top
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let base = e.cpu.get_rbp();
+    assert_eq!(base, e.memory.len() as u64);
+    let mut rng = rand::thread_rng();
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let beg_ptr = e.cpu.get_rax();
+    let end_ptr = e.cpu.get_rbx();
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[]);
+
+    // allocate a bunch of memory locations and fill them with random content
+    const ALLOC_COUNT: usize = 1024;
+    const MAX_ALLOC_SIZE: u64 = 1024;
+    let mut allocs: Vec<(u64, u64, Vec<u8>)> = Vec::with_capacity(ALLOC_COUNT);
+    for _ in 0..ALLOC_COUNT {
+        let raw_size = rng.next_u32() as u64 % MAX_ALLOC_SIZE + 1;
+        let size = align_to(raw_size, MALLOC_ALIGN);
+
+        e.cpu.set_rdi(0);
+        e.cpu.set_rsi(raw_size); // raw_size is only passed to the machine - we use (aligned) size
+        assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+        let pos = e.cpu.get_rax();
+        println!("alloc {:#018x}:{}", pos, size); // in case the test fails, we need the random sequence it used
+        
+        // fill with random content
+        let mut content = vec![0; size as usize];
+        rng.fill_bytes(&mut content);
+        e.memory.get_mut(pos, size).unwrap().copy_from_slice(&content);
+
+        // check alignment and absolute positioning
+        assert_eq!(pos % MALLOC_ALIGN, 0);
+        if let Some(last) = allocs.last() {
+            assert_eq!(pos, last.0 + 16 + last.1);
+        }
+
+        allocs.push((pos, size, content));
+    }
+
+    // make sure they all still have their content
+    for (pos, size, content) in allocs.iter() {
+        assert_eq!(e.memory.get(*pos, *size).unwrap(), content);
+    }
+
+    // randomize array so we perform the next step in undefined order
+    allocs.shuffle(&mut rng);
+
+    // resize everything and make sure they keep their content
+    for i in 0..allocs.len() {
+        let pos = allocs[i].0;
+        let size = allocs[i].1;
+
+        let raw_new_size = rng.next_u32() as u64 % MAX_ALLOC_SIZE + 1;
+        let new_size = align_to(raw_new_size, MALLOC_ALIGN);
+
+        e.cpu.set_rdi(pos);
+        e.cpu.set_rsi(new_size);
+        assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+        let new_pos = e.cpu.get_rax();
+        println!("realloc {:#018x}:{} -> {:#018x}:{}", pos, size, new_pos, new_size);
+
+        // make sure we still have the same content up to the smaller of the two sizes
+        let min_size = new_size.min(size);
+        assert_eq!(e.memory.get(new_pos, min_size).unwrap(), &allocs[i].2[..min_size as usize]);
+
+        // get a new content array
+        let mut new_content = vec![0; new_size as usize];
+        rng.fill_bytes(&mut new_content);
+        e.memory.get_mut(new_pos, new_size).unwrap().copy_from_slice(&new_content);
+
+        allocs[i] = (new_pos, new_size, new_content);
+
+        // make sure new array doesn't overlap with any others
+        for other in allocs[..i].iter().chain(allocs[i+1..].iter()) {
+            if new_pos + new_size <= other.0 - 16 { continue }
+            if new_pos - 16 >= other.0 + other.1 { continue }
+            panic!("intersecting allocations! {:#018x}:{} vs {:#018x}:{}", new_pos, new_size, other.0, other.1);
+        }
+    }
+
+    // make sure they all still have their updated content
+    for (pos, size, content) in allocs.iter() {
+        assert_eq!(e.memory.get(*pos, *size).unwrap(), content);
+    }
 }
