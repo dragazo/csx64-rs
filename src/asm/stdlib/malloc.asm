@@ -1,7 +1,4 @@
-global malloc
-global free
-global realloc
-; global calloc
+global malloc, free, realloc, calloc
 
 ; these are global but you should never modify them.
 ; should only by touched once by start.asm for initialization.
@@ -344,34 +341,23 @@ free:
 
 ; void *calloc(qword size)
 ; as malloc except that it also zeroes the contents.
-; calloc:
-;     ; align the size (for later)
-;     mov esi, __malloc_align
-;     call _align
-;     push rax
-    
-;     ; allocate the memory
-;     mov rdi, rax
-;     call malloc ; array in rax
-;     pop rcx     ; size in rcx
-    
-;     ; if it returned null, early exit
-;     cmp rax, 0
-;     jz .ret
-    
-;     ; zero the contents
-;     mov r8,  rax ; save return value in r8
-;     mov rdi, rax ; set fill destination
-;     xor rax, rax ; set fill value
-;     shr rcx, 3   ; get # of 64-bit blocks to fill
-;     cld          ; set forward fill mode
-;     rep stosq    ; fill with zero
-;     mov rax, r8  ; restore return value
-    
-;     .ret: ret
+calloc:
+    call malloc
+    cmp rax, 0
+    jz .ret ; if allocation failed, early return
+    mov r8, rax
+    mov rdi, rax
+    xor rax, rax
+    mov rcx, [rdi - 16] ; remember there's a state flag in bit 0 of this value
+    sub rcx, rdi
+    shr rcx, 3 ; division by 8 discards the state flag, so we're ok
+    cld
+    rep stosq
+    mov rax, r8
+    .ret: ret
 
 segment bss
 
-align 8 ; begin/end address for malloc data structure
+align 8 ; begin/end address for malloc data structure - these must be initialized before use
 __malloc_beg: resq 1
 __malloc_end: resq 1

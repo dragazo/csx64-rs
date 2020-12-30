@@ -1041,3 +1041,108 @@ fn test_malloc_realloc() {
 
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(77));
 }
+#[test]
+fn test_malloc_calloc() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern calloc, free
+    extern __malloc_beg, __malloc_end
+    segment text
+    main:
+    mov rax, __malloc_beg
+    mov rbx, __malloc_end
+    hlt
+
+    mov edi, 0
+    call calloc
+    hlt
+
+    mov edi, 645
+    call calloc
+    mov r15, rax
+    hlt
+    mov edi, 128
+    call calloc
+    mov r14, rax
+    hlt
+    mov rdi, r15
+    call free
+    hlt
+    mov edi, 645
+    call calloc
+    hlt
+    mov rdi, rax
+    call free
+    hlt
+    mov edi, 656
+    call calloc
+    hlt
+    mov rdi, rax
+    call free
+    hlt
+    mov rdi, r14
+    call free
+    hlt
+
+    mov eax, 77
+    ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let base = e.cpu.get_rbp();
+    assert_eq!(base, e.memory.len() as u64);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let beg_ptr = e.cpu.get_rax();
+    let end_ptr = e.cpu.get_rbx();
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let first = e.cpu.get_rax();
+    assert!(first >= base);
+    assert_eq!(first % MALLOC_ALIGN, 0);
+    assert!(e.memory.get(first, 645).unwrap().iter().all(|&x| x == 0));
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 656)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let second = e.cpu.get_rax();
+    assert_eq!(second, first + 656 + 16);
+    assert_eq!(second % MALLOC_ALIGN, 0);
+    assert!(e.memory.get(second, 128).unwrap().iter().all(|&x| x == 0));
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 656), (true, 128)]);
+    e.memory.get_mut(second, 128).unwrap().copy_from_slice(&LONG_MESSAGE[445..445+128]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(second, 128).unwrap(), &LONG_MESSAGE[445..445+128]);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(false, 656), (true, 128)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), first);
+    assert!(e.memory.get(first, 645).unwrap().iter().all(|&x| x == 0));
+    assert_eq!(e.memory.get(second, 128).unwrap(), &LONG_MESSAGE[445..445+128]);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 656), (true, 128)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(second, 128).unwrap(), &LONG_MESSAGE[445..445+128]);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(false, 656), (true, 128)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), first);
+    assert!(e.memory.get(first, 656).unwrap().iter().all(|&x| x == 0));
+    assert_eq!(e.memory.get(second, 128).unwrap(), &LONG_MESSAGE[445..445+128]);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 656), (true, 128)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(second, 128).unwrap(), &LONG_MESSAGE[445..445+128]);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(false, 656), (true, 128)]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(77));
+}
