@@ -12,11 +12,9 @@
 //! # Example
 //! ```
 //! # use csx64::common::serialization::*;
-//! # use std::io::Cursor;
-//! let mut f = Cursor::new(Vec::new());
+//! let mut f = vec![];
 //! "hello world".bin_write(&mut f).unwrap();
-//! f.set_position(0);
-//! assert_eq!(String::bin_read(&mut f).unwrap(), "hello world");
+//! assert_eq!(String::bin_read(&mut f.as_slice()).unwrap(), "hello world");
 //! ```
 
 use std::io::{self, Read, Write};
@@ -27,9 +25,6 @@ use std::{mem, cmp};
 use std::num::FpCategory;
 use rug::{Float, float::Special, ops::NegAssign};
 use rug::{Integer, integer::Order};
-
-#[cfg(test)]
-use std::io::Cursor;
 
 /// Denotes that a type can be encoded as cross-platform binary.
 pub trait BinaryWrite {
@@ -117,7 +112,7 @@ impl BinaryRead for char {
 #[test]
 fn test_serialize_int() {
     let vals = [u64::MIN, u64::MAX, 0xdeadbeefdeadbeef, 0x0102030405060708];
-    let mut cursor = Cursor::new(Vec::with_capacity(1024));
+    let mut cursor = Vec::with_capacity(1024);
     macro_rules! test_for {
         ($($type:ty),+) => {{
             for &x in vals.iter() {
@@ -125,7 +120,7 @@ fn test_serialize_int() {
                     (x as $type).bin_write(&mut cursor).unwrap();
                 })*
             }
-            cursor.set_position(0);
+            let mut cursor = &mut cursor.as_slice();
             for &x in vals.iter() {
                 $({
                 let v = <$type>::bin_read(&mut cursor).unwrap();
@@ -415,11 +410,11 @@ fn test_serial_float() {
         Float::with_val(76, 1) << rug::float::exp_max(),
         Float::with_val(72, -1) << rug::float::exp_min(),
     ];
-    let mut c = Cursor::new(vec![]);
+    let mut c = vec![];
     for v in vals {
         v.bin_write(&mut c).unwrap();
     }
-    c.set_position(0);
+    let mut c = c.as_slice();
     for v in vals {
         let r = Float::bin_read(&mut c).unwrap();
         assert_eq!(r.prec(), v.prec());

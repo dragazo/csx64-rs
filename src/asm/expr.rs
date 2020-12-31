@@ -12,9 +12,6 @@ use std::cmp::Ordering;
 use std::iter::FusedIterator;
 use rug::{Integer, Float};
 
-#[cfg(test)]
-use std::io::Cursor;
-
 use num_traits::FromPrimitive;
 
 use crate::common::serialization::*;
@@ -87,9 +84,9 @@ impl BinaryRead for OP {
 }
 #[test]
 fn test_invalid_op_decode() {
-    let mut f = Cursor::new(Vec::new());
+    let mut f = vec![];
     f.write_all(&[45]).unwrap();
-    f.set_position(0);
+    let mut f = f.as_slice();
     match OP::bin_read(&mut f) {
         Err(e) if e.kind() == io::ErrorKind::InvalidData => (),
         _ => panic!("didn't fail"),

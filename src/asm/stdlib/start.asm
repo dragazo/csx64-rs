@@ -1,6 +1,7 @@
 extern start
 
 extern __malloc_beg, __malloc_end, __malloc_align
+extern exit
 
 segment text
     
@@ -14,6 +15,5 @@ segment text
     mov qword ptr [__malloc_end], rax
     
     call start
-    mov ebx, eax
-    mov eax, sys_exit
-    syscall
+    mov rdi, rax
+    call exit

@@ -1255,3 +1255,218 @@ fn test_malloc_rand() {
         assert_eq!(e.memory.get(*pos, *size).unwrap(), content);
     }
 }
+
+#[test]
+fn test_atexit_1() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern atexit
+    segment text
+    f1:
+        mov eax, 1
+        hlt
+        ret
+
+    main:
+        mov rdi, f1
+        call atexit
+        hlt
+
+        mov eax, 420
+        ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    // return from main()
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 1);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(420));
+}
+#[test]
+fn test_atexit_2() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern atexit
+    segment text
+    f1:
+        mov eax, 1
+        hlt
+        ret
+    f2:
+        mov eax, 2
+        hlt
+        ret
+
+    main:
+        mov rdi, f1
+        call atexit
+        hlt
+        mov rdi, f2
+        call atexit
+        hlt
+
+        mov eax, 420
+        ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    // return from main()
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 2);
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 1);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(420));
+}
+#[test]
+fn test_atexit_32() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern atexit
+    segment text
+    f1:
+        mov eax, 1
+        hlt
+        ret
+    f2:
+        mov eax, 2
+        hlt
+        ret
+    f3:
+        mov eax, 3
+        hlt
+        ret
+    f4:
+        mov eax, 4
+        hlt
+        ret
+
+    main:
+        xor r15, r15
+        .top:
+            mov r14, r15
+            and r14, 3
+            mov rdi, [funcs + 8 * r14]
+            debug_cpu
+            call atexit
+            hlt
+            inc r15
+            cmp r15, 32
+            jb .top
+
+        mov eax, 420
+        ret
+    
+    segment rodata
+    funcs: dq f1, f2, f3, f4
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    for i in 0..32 {
+        assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+        if e.cpu.get_rax() != 0 { panic!("failed atexit {} with {}", i, e.cpu.get_rax()) }
+    }
+
+    // return from main()
+    for _ in 0..8 {
+        for i in (1..=4).rev() {
+            assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+            assert_eq!(e.cpu.get_rax(), i);
+        }
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(420));
+}
+#[test]
+fn test_atexit_add_hook_during_exit() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern atexit
+    segment text
+    f:
+        mov rdi, f
+        call atexit
+        hlt
+        ret
+
+    main:
+        mov rdi, f
+        call atexit
+        hlt
+
+        mov eax, 621
+        ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    // return from main()
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 1);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(621));
+}
+#[test]
+fn test_atexit_exit_during_exit() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern atexit, exit
+    segment text
+    f:
+        mov rdi, 434
+        call exit
+        times 16 hlt ; this shouldn't be executed
+
+    main:
+        mov rdi, f
+        call atexit
+        hlt
+
+        mov eax, 621
+        ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    // return from main()
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(-1));
+}
+#[test]
+fn test_abort() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern abort
+    segment text
+    main:
+        call abort
+        times 16 hlt
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(-1));
+}

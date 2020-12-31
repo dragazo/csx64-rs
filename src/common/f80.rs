@@ -11,8 +11,6 @@ use rug::ops::{NegAssign};
 use super::serialization::*;
 
 #[cfg(test)]
-use std::io::Cursor;
-#[cfg(test)]
 use rug::float::SmallFloat;
 
 const SIGNIFICANT_BITS: u32 = 64;
@@ -94,11 +92,11 @@ impl BinaryRead for F80 {
 #[test]
 fn test_serial_f80() {
     let vals = &[POSITIVE_ZERO, NEGATIVE_ZERO, POSITIVE_NAN, NEGATIVE_NAN, POSITIVE_INFINITY, NEGATIVE_INFINITY, MIN, MAX, MIN_POSITIVE];
-    let mut c = Cursor::new(vec![]);
+    let mut c = vec![];
     for v in vals {
         v.bin_write(&mut c).unwrap();
     }
-    c.set_position(0);
+    let mut c = c.as_slice();
     for v in vals {
         let res = F80::bin_read(&mut c).unwrap();
         assert_eq!(v.0, res.0);

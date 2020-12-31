@@ -1,12 +1,10 @@
-use std::io::Cursor;
 use crate::common::serialization::*;
 use crate::asm::*;
 
 fn serialize_deserialize<T>(thing: &T) -> T where T: BinaryRead + BinaryWrite {
-    let mut f = Cursor::new(vec![]);
+    let mut f = vec![];
     thing.bin_write(&mut f).unwrap();
-    f.set_position(0);
-    T::bin_read(&mut f).unwrap()
+    T::bin_read(&mut f.as_slice()).unwrap()
 }
 
 macro_rules! assemble_physical_file {
@@ -17,8 +15,9 @@ macro_rules! assemble_physical_file {
 fn assemble_stdlib() -> Vec<(String, ObjectFile)> {
     vec![
         assemble_physical_file!("start.asm"),
-        assemble_physical_file!("ctype.asm"),
         assemble_physical_file!("malloc.asm"),
+        assemble_physical_file!("exit.asm"),
+        assemble_physical_file!("ctype.asm"),
     ]
 }
 

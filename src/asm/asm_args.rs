@@ -1192,7 +1192,7 @@ impl AssembleArgs<'_> {
 
         Ok(())
     }
-    pub(super) fn process_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], default_imm_size: Option<Size>) -> Result<(), AsmError> {
+    pub(super) fn process_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &[Size], default_size: Option<Size>) -> Result<(), AsmError> {
         if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
         if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
 
@@ -1205,7 +1205,7 @@ impl AssembleArgs<'_> {
                 self.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2) | (if reg.high { 1 } else { 0 }))?;
             }
             Argument::Imm(imm) => {
-                let size = match imm.size.or(default_imm_size) {
+                let size = match imm.size.or(default_size) {
                     None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     Some(s) => s,
                 };
@@ -1214,7 +1214,7 @@ impl AssembleArgs<'_> {
                 self.append_val(size, imm.expr, allowed_type)?;
             }
             Argument::Address(addr) => {
-                let size = match addr.pointed_size {
+                let size = match addr.pointed_size.or(default_size) {
                     None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     Some(s) => s,
                 };
