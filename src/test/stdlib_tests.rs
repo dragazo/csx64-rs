@@ -971,7 +971,7 @@ fn test_malloc_realloc() {
     e.memory.get_mut(first, 112).unwrap().clone_from_slice(&LONG_MESSAGE[300..300+112]);
     assert_eq!(get_malloc_walk(&e.memory, beg_ptr, end_ptr), &[(true, 112), (false, 16), (true, 64)]);
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
-    let mut fourth = e.cpu.get_rax();
+    let fourth = e.cpu.get_rax();
     assert_eq!(fourth, third + 64 + 16);
     assert_eq!(fourth % MALLOC_ALIGN, 0);
     assert_eq!(e.memory.get(fourth, 112).unwrap(), &LONG_MESSAGE[300..300+112]);

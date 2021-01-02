@@ -195,6 +195,8 @@ pub enum AsmErrorKind {
     UnknownSymbol(String),
 
     StringDeclareNotByteSize,
+
+    BinaryInternEscapesAsmTime,
 }
 impl From<BadAddress> for AsmErrorKind {
     fn from(reason: BadAddress) -> Self {
@@ -426,7 +428,7 @@ impl Size {
         self.basic_sizecode().map(|v| 1 << v)
     }
 
-    /// If self is a vector size (xmmword, ymmword, zmmword), returns the sizecode (0, 1, 2)
+    /// If self is a vector size (xword, yword, zword), returns the sizecode (0, 1, 2)
     fn vector_sizecode(self) -> Option<u8> {
         match self {
             Size::Xword => Some(0),
@@ -435,7 +437,7 @@ impl Size {
             _ => None
         }
     }
-    /// If self is a vector size (xmmword, ymmword, zmmword), return the size (16, 32, 64).
+    /// If self is a vector size (xword, yword, zword), return the size (16, 32, 64).
     fn vector_size(self) -> Option<u8> {
         self.vector_sizecode().map(|v| 1 << (v + 4))
     }
@@ -537,7 +539,6 @@ pub struct ObjectFile {
     extern_symbols: HashMap<String, usize>,
 
     symbols: SymbolTable<usize>,
-    binary_set: BinarySet,
 
     text_align: usize,
     rodata_align: usize,
@@ -575,9 +576,7 @@ impl BinaryWrite for ObjectFile {
         self.text.bin_write(f)?;
         self.rodata.bin_write(f)?;
         self.data.bin_write(f)?;
-        self.bss_len.bin_write(f)?;
-
-        self.binary_set.bin_write(f)
+        self.bss_len.bin_write(f)
     }
 }
 impl BinaryRead for ObjectFile {
@@ -605,8 +604,6 @@ impl BinaryRead for ObjectFile {
         let data = BinaryRead::bin_read(f)?;
         let bss_len = BinaryRead::bin_read(f)?;
 
-        let binary_set = BinaryRead::bin_read(f)?;
-
         Ok(ObjectFile {
             global_symbols,
             extern_symbols,
@@ -626,8 +623,6 @@ impl BinaryRead for ObjectFile {
             rodata,
             data,
             bss_len,
-
-            binary_set,
         })
     }
 }
@@ -713,7 +708,7 @@ pub enum IllegalPatchReason {
 /// On critical (bad/illegal) failure, returns Err.
 /// Otherwise returns Ok(Err) if evaluation fails (this is not a bad error, as it might can be patched later).
 /// Returns Ok(OK(())) to denote that everything succeeded and the hole was successfully patched.
-fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> Result<(), PatchError> {
+fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableInternalsCore) -> Result<(), PatchError> {
     let val = match hole.expr.eval(symbols) {
         Err(e) => match e {
             EvalError::Illegal(reason) => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::IllegalExpr(reason)), line_num: hole.line_num }),
@@ -802,7 +797,7 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
     }
     Ok(())
 }
-fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn SymbolTableCore) -> Result<(), AsmError> {
+fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn SymbolTableInternalsCore) -> Result<(), AsmError> {
     for i in (0..holes.len()).rev() {
         match patch_hole(seg, &holes[i], symbols) {
             Ok(()) => { holes.swap_remove(i); },
@@ -814,7 +809,7 @@ fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn Sy
     }
     Ok(())
 }
-fn elim_all_holes(src: &str, seg: &mut Vec<u8>, holes: &[Hole], symbols: &dyn SymbolTableCore) -> Result<(), LinkError> {
+fn elim_all_holes(src: &str, seg: &mut Vec<u8>, holes: &[Hole], symbols: &dyn SymbolTableInternalsCore) -> Result<(), LinkError> {
     for hole in holes {
         match patch_hole(seg, hole, symbols) {
             Ok(()) => (),
@@ -901,12 +896,14 @@ struct SegmentBases {
 
 /// The symbols to introduce to the assembler prior to parsing any source.
 pub struct Predefines(SymbolTable<usize>);
-impl Predefines {
+impl From<SymbolTable<()>> for Predefines {
     /// Constructs a new set of predefines from a symbol table.
-    pub fn from(symbols: SymbolTable<()>) -> Predefines {
+    fn from(symbols: SymbolTable<()>) -> Predefines {
         let transformed = symbols.raw.into_iter().map(|(key, (value, _))| (key, (value, 0))).collect();
-        Predefines(SymbolTable { raw: transformed })
+        Predefines(SymbolTable { raw: transformed, binaries: symbols.binaries })
     }
+}
+impl Predefines {
     /// Appends the symbols of another symbol table to the list of predefines.
     /// This can be used to define additional symbols on top of the default predefines.
     /// If any new symbol was already defined, returns `Err` with the name of the conflicting symbol.
@@ -950,7 +947,6 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
             extern_symbols: Default::default(),
 
             symbols: predefines.0,
-            binary_set: Default::default(),
 
             text_align: 1,
             rodata_align: 1,
@@ -1375,6 +1371,12 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
                 return Err(LinkError::GlobalSymbolMultipleSources { ident: global.into(), src1: (objs[there_line].0.to_owned(), there_line), src2: (obj.0.to_owned(), here_line) });
             }
         }
+
+        // for now, we don't allow object files to still have $bin expressions, as this can cause cyclic task ordering dependencies
+        assert!(!obj.1.symbols.iter().any(|(_, (expr, _))| expr.has_operator(OP::Binary)));
+        assert!(!obj.1.text_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
+        assert!(!obj.1.rodata_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
+        assert!(!obj.1.data_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
     }
 
     // locations for merged segments
@@ -1434,12 +1436,14 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         }
 
         // merge binary constants and keep track of their new slice indices
-        let mut binary_set_locations: Vec<usize> = Vec::with_capacity(obj.binary_set.len());
-        for bin in obj.binary_set.iter() {
+        let their_binaries = obj.symbols.binaries.get_mut();
+        let mut binary_set_locations: Vec<usize> = Vec::with_capacity(their_binaries.len());
+        for bin in their_binaries.iter() {
             let loc = binary_set.add(bin);
             binary_set_locations.push(loc);
         }
         assert!(obj_to_binary_set_locations.insert(obj_index, binary_set_locations).is_none());
+        their_binaries.clear();
     }
 
     // after merging, but before alignment, we need to allocate all the provisioned binary constants
@@ -1503,10 +1507,12 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
 
     // patch everything from every included file
     for (&obj_index, _) in included.iter() {
-        let (obj_name, obj) = &objs[obj_index];
+        let (obj_name, obj) = &mut objs[obj_index];
         elim_all_holes(obj_name, &mut text, &obj.text_holes, &obj.symbols)?;
         elim_all_holes(obj_name, &mut rodata, &obj.rodata_holes, &obj.symbols)?;
         elim_all_holes(obj_name, &mut data, &obj.data_holes, &obj.symbols)?;
+
+        assert!(obj.symbols.binaries.get_mut().is_empty());
     }
 
     // combine the segments together into final content and we're practically done

@@ -82,27 +82,12 @@ lazy_static! {
 }
 
 lazy_static! {
-    pub(super) static ref UNARY_FUNCTION_OPERATOR_TO_OP: HashMap<&'static str, OP> = {
-        let mut m = HashMap::new();
+    pub(super) static ref UNARY_FUNCTION_OPERATOR_TO_OP: BTreeMap<&'static str, OP> = {
+        let mut m = BTreeMap::new();
 
-        // m.insert("$INT", OP::Int);
-        // m.insert("$UINT", OP::UInt);
-        // m.insert("$FLOAT", OP::Float);
-
-        // m.insert("$FLOOR", OP::Floor);
-        // m.insert("$CEIL", OP::Ceil);
-        // m.insert("$ROUND", OP::Round);
-        // m.insert("$TRUNC", OP::Trunc);
-
-        // m.insert("$REPR64", OP::Repr64);
-        // m.insert("$REPR32", OP::Repr32);
-
-        // m.insert("$FLOAT64", OP::Float64);
-        // m.insert("$FLOAT32", OP::Float32);
-
-        // m.insert("$PREC64", OP::Prec64);
-        // m.insert("$PREC32", OP::Prec32);
-
+        insert!(m: "$bin" => OP::Binary);
+        insert!(m: "$len" => OP::Length);
+        
         m
     };
 }

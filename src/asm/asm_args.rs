@@ -1,6 +1,5 @@
 use std::iter::{self, Peekable};
 use std::str::CharIndices;
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use rug::{Integer, Float};
 
@@ -281,7 +280,7 @@ impl AssembleArgs<'_> {
                         '"' | '\'' => {
                             if numeric { return Err(AsmError { kind: AsmErrorKind::UnexpectedString, line_num: self.line_num, pos: Some(p), inner_err: None }); }
                             let (_, aft) = self.extract_string(raw_line, parsing_pos + p, raw_stop)?;  // if we run into a string, refer to the string extractor to get aft
-                            advance_cursor(&mut chars, aft - 1 - raw_start, raw_stop); // jump to just before aft position (the end quote) (account for base index change)
+                            advance_cursor(&mut chars, aft - 1 - parsing_pos, raw_stop); // jump to just before aft position (the end quote) (account for base index change)
                             debug_assert_ne!(chars.peek().unwrap().0, p);
                             debug_assert_eq!(chars.peek().unwrap().1, ch); // sanity check: should not be same position, but should be same char
                         }
@@ -348,32 +347,6 @@ impl AssembleArgs<'_> {
                         let args = self.parse_comma_sep_exprs(raw_line, term_start + paren_pos + 1, term_stop - 1)?;
 
                         match func {
-                            "$bin" => { // interns a binary value in the rodata segment and returns a pointer to its eventual location
-                                if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
-                                let arg = args.into_iter().next().unwrap();
-
-                                macro_rules! handle_content {
-                                    ($self:ident, $v:expr) => {
-                                        match $v {
-                                            Value::Binary(content) => {
-                                                if content.is_empty() { return Err(AsmError { kind: AsmErrorKind::EmptyBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
-                                                let idx = self.file.binary_set.add(Cow::from(content));
-                                                ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)).into()
-                                            }
-                                            _ => return Err(AsmError { kind: AsmErrorKind::ExpectedBinaryValue, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                                        }
-                                    }
-                                }
-
-                                let x = match arg.into_eval(&self.file.symbols) {
-                                    Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                                    Ok(val) => match val {
-                                        ValueCow::Owned(v) => handle_content!(self, v),
-                                        ValueCow::Borrowed(v) => handle_content!(self, &*v),
-                                    }
-                                };
-                                x
-                            }
                             "$if" => {
                                 if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[3]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
                                 let mut args = args.into_iter();
@@ -939,7 +912,7 @@ impl AssembleArgs<'_> {
 
     /// Gets the current segment for writing. Returns the segment, the symbol table, and the set of holes.
     /// Fails if not currently in a segment or if in a non-writable segment (like bss).
-    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &dyn SymbolTableCore, &mut Vec<Hole>), AsmError> {
+    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &dyn SymbolTableInternalsCore, &mut Vec<Hole>), AsmError> {
         Ok(match self.current_seg {
             None => return Err(AsmError { kind: AsmErrorKind::WriteOutsideOfSegment, line_num: self.line_num, pos: None, inner_err: None }),
             Some(seg) => match seg {
@@ -1239,6 +1212,7 @@ impl AssembleArgs<'_> {
                 if let Some(right) = right { self.verify_legal_expr(right, line_num)?; }
             }
         }
+        if expr.has_operator(OP::Binary) { return Err(AsmError { kind: AsmErrorKind::BinaryInternEscapesAsmTime, line_num, pos: None, inner_err: None }); }
         Ok(())
     }
     fn verify_legal_global(&self, expr: &Expr, line_num: usize) -> Result<(), AsmError> {
@@ -1300,8 +1274,6 @@ fn create_context() -> AssembleArgs<'static> {
             rodata: Default::default(),
             data: Default::default(),
             bss_len: Default::default(),
-
-            binary_set: Default::default(),
         },
     
         current_seg: Some(AsmSegment::Text),

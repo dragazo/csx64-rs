@@ -3493,3 +3493,35 @@ fn test_stos() {
 
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(0));
 }
+
+#[test]
+fn test_extern_string() {
+    let exe = asm_unwrap_link_unwrap!(
+    // first file
+    r#"
+    extern msg
+    segment text
+    mov rdi, $len(msg + " -- " + extra) ; we can use extern string in normal places
+    mov rsi, $bin("mukduk " + extra + " the second time") ; but we currently cannot use extern string inside of $bin 
+    hlt
+    mov eax, sys_exit
+    mov ebx, 56
+    syscall
+
+    extra: equ "more content"
+    "#,
+    // second file
+    r#"
+    global msg
+    msg: equ "hello from the otter slide!"
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdi(), 43);
+    assert_eq!(e.memory.get(e.cpu.get_rsi(), 35).unwrap(), "mukduk more content the second time".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(56)));
+}

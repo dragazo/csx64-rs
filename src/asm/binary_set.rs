@@ -6,7 +6,7 @@ use std::iter::FusedIterator;
 use std::slice;
 use crate::common::serialization::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SliceInfo {
     /// Index of the backing array.
     pub src: usize,
@@ -50,7 +50,7 @@ impl BinaryRead for SliceInfo {
 /// assert_eq!(b.bytes(), 6);         // 6 bytes are stored (slices)
 /// assert_eq!(b.backing_bytes(), 4); // using only 4 backing bytes (internal data)
 /// ```
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct BinarySet {
     data: Vec<Vec<u8>>,     // the backing data
     slices: Vec<SliceInfo>, // effectively slices into top
