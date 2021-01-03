@@ -5,7 +5,6 @@
 use std::hash::Hash;
 use std::collections::{HashSet, HashMap};
 use std::cell::{self, RefCell};
-use std::borrow::Cow;
 use std::io::{self, Read, Write};
 use std::ops::Deref;
 use std::fmt::{self, Debug};
@@ -369,19 +368,15 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 #[derive(Clone, Default)]
 pub struct SymbolTable<T> {
     pub(super) raw: HashMap<String, (Expr, T)>,
-    pub(super) binaries: RefCell<BinarySet>,
 }
 impl<T> BinaryWrite for SymbolTable<T> where T: BinaryWrite {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
-        self.raw.bin_write(f)?;
-        self.binaries.bin_write(f)
+        self.raw.bin_write(f)
     }
 }
 impl<T> BinaryRead for SymbolTable<T> where T: BinaryRead {
     fn bin_read<F: Read>(f: &mut F) -> io::Result<Self> {
-        let raw = BinaryRead::bin_read(f)?;
-        let binaries = BinaryRead::bin_read(f)?;
-        Ok(SymbolTable { raw, binaries })
+        Ok(SymbolTable { raw: BinaryRead::bin_read(f)? })
     }
 }
 impl<T> Debug for SymbolTable<T> where T: Debug {
@@ -389,7 +384,6 @@ impl<T> Debug for SymbolTable<T> where T: Debug {
         for (k, v) in self.iter() {
             writeln!(f, "{} := {:?}", k, v)?;
         }
-        writeln!(f, "binaries: {:?}", self.binaries)?;
         Ok(())
     }
 }
@@ -455,12 +449,6 @@ fn test_all_legal() {
     }
 }
 
-pub(super) trait SymbolTableInternalsCore: SymbolTableCore {
-    fn get_binaries(&self) -> &RefCell<BinarySet>;
-}
-impl<T> SymbolTableInternalsCore for SymbolTable<T> {
-    fn get_binaries(&self) -> &RefCell<BinarySet> { &self.binaries }
-}
 pub trait SymbolTableCore {
     /// Checks if the symbol table is empty.
     fn is_empty(&self) -> bool;
@@ -480,7 +468,7 @@ impl<T> SymbolTableCore for SymbolTable<T> {
 impl<T> SymbolTable<T> {
     /// Constructs an empty symbol table.
     pub fn new() -> Self {
-        Self { raw: Default::default(), binaries: Default::default() }
+        Self { raw: Default::default() }
     }
 
     /// Introduces a new symbol.
@@ -566,15 +554,10 @@ impl<'a> Debug for ValueCow<'a> {
     }
 }
 
-enum IntermediateResult {
-    Value(Value),
-    NewMetaSymbol(String),
-}
-
 impl Expr {
     /// Gets the value of an expression which is already known to be evaluated (not just evaluatable).
     /// Panics if this is not the case.
-    fn eval_evaluated<'a>(&'a self, symbols: &'a dyn SymbolTableInternalsCore) -> ValueRef<'a> {
+    fn eval_evaluated<'a>(&'a self, symbols: &'a dyn SymbolTableCore) -> ValueRef<'a> {
         let handle = self.data.borrow();
         match &*handle {
             ExprData::Value(_) => ValueRef(handle),
@@ -582,7 +565,7 @@ impl Expr {
             ExprData::Uneval { .. } => panic!(),
         }
     }
-    fn into_eval_evaluated<'a>(self, symbols: &'a dyn SymbolTableInternalsCore) -> ValueCow<'a> {
+    fn into_eval_evaluated<'a>(self, symbols: &'a dyn SymbolTableCore) -> ValueCow<'a> {
         match self.data.into_inner() {
             ExprData::Value(v) => ValueCow::Owned(v),
             ExprData::Ident(ident) => ValueCow::Borrowed(symbols.get_expr(&ident).unwrap().eval_evaluated(symbols)),
@@ -594,17 +577,17 @@ impl Expr {
     /// This is similar to `std::borrow::Cow` (implements `Deref` and has an `into_owned()`).
     /// Currently, to appease the borrow checker this requires two separate evaluation passes (though they short circuit and the second should be very fast).
     /// Thus, if all you need is an (immutable) reference, you should stick with `eval()`.
-    pub(super) fn into_eval<'a>(self, symbols: &'a dyn SymbolTableInternalsCore) -> Result<ValueCow<'a>, EvalError> {
+    pub(super) fn into_eval<'a>(self, symbols: &'a dyn SymbolTableCore) -> Result<ValueCow<'a>, EvalError> {
         self.eval(symbols)?; // make sure we're evaluatable
         Ok(self.into_eval_evaluated(symbols))
     }
     /// Attempts to evaluate the expression given a symbol table to use.
     /// Due to reasons discussed in the doc entry for `SymbolTable`, once an `Expr` has been evaluated with a given symbol table
     /// it should never be evaluated with any other symbol table.
-    pub(super) fn eval<'a>(&'a self, symbols: &'a dyn SymbolTableInternalsCore) -> Result<ValueRef<'a>, EvalError> {
+    pub(super) fn eval<'a>(&'a self, symbols: &'a dyn SymbolTableCore) -> Result<ValueRef<'a>, EvalError> {
         self.eval_recursive(symbols, &mut Default::default())
     }
-    fn eval_recursive<'a>(&'a self, symbols: &'a dyn SymbolTableInternalsCore, visited: &mut HashSet<String>) -> Result<ValueRef<'a>, EvalError> {
+    fn eval_recursive<'a>(&'a self, symbols: &'a dyn SymbolTableCore, visited: &mut HashSet<String>) -> Result<ValueRef<'a>, EvalError> {
         {
             let handle = match self.data.try_borrow() {
                 Err(_) => return Err(IllegalReason::CyclicDependency.into()),
@@ -627,28 +610,28 @@ impl Expr {
 
         {
             let mut handle = self.data.borrow_mut();
-            let res: IntermediateResult = match &mut *handle {
+            let res: Value = match &mut *handle {
                 ExprData::Value(_) => unreachable!(), // these were already handled
                 ExprData::Ident(_) => unreachable!(),
                 ExprData::Uneval { op, ref mut left, right } => {
-                    fn binary_op<'a, F, G>(raw_left: &'a mut Option<Box<Expr>>, raw_right: &'a mut Option<Box<Expr>>, symbols: &'a dyn SymbolTableInternalsCore, visited: &mut HashSet<String>, f: F, g: G) -> Result<IntermediateResult, EvalError>
+                    fn binary_op<'a, F, G>(raw_left: &'a mut Option<Box<Expr>>, raw_right: &'a mut Option<Box<Expr>>, symbols: &'a dyn SymbolTableCore, visited: &mut HashSet<String>, f: F, g: G) -> Result<Value, EvalError>
                     where F: FnOnce(&Value, &Value) -> Result<Option<Value>, EvalError>, G: FnOnce(Value, Value) -> Value
                     {
                         {
                             let left = raw_left.as_ref().expect("expr binary op node missing left branch").eval_recursive(symbols, visited);
                             let right = raw_right.as_ref().expect("expr binary op node missing right branch").eval_recursive(symbols, visited);
                             all_legal(&[&left, &right])?; // if either was illegal, handle that first
-                            if let Some(res) = f(&*left?, &*right?)? { return Ok(IntermediateResult::Value(res)); } // then handle other errors and the ref success case
+                            if let Some(res) = f(&*left?, &*right?)? { return Ok(res); } // then handle other errors and the ref success case
                         }
-                        Ok(IntermediateResult::Value(g((*raw_left.take().unwrap()).into_eval_evaluated(symbols).into_owned(), (*raw_right.take().unwrap()).into_eval_evaluated(symbols).into_owned())))
+                        Ok(g((*raw_left.take().unwrap()).into_eval_evaluated(symbols).into_owned(), (*raw_right.take().unwrap()).into_eval_evaluated(symbols).into_owned()))
                     }
-                    fn unary_op<'a, F, G>(raw_left: &'a mut Option<Box<Expr>>, raw_right: &'a Option<Box<Expr>>, symbols: &'a dyn SymbolTableInternalsCore, visited: &mut HashSet<String>, f: F, g: G) -> Result<IntermediateResult, EvalError>
+                    fn unary_op<'a, F, G>(raw_left: &'a mut Option<Box<Expr>>, raw_right: &'a Option<Box<Expr>>, symbols: &'a dyn SymbolTableCore, visited: &mut HashSet<String>, f: F, g: G) -> Result<Value, EvalError>
                     where F: FnOnce(&Value) -> Result<Option<Value>, EvalError>, G: FnOnce(Value) -> Value
                     {
                         if let Some(_) = raw_right.as_ref() { panic!("expr unary op node had a right branch"); }
                         let left = raw_left.as_ref().expect("expr unary op node was missing the left branch").eval_recursive(symbols, visited);
-                        if let Some(res) = f(&*left?)? { return Ok(IntermediateResult::Value(res)); }
-                        Ok(IntermediateResult::Value(g((*raw_left.take().unwrap()).into_eval_evaluated(symbols).into_owned())))
+                        if let Some(res) = f(&*left?)? { return Ok(res); }
+                        Ok(g((*raw_left.take().unwrap()).into_eval_evaluated(symbols).into_owned()))
                     }
 
                     match op {
@@ -700,11 +683,23 @@ impl Expr {
                                 (Value::Integer(_), Value::Integer(_)) => Ok(None),
                                 (Value::Float(_), Value::Float(_)) => Ok(None),
                                 (Value::Binary(_), Value::Binary(_)) => Ok(None),
+                                (Value::Binary(_), Value::Character(_)) => Ok(None),
+                                (Value::Character(_), Value::Binary(_)) => Ok(None),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |a, b| match (a, b) {
                                 (Value::Integer(a), Value::Integer(b)) => (a + b).into(),
                                 (Value::Float(a), Value::Float(b)) => (a + b).into(),
                                 (Value::Binary(mut a), Value::Binary(b)) => { a.extend_from_slice(&b); a.into() }
+                                (Value::Binary(mut a), Value::Character(b)) => {
+                                    let mut buf = [0; 4];
+                                    a.extend_from_slice(b.encode_utf8(&mut buf).as_bytes());
+                                    a.into() 
+                                }
+                                (Value::Character(a), Value::Binary(mut b)) => {
+                                    let mut buf = [0; 4];
+                                    b.splice(0..0, a.encode_utf8(&mut buf).as_bytes().iter().copied());
+                                    b.into() 
+                                }
                                 _ => unreachable!(),
                             })?
                         },
@@ -869,34 +864,7 @@ impl Expr {
                                 _ => unreachable!(),
                             })?
                         }
-                        OP::Binary => {
-                            if let Some(_) = right.as_ref() { panic!("expr unary op node had a right branch"); }
-                            {
-                                let val = left.as_ref().expect("expr unary op node was missing the left branch").eval_recursive(symbols, visited)?;
-                                match &*val {
-                                    Value::Binary(_) => (),
-                                    a => return Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
-                                }
-                            }
-                            macro_rules! handle_content {
-                                ($self:ident, $v:expr) => {
-                                    match $v {
-                                        Value::Binary(content) => match content.is_empty() {
-                                            true => IntermediateResult::Value(0u64.into()),
-                                            false => {
-                                                let idx = symbols.get_binaries().borrow_mut().add(Cow::from(content));
-                                                IntermediateResult::NewMetaSymbol(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx))
-                                            }
-                                        }
-                                        _ => unreachable!(),
-                                    }
-                                }
-                            }
-                            match (*left.take().unwrap()).into_eval_evaluated(symbols) {
-                                ValueCow::Owned(v) => handle_content!(self, v),
-                                ValueCow::Borrowed(v) => handle_content!(self, &*v),
-                            }
-                        }
+                        OP::Binary => return Err(EvalError::UndefinedSymbol(BINARY_LITERAL_SYMBOL_PREFIX.into())), // binary string intern always fails - performed by linker
                         OP::Length => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Binary(bin) => Ok(Some(bin.len().into())),
@@ -924,7 +892,7 @@ impl Expr {
                                         }
                                     };
                                     let res = if cond { left.take() } else { right.take() };
-                                    IntermediateResult::Value(res.unwrap().into_eval_evaluated(symbols).into_owned())
+                                    res.unwrap().into_eval_evaluated(symbols).into_owned()
                                 }
                                 _ => panic!(), // ill formed
                             }
@@ -935,13 +903,7 @@ impl Expr {
             };
 
             // we successfully evaluated it - collapse to just a value/ident node
-            match res {
-                IntermediateResult::Value(res) => *handle = ExprData::Value(res),
-                IntermediateResult::NewMetaSymbol(res) => {
-                    *handle = ExprData::Ident(res.clone());
-                    return Err(EvalError::UndefinedSymbol(res));
-                }
-            };
+            *handle = ExprData::Value(res);
         }
 
         Ok(ValueRef(self.data.borrow()))

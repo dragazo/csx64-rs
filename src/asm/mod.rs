@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write, BufRead};
 use std::{mem, iter};
 use std::cmp::Ordering;
+use std::borrow::Cow;
 use num_traits::FromPrimitive;
 
 pub mod binary_set;
@@ -61,9 +62,6 @@ pub enum AsmErrorKind {
     ExtraContentAfterArgs,
 
     // --------------------------------------------------------------------------
-
-    /// A global symbol was defined in terms of an external symbol.
-    GlobalUsesExtern { extern_sym: String },
 
     /// Failed to evaluate a critical expression for the given reason.
     FailedCriticalExpression(EvalError),
@@ -195,8 +193,6 @@ pub enum AsmErrorKind {
     UnknownSymbol(String),
 
     StringDeclareNotByteSize,
-
-    BinaryInternEscapesAsmTime,
 }
 impl From<BadAddress> for AsmErrorKind {
     fn from(reason: BadAddress) -> Self {
@@ -228,10 +224,8 @@ pub enum LinkError {
 
     GlobalSymbolMultipleSources { ident: String, src1: (String, usize), src2: (String, usize) },
     ExternSymbolNotDefined { ident: String, required_by: String },
-
-    GlobalExprIllegal { src: String, ident: String, reason: IllegalReason },
     
-    PatchEvalFailure { src: String, line_num: usize, reason: EvalError },
+    EvalFailure { src: String, line_num: usize, reason: EvalError },
     PatchIllegal { src: String, line_num: usize, reason: IllegalPatchReason },
 }
 
@@ -630,22 +624,19 @@ impl BinaryRead for ObjectFile {
 #[derive(Debug)]
 enum RenameError {
     TargetAlreadyExisted,
-    SourceWasAlreadyEvaluated,
-    SourceDidNotExist,
 }
 impl ObjectFile {
+    /// Renames a symbol in the object file, finding and replacing all instances of identifiers to it.
+    /// Note that if the source symbol has already been evaluated it may already be irreversibly folded into other expressions.
+    /// This should not be a problem if done to a non-global symbol.
+    /// If the source name was not present, does nothing and returns Ok.
     fn rename_symbol(&mut self, from: &str, to: &str) -> Result<(), RenameError> {
         // make sure target name doesn't already exist somewhere (either intern or extern symbol)
         if self.symbols.is_defined(to) || self.extern_symbols.contains_key(to) { return Err(RenameError::TargetAlreadyExisted); }
 
         // if it's a symbol defined in this file
         if let Some((expr, tag)) = self.symbols.raw.remove(from) {
-            if let ExprData::Value(_) = &*expr.data.borrow() {
-                return Err(RenameError::SourceWasAlreadyEvaluated); // make sure it hasn't already been evaluated (because it may have already been linked to other expressions)
-            }
-
-            // rename the symbol
-            self.symbols.define(to.to_owned(), expr, tag).unwrap(); // unwrap is safe because we test if it exists above
+            self.symbols.define(to.into(), expr, tag).unwrap(); // unwrap is safe because we test if it exists above
 
             // find and replace in global table (may not be global, that's ok)
             if let Some(tag) = self.global_symbols.remove(from) {
@@ -656,8 +647,6 @@ impl ObjectFile {
         else if let Some(tag) = self.extern_symbols.remove(from) {
             self.extern_symbols.insert(to.into(), tag);
         }
-        // otherwise we don't know what it is
-        else { return Err(RenameError::SourceDidNotExist); }
 
         // now we just have to recursively replace from -> to in every expr in the file
         for (_, (expr, _)) in self.symbols.raw.iter_mut() { rename_symbol_in_expr(expr, from, to); }
@@ -666,6 +655,24 @@ impl ObjectFile {
         for Hole { expr, .. } in self.data_holes.iter_mut() { rename_symbol_in_expr(expr, from, to); }
 
         Ok(())
+    }
+    /// Applies the specified renaming transform to all identifiers that are unique to this object file.
+    /// This includes all non-global non-extern symbols, as well as segment offsets (but not origins).
+    /// This is equivalent to performing a sequence of renaming operations on all internal symbols.
+    /// This function will panic if any renaming operation fails.
+    /// For correct behavior, the mapping should be injective and never return a symbol that might already be defined.
+    /// To this end, it is best practice to only return unique, illegal symbol names, such as `"foo" -> "foo:56"`.
+    fn transform_personal_idents<F: Fn(&str) -> String>(&mut self, f: &F) {
+        let mut internals: Vec<String> = self.symbols.iter().map(|(sym, _)| sym).filter(|&sym| !self.global_symbols.contains_key(sym)).cloned().collect();
+
+        internals.push(get_seg_offset_str(AsmSegment::Text).into());
+        internals.push(get_seg_offset_str(AsmSegment::Rodata).into());
+        internals.push(get_seg_offset_str(AsmSegment::Data).into());
+        internals.push(get_seg_offset_str(AsmSegment::Bss).into());
+
+        for internal in internals {
+            self.rename_symbol(&internal, &f(&internal)).unwrap();
+        }
     }
 }
 fn rename_symbol_in_expr(expr: &mut Expr, from: &str, to: &str) {
@@ -708,7 +715,7 @@ pub enum IllegalPatchReason {
 /// On critical (bad/illegal) failure, returns Err.
 /// Otherwise returns Ok(Err) if evaluation fails (this is not a bad error, as it might can be patched later).
 /// Returns Ok(OK(())) to denote that everything succeeded and the hole was successfully patched.
-fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableInternalsCore) -> Result<(), PatchError> {
+fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> Result<(), PatchError> {
     let val = match hole.expr.eval(symbols) {
         Err(e) => match e {
             EvalError::Illegal(reason) => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::IllegalExpr(reason)), line_num: hole.line_num }),
@@ -797,7 +804,7 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableInternals
     }
     Ok(())
 }
-fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn SymbolTableInternalsCore) -> Result<(), AsmError> {
+fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn SymbolTableCore) -> Result<(), AsmError> {
     for i in (0..holes.len()).rev() {
         match patch_hole(seg, &holes[i], symbols) {
             Ok(()) => { holes.swap_remove(i); },
@@ -809,13 +816,13 @@ fn elim_holes_if_able(seg: &mut Vec<u8>, holes: &mut Vec<Hole>, symbols: &dyn Sy
     }
     Ok(())
 }
-fn elim_all_holes(src: &str, seg: &mut Vec<u8>, holes: &[Hole], symbols: &dyn SymbolTableInternalsCore) -> Result<(), LinkError> {
+fn elim_all_holes<F: Fn(usize) -> String>(seg: &mut Vec<u8>, holes: &[MergedHole], symbols: &dyn SymbolTableCore, src: &F) -> Result<(), LinkError> {
     for hole in holes {
-        match patch_hole(seg, hole, symbols) {
+        match patch_hole(seg, &hole.hole, symbols) {
             Ok(()) => (),
             Err(e) => match e.kind {
-                PatchErrorKind::NotPatched(reason) => return Err(LinkError::PatchEvalFailure { src: src.into(), line_num: e.line_num, reason }),
-                PatchErrorKind::Illegal(reason) => return Err(LinkError::PatchIllegal { src: src.into(), line_num: e.line_num, reason }),
+                PatchErrorKind::NotPatched(reason) => return Err(LinkError::EvalFailure { src: src(hole.src), line_num: e.line_num, reason }),
+                PatchErrorKind::Illegal(reason) => return Err(LinkError::PatchIllegal { src: src(hole.src), line_num: e.line_num, reason }),
             }
         }
     }
@@ -886,12 +893,20 @@ fn align_seg<T: AlignTo>(seg: &mut T, seg_align: &mut usize, tail_align: usize) 
     *seg_align = align;
 }
 
-#[derive(Debug, Clone, Copy)]
 struct SegmentBases {
     text: usize,
     rodata: usize,
     data: usize,
     bss: usize,
+}
+#[derive(Clone, Copy)]
+struct MergedSymbolTag {
+    src: usize,
+    line_num: usize 
+}
+struct MergedHole {
+    src: usize,
+    hole: Hole,
 }
 
 /// The symbols to introduce to the assembler prior to parsing any source.
@@ -900,7 +915,7 @@ impl From<SymbolTable<()>> for Predefines {
     /// Constructs a new set of predefines from a symbol table.
     fn from(symbols: SymbolTable<()>) -> Predefines {
         let transformed = symbols.raw.into_iter().map(|(key, (value, _))| (key, (value, 0))).collect();
-        Predefines(SymbolTable { raw: transformed, binaries: symbols.binaries })
+        Predefines(SymbolTable { raw: transformed })
     }
 }
 impl Predefines {
@@ -1353,8 +1368,6 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
             Ok(()) => (),
             Err(e) => match e {
                 RenameError::TargetAlreadyExisted => return Err(LinkError::EntryPointTargetAlreadyExisted),
-                RenameError::SourceWasAlreadyEvaluated => unreachable!(), // we know it's an extern, so this can't happen
-                RenameError::SourceDidNotExist => unreachable!(), // we know it's an extern, so this can't happen
             }
         }
     }
@@ -1371,12 +1384,6 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
                 return Err(LinkError::GlobalSymbolMultipleSources { ident: global.into(), src1: (objs[there_line].0.to_owned(), there_line), src2: (obj.0.to_owned(), here_line) });
             }
         }
-
-        // for now, we don't allow object files to still have $bin expressions, as this can cause cyclic task ordering dependencies
-        assert!(!obj.1.symbols.iter().any(|(_, (expr, _))| expr.has_operator(OP::Binary)));
-        assert!(!obj.1.text_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
-        assert!(!obj.1.rodata_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
-        assert!(!obj.1.data_holes.iter().any(|h| h.expr.has_operator(OP::Binary)));
     }
 
     // locations for merged segments
@@ -1391,13 +1398,14 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     let mut data_align = 1;
     let mut bss_align = 1;
 
-    let mut binary_set = BinarySet::new(); // consolidated set of all included binary constants
-    let mut obj_to_binary_set_locations: HashMap<usize, Vec<usize>> = Default::default(); // maps included obj to its literal index map in binary_set.
+    let mut merged_symbols: SymbolTable<MergedSymbolTag> = SymbolTable::new();
+    let mut merged_text_holes: Vec<MergedHole> = vec![];
+    let mut merged_rodata_holes: Vec<MergedHole> = vec![];
+    let mut merged_data_holes: Vec<MergedHole> = vec![];
 
     let mut included: HashMap<usize, SegmentBases> = Default::default(); // maps included files to their segment bases in the result
     let mut include_queue: VecDeque<usize> = Default::default();
-    include_queue.push_back(0); // we always start with the start file
-
+    include_queue.push_back(0); // we always start with the start file (first object file)
     while let Some(obj_index) = include_queue.pop_front() {
         let (obj_name, obj) = &mut objs[obj_index];
 
@@ -1407,20 +1415,29 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         align_seg(&mut data, &mut data_align, obj.data_align);
         align_seg(&mut bss_len, &mut bss_align, obj.bss_align);
 
-        // add it to the set of included files
+        // grab segment bases, use them to fix the hole positions, and mark this object file as included
         let bases = SegmentBases { text: text.len(), rodata: rodata.len(), data: data.len(), bss: bss_len };
-        assert!(included.insert(obj_index, bases).is_none());
-
-        // offset holes to be relative to the start of their total segment (not relative to resulting file)
         for hole in obj.text_holes.iter_mut() { hole.address += bases.text; }
         for hole in obj.rodata_holes.iter_mut() { hole.address += bases.rodata; }
         for hole in obj.data_holes.iter_mut() { hole.address += bases.data; }
+        assert!(included.insert(obj_index, bases).is_none());
 
-        // append segments
+        // merge the segments
         text.extend_from_slice(&obj.text);
         rodata.extend_from_slice(&obj.rodata);
         data.extend_from_slice(&obj.data);
         bss_len += obj.bss_len;
+
+        // mutate all the non-global and non-extern identifiers to be unique before we merge them into the combined symbol table
+        obj.transform_personal_idents(&|s| format!("{}:{}", s, obj_index)); // ':' is not a legal symbol char, so guaranteed to not be taken
+
+        // merge all the symbols and holes
+        for (sym, (expr, line_num)) in mem::take(&mut obj.symbols).raw {
+            merged_symbols.define(sym, expr, MergedSymbolTag { src: obj_index, line_num }).unwrap();
+        }
+        for hole in mem::take(&mut obj.text_holes) { merged_text_holes.push(MergedHole { src: obj_index, hole }) }
+        for hole in mem::take(&mut obj.rodata_holes) { merged_rodata_holes.push(MergedHole { src: obj_index, hole }) }
+        for hole in mem::take(&mut obj.data_holes) { merged_data_holes.push(MergedHole { src: obj_index, hole }) }
 
         // for any external symbol we have, schedule the (single) associated object file defining it for inclusion
         for (req, _) in obj.extern_symbols.iter() {
@@ -1434,85 +1451,99 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
                 }
             }
         }
-
-        // merge binary constants and keep track of their new slice indices
-        let their_binaries = obj.symbols.binaries.get_mut();
-        let mut binary_set_locations: Vec<usize> = Vec::with_capacity(their_binaries.len());
-        for bin in their_binaries.iter() {
-            let loc = binary_set.add(bin);
-            binary_set_locations.push(loc);
-        }
-        assert!(obj_to_binary_set_locations.insert(obj_index, binary_set_locations).is_none());
-        their_binaries.clear();
     }
 
-    // after merging, but before alignment, we need to allocate all the provisioned binary constants
-    let (backing_bin, slice_bin) = binary_set.decompose();
+    // merge all the binaries together - these are stored in expressions throughout the symbol table and the various segment holes
+    let mut binaries = BinarySet::new();
+    fn resolve_binaries(src: &str, line_num: usize, expr: &mut ExprData, binaries: &mut BinarySet, symbols: &SymbolTable<MergedSymbolTag>) -> Result<(), LinkError> {
+        match expr {
+            ExprData::Value(_) => (),
+            ExprData::Ident(_) => (),
+            ExprData::Uneval { op: OP::Binary, left, right } => {
+                if let Some(_) = right.as_ref() { panic!("expr unary op node had a right branch"); }
+                macro_rules! handle_content {
+                    ($self:ident, $v:expr) => {
+                        match $v {
+                            Value::Binary(content) => match content.is_empty() {
+                                true => 0u64.into(), // empty binary is mapped to null - we are only required to make sure the content is equal, but there was no content
+                                false => {
+                                    let idx = binaries.add(Cow::from(content));
+                                    ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)) // good binary is mapped to a unique key in the merged symbol table
+                                }
+                            }
+                            a => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: IllegalReason::IncompatibleType(OP::Binary, a.get_type()).into() }),
+                        }
+                    }
+                }
+                let res: ExprData = match left.take().expect("expr unary op node was missing the left branch").into_eval(symbols) {
+                    Err(e) => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: e }),
+                    Ok(val) => match val {
+                        ValueCow::Owned(v) => handle_content!(self, v),
+                        ValueCow::Borrowed(v) => handle_content!(self, &*v),
+                    }
+                };
+                *expr = res;
+            }
+            ExprData::Uneval { left, right, .. } => {
+                if let Some(left) = left { resolve_binaries(src, line_num, left.data.get_mut(), binaries, symbols)? }
+                if let Some(right) = right { resolve_binaries(src, line_num, right.data.get_mut(), binaries, symbols)? }
+            }
+        }
+        Ok(())
+    }
+    for (_, (expr, tag)) in merged_symbols.iter() {
+        resolve_binaries(&objs[tag.src].0, tag.line_num, &mut *expr.data.borrow_mut(), &mut binaries, &merged_symbols)?
+    }
+    for hole in merged_text_holes.iter_mut().chain(merged_rodata_holes.iter_mut()).chain(merged_data_holes.iter_mut()) {
+        resolve_binaries(&objs[hole.src].0, hole.hole.line_num, hole.hole.expr.data.get_mut(), &mut binaries, &merged_symbols)?
+    }
+
+    // after merging, but before alignment, we need to allocate all the provisioned binary constants we just handled
+    let (backing_bin, slice_bin) = binaries.decompose();
     let mut rodata_backing_bin_offsets: Vec<usize> = Vec::with_capacity(backing_bin.len());
     for backing in backing_bin.iter() {
         rodata_backing_bin_offsets.push(rodata.len()); // keep track of insertion point
         rodata.extend_from_slice(backing); // insert into rodata segment
     }
-    // and now we can go ahead and resolve all the missing binary constant symbols with relative addresses from rodata origin
-    for entry in obj_to_binary_set_locations {
-        for (i, loc) in entry.1.into_iter().enumerate() {
-            let slice = slice_bin[loc];
-            let expr = Expr::from((OP::Add, ExprData::Ident(get_seg_origin_str(AsmSegment::Rodata).into()), (rodata_backing_bin_offsets[slice.src] + slice.start) as i64));
-            objs[entry.0].1.symbols.define(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, i), expr, 0).unwrap();
-        }
-    }
 
-    // account for segment alignments (we do this as if we already merged them, but don't yet due to overcomplicating hole patching
+    // account for segment alignments so we can start taking absolute addresses
     { let s = text.len();                             pad(&mut text, align_off(s, rodata_align)); }
     { let s = text.len() + rodata.len();              pad(&mut rodata, align_off(s, data_align)); }
     { let s = text.len() + rodata.len() + data.len(); pad(&mut text, align_off(s, rodata_align)); }
+    let illegal_tag = MergedSymbolTag { src: !0, line_num: !0 }; // we use this tag for things that will always succeed
 
-    // now that we're done merging files, we need to define segment offsets in the result
+    // now we can go ahead and resolve all the missing binaries with absolute addresses in rodata
+    for (i, slice) in slice_bin.iter().enumerate() {
+        let pos = text.len() + rodata_backing_bin_offsets[slice.src] + slice.start;
+        assert!(pos >= text.len() && pos < text.len() + rodata.len() && pos + slice.length <= text.len() + rodata.len()); // sanity check - make sure it's in the rodata segment
+        merged_symbols.define(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, i), pos.into(), illegal_tag).unwrap();
+    }
+
+    // define segment origins
+    merged_symbols.define(get_seg_origin_str(AsmSegment::Text).into(), Value::Pointer(0).into(), illegal_tag).unwrap();
+    merged_symbols.define(get_seg_origin_str(AsmSegment::Rodata).into(), Value::Pointer(text.len() as u64).into(), illegal_tag).unwrap();
+    merged_symbols.define(get_seg_origin_str(AsmSegment::Data).into(), Value::Pointer((text.len() + rodata.len()) as u64).into(), illegal_tag).unwrap();
+    merged_symbols.define(get_seg_origin_str(AsmSegment::Bss).into(), Value::Pointer((text.len() + rodata.len() + data.len()) as u64).into(), illegal_tag).unwrap();
+
+    // define segment offsets
     for (&obj_index, bases) in included.iter() {
-        let (obj_name, obj) = &mut objs[obj_index];
-
-        // define segment origins
-        obj.symbols.define(get_seg_origin_str(AsmSegment::Text).into(), Value::Pointer(0).into(), 0).unwrap();
-        obj.symbols.define(get_seg_origin_str(AsmSegment::Rodata).into(), Value::Pointer(text.len() as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_origin_str(AsmSegment::Data).into(), Value::Pointer((text.len() + rodata.len()) as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_origin_str(AsmSegment::Bss).into(), Value::Pointer((text.len() + rodata.len() + data.len()) as u64).into(), 0).unwrap();
-
-        // define segment offsets
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Text).into(), Value::Pointer(bases.text as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Rodata).into(), Value::Pointer((text.len() + bases.rodata) as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Data).into(), Value::Pointer((text.len() + rodata.len() + bases.data) as u64).into(), 0).unwrap();
-        obj.symbols.define(get_seg_offset_str(AsmSegment::Bss).into(), Value::Pointer((text.len() + rodata.len() + data.len() + bases.bss) as u64).into(), 0).unwrap();
-
-        // we must evaluate all global symbols at this point - next step copies them into other files; if we don't eval now we might use arbitrary symbol tables later
-        for (global, _) in obj.global_symbols.iter() {
-            let (expr, _) = obj.symbols.get(global).unwrap();
-            match expr.eval(&obj.symbols) {
-                Ok(_) => (), // success is the only legal option
-                Err(e) => match e {
-                    EvalError::Illegal(reason) => return Err(LinkError::GlobalExprIllegal { src: obj_name.clone(), ident: global.into(), reason }),
-                    EvalError::UndefinedSymbol(_) => panic!(), // this should be impossible due to assembler guarantees
-                }
-            }
-        }
+        merged_symbols.define(format!("{}:{}", get_seg_offset_str(AsmSegment::Text), obj_index), Value::Pointer(bases.text as u64).into(), illegal_tag).unwrap();
+        merged_symbols.define(format!("{}:{}", get_seg_offset_str(AsmSegment::Rodata), obj_index), Value::Pointer((text.len() + bases.rodata) as u64).into(), illegal_tag).unwrap();
+        merged_symbols.define(format!("{}:{}", get_seg_offset_str(AsmSegment::Data), obj_index), Value::Pointer((text.len() + rodata.len() + bases.data) as u64).into(), illegal_tag).unwrap();
+        merged_symbols.define(format!("{}:{}", get_seg_offset_str(AsmSegment::Bss), obj_index), Value::Pointer((text.len() + rodata.len() + data.len() + bases.bss) as u64).into(), illegal_tag).unwrap();
     }
 
-    // now that globals have been evaluated locally, we can copy them to wherever they're needed
-    for (&obj_index, _) in included.iter() {
-        let their_externs = mem::take(&mut objs[obj_index].1.extern_symbols); // we need to mutate and copy from objs at same time, so steal this
-        for (external, _) in their_externs {
-            let (val, _) = objs[*global_to_obj.get(&external).unwrap()].1.symbols.get(&external).unwrap().clone();
-            objs[obj_index].1.symbols.define(external, val, 0).unwrap();
+    // patch all the holes in each segment
+    let get_src_name = |src: usize| objs[src].0.to_owned();
+    elim_all_holes(&mut text, &merged_text_holes, &merged_symbols, &get_src_name)?;
+    elim_all_holes(&mut rodata, &merged_rodata_holes, &merged_symbols, &get_src_name)?;
+    elim_all_holes(&mut data, &merged_data_holes, &merged_symbols, &get_src_name)?;
+
+    // make sure all symbols were evaluated - not strictly necessary, but it would be bad practice to permit them
+    for (_, (expr, tag)) in merged_symbols.iter() {
+        if let Err(e) = expr.eval(&merged_symbols) {
+            return Err(LinkError::EvalFailure { src: objs[tag.src].0.to_owned(), line_num: tag.line_num, reason: e });
         }
-    }
-
-    // patch everything from every included file
-    for (&obj_index, _) in included.iter() {
-        let (obj_name, obj) = &mut objs[obj_index];
-        elim_all_holes(obj_name, &mut text, &obj.text_holes, &obj.symbols)?;
-        elim_all_holes(obj_name, &mut rodata, &obj.rodata_holes, &obj.symbols)?;
-        elim_all_holes(obj_name, &mut data, &obj.data_holes, &obj.symbols)?;
-
-        assert!(obj.symbols.binaries.get_mut().is_empty());
     }
 
     // combine the segments together into final content and we're practically done

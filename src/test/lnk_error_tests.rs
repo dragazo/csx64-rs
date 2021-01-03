@@ -1,4 +1,5 @@
 use super::*;
+use super::expr::*;
 
 #[test]
 fn test_empty() {
@@ -13,6 +14,33 @@ fn test_empty() {
         Ok(_) => panic!(),
         Err(e) => match e {
             LinkError::NothingToLink => (),
+            _ => panic!("{:?}", e),
+        }
+    }
+}
+#[test]
+fn test_cyclic_deps() {
+    if let Err(e) = asm_unwrap_link!("global a\nextern b\na: equ b", "global b\nextern a\nb: equ 6") {
+        panic!("{:?}", e);
+    }
+    match asm_unwrap_link!("global a\nextern b\na: equ b", "global b\nextern a\nb: equ a") {
+        Ok(_) => panic!(),
+        Err(e) => match e{
+            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
+            _ => panic!("{:?}", e),
+        }
+    }
+    match asm_unwrap_link!("global a\nextern b\na: equ b", "global b\nextern a\nb: equ 1+a+1") {
+        Ok(_) => panic!(),
+        Err(e) => match e{
+            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
+            _ => panic!("{:?}", e),
+        }
+    }
+    match asm_unwrap_link!("global a\nextern b\na: equ b+1", "global b\nextern a\nb: equ a") {
+        Ok(_) => panic!(),
+        Err(e) => match e{
+            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
             _ => panic!("{:?}", e),
         }
     }

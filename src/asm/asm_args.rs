@@ -912,7 +912,7 @@ impl AssembleArgs<'_> {
 
     /// Gets the current segment for writing. Returns the segment, the symbol table, and the set of holes.
     /// Fails if not currently in a segment or if in a non-writable segment (like bss).
-    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &dyn SymbolTableInternalsCore, &mut Vec<Hole>), AsmError> {
+    pub(super) fn get_current_segment_for_writing(&mut self) -> Result<(&mut Vec<u8>, &dyn SymbolTableCore, &mut Vec<Hole>), AsmError> {
         Ok(match self.current_seg {
             None => return Err(AsmError { kind: AsmErrorKind::WriteOutsideOfSegment, line_num: self.line_num, pos: None, inner_err: None }),
             Some(seg) => match seg {
@@ -1212,20 +1212,6 @@ impl AssembleArgs<'_> {
                 if let Some(right) = right { self.verify_legal_expr(right, line_num)?; }
             }
         }
-        if expr.has_operator(OP::Binary) { return Err(AsmError { kind: AsmErrorKind::BinaryInternEscapesAsmTime, line_num, pos: None, inner_err: None }); }
-        Ok(())
-    }
-    fn verify_legal_global(&self, expr: &Expr, line_num: usize) -> Result<(), AsmError> {
-        match &*expr.data.borrow() {
-            ExprData::Value(_) => (),
-            ExprData::Ident(ident) => if let Some(_) = self.file.extern_symbols.get(ident) {
-                return Err(AsmError { kind: AsmErrorKind::GlobalUsesExtern { extern_sym: ident.to_owned() }, line_num, pos: None, inner_err: None });
-            }
-            ExprData::Uneval { left, right, .. } => {
-                if let Some(left) = left { self.verify_legal_global(left, line_num)? } // although children might not be globals themselves, same logic applies
-                if let Some(right) = right { self.verify_legal_global(right, line_num)? }
-            }
-        }
         Ok(())
     }
     pub(super) fn finalize(self) -> Result<ObjectFile, AsmError> {
@@ -1234,11 +1220,6 @@ impl AssembleArgs<'_> {
             if !self.file.symbols.is_defined(global) {
                 return Err(AsmError { kind: AsmErrorKind::GlobalSymbolWasNotDefined, line_num, pos: None, inner_err: None });
             }
-        }
-        // this has to happen after the previous because it assumes globals are defined
-        for (global, _) in self.file.global_symbols.iter() {
-            let line_num = self.file.symbols.get(global).unwrap().1; // error message point to definition, not declaration
-            self.verify_legal_global(&self.file.symbols.get(global).unwrap().0, line_num)?;
         }
 
         for (_, (expr, line_num)) in self.file.symbols.iter() { self.verify_legal_expr(expr, *line_num)?; }

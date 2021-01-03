@@ -109,7 +109,7 @@ pub(super) fn get_seg_origin_str(seg: AsmSegment) -> &'static str {
     }
 }
 
-pub(super) const BINARY_LITERAL_SYMBOL_PREFIX: &str = "#L";
+pub(super) const BINARY_LITERAL_SYMBOL_PREFIX: &'static str = "#L";
 
 pub(super) const PTRDIFF_IDS: &[&'static str] = &["#t", "#r", "#d", "#b", "#T", "#R", "#D", "#B"];
 

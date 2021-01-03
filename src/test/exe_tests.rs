@@ -3499,29 +3499,37 @@ fn test_extern_string() {
     let exe = asm_unwrap_link_unwrap!(
     // first file
     r#"
-    extern msg
+    global modified1
+    extern msg, modified2
     segment text
-    mov rdi, $len(msg + " -- " + extra) ; we can use extern string in normal places
-    mov rsi, $bin("mukduk " + extra + " the second time") ; but we currently cannot use extern string inside of $bin 
+    mov rdi, $len(msg + " -- " + extra)
+    mov rsi, $bin("mukduk " + extra + " the second time")
+    mov rdx, $bin("here's some song lyrics: '" + msg + "'\n... did you like them??")
+    mov rcx, modified2
     hlt
     mov eax, sys_exit
     mov ebx, 56
     syscall
 
     extra: equ "more content"
+    modified1: equ "merp: '" + msg + ' ' + msg + "' /merp"
     "#,
     // second file
     r#"
-    global msg
+    global msg, modified2
+    extern modified1
     msg: equ "hello from the otter slide!"
+    modified2: equ $bin('i' + " changed it: '" + modified1 + '\'')
     "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
     assert_eq!(e.get_state(), State::Running);
 
-    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.execute_cycles(u64::MAX), (5, StopReason::ForfeitTimeslot));
     assert_eq!(e.cpu.get_rdi(), 43);
     assert_eq!(e.memory.get(e.cpu.get_rsi(), 35).unwrap(), "mukduk more content the second time".as_bytes());
+    assert_eq!(e.memory.get(e.cpu.get_rdx(), 78).unwrap(), "here's some song lyrics: 'hello from the otter slide!'\n... did you like them??".as_bytes());
+    assert_eq!(e.memory.get(e.cpu.get_rcx(), 85).unwrap(), "i changed it: 'merp: 'hello from the otter slide! hello from the otter slide!' /merp'".as_bytes());
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(56)));
 }
