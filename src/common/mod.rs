@@ -36,6 +36,15 @@ pub enum OPCode
 
     STRING,
 
+    // x87 instructions
+
+    FINIT,
+    FLD,
+    
+    FADD,
+
+    // misc instructions
+
     DEBUG,
     
 
@@ -60,9 +69,9 @@ pub enum OPCode
     // FWAIT,
     // FINIT, FCLEX,
     // FSTLDword,
-    // FLDconst, FLD, FST, FXCH, FMOVcc,
+    // FST, FXCH, FMOVcc,
 
-    // FADD, FSUB, FSUBR,
+    // FSUB, FSUBR,
     // FMUL, FDIV, FDIVR,
 
     // F2XM1, FABS, FCHS, FPREM, FPREM1, FRNDINT, FSQRT, FYL2X, FYL2XP1, FXTRACT, FSCALE,

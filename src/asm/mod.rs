@@ -156,6 +156,10 @@ pub enum AsmErrorKind {
     ValueOpUnsupportedType,
     BinaryLvalueOpUnsupportedTypes,
     BinaryLvalueUnorderedOpUnsupportedTypes,
+    FPUBinaryOpUnsupportedTypes,
+
+    FPUBinaryOpNeitherST0,
+    FPUBinaryOpPop2SrcNotST0,
 
     EQUWithoutLabel,
     EQUArgumentHadSizeSpec,
@@ -417,11 +421,6 @@ impl Size {
             _ => None
         }
     }
-    /// If elf is a basic size (byte, word, dword, qword), returns the size (1, 2, 4, 8).
-    fn basic_size(self) -> Option<u8> {
-        self.basic_sizecode().map(|v| 1 << v)
-    }
-
     /// If self is a vector size (xword, yword, zword), returns the sizecode (0, 1, 2)
     fn vector_sizecode(self) -> Option<u8> {
         match self {
@@ -430,10 +429,6 @@ impl Size {
             Size::Zword => Some(2),
             _ => None
         }
-    }
-    /// If self is a vector size (xword, yword, zword), return the size (16, 32, 64).
-    fn vector_size(self) -> Option<u8> {
-        self.vector_sizecode().map(|v| 1 << (v + 4))
     }
 }
 impl BinaryWrite for Size {
@@ -468,13 +463,13 @@ impl BinaryRead for Size {
 #[test]
 fn test_size_fns() {
     assert_eq!(Size::Byte.basic_sizecode(), Some(0));
-    assert_eq!(Size::Dword.basic_size(), Some(4));
-    assert_eq!(Size::Dword.vector_size(), None);
+    assert_eq!(Size::Dword.vector_sizecode(), None);
+    assert_eq!(Size::Dword.size(), 4);
     assert_eq!(Size::Xword.basic_sizecode(), None);
     assert_eq!(Size::Xword.vector_sizecode(), Some(0));
-    assert_eq!(Size::Xword.vector_size(), Some(16));
+    assert_eq!(Size::Xword.size(), 16);
     assert_eq!(Size::Yword.vector_sizecode(), Some(1));
-    assert_eq!(Size::Yword.vector_size(), Some(32));
+    assert_eq!(Size::Yword.size(), 32);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FromPrimitive)]
@@ -1313,7 +1308,13 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
 
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((0 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((7 << 2) | size.basic_sizecode().unwrap()))?,
+                            
+                            Instruction::FINIT => args.process_no_arg_op(arguments, Some(OPCode::FINIT as u8), None)?,
 
+                            Instruction::FLD(int) => args.process_fpu_value_op(arguments, OPCode::FLD as u8, None, int)?,
+
+                            Instruction::FADD(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FADD as u8, None, int, pop)?,
+                            
                             Instruction::DEBUG(ext) => args.process_no_arg_op(arguments, Some(OPCode::DEBUG as u8), Some(ext))?,
                         }
                     }
@@ -1459,7 +1460,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         match expr {
             ExprData::Value(_) => (),
             ExprData::Ident(_) => (),
-            ExprData::Uneval { op: OP::Binary, left, right } => {
+            ExprData::Uneval { op: OP::Memory, left, right } => {
                 if let Some(_) = right.as_ref() { panic!("expr unary op node had a right branch"); }
                 macro_rules! handle_content {
                     ($self:ident, $v:expr) => {
@@ -1471,7 +1472,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
                                     ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)) // good binary is mapped to a unique key in the merged symbol table
                                 }
                             }
-                            a => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: IllegalReason::IncompatibleType(OP::Binary, a.get_type()).into() }),
+                            a => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: IllegalReason::IncompatibleType(OP::Memory, a.get_type()).into() }),
                         }
                     }
                 }

@@ -317,7 +317,7 @@ impl Tag {
         ((self.0 >> (2 * index)) & 3) as u8
     }
     pub fn set_physical(&mut self, index: u8, value: TagValue) {
-        assert!(index <= 7);
+        assert!(index < 8);
         let s = 2 * index;
         self.0 = (self.0 & !(3 << s)) | ((value as u16) << s);
     }

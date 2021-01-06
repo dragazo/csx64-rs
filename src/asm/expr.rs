@@ -15,7 +15,7 @@ use rug::{Integer, Float};
 use num_traits::FromPrimitive;
 
 use crate::common::serialization::*;
-use super::binary_set::*;
+use crate::common::f80::F80;
 use super::constants::*;
 
 /// Number of precision bits to use for floating point values.
@@ -53,8 +53,11 @@ pub enum OP {
     // function-like operators
 
     /// Automatically generate interned binary string in rodata segment.
-    Binary,
+    Memory,
     Length,
+
+    EncodeF32, EncodeF64, EncodeF80,
+    EncodeI8, EncodeI16, EncodeI32, EncodeI64,
 
     // special
 
@@ -399,6 +402,7 @@ pub enum IllegalReason {
     PointerUnderflow,
     PointerOverflow,
     IntegerTooLarge,
+    TruncatedSignificantBits,
 }
 
 /// The reason why an expression failed to be evaluated.
@@ -864,10 +868,64 @@ impl Expr {
                                 _ => unreachable!(),
                             })?
                         }
-                        OP::Binary => return Err(EvalError::UndefinedSymbol(BINARY_LITERAL_SYMBOL_PREFIX.into())), // binary string intern always fails - performed by linker
+                        OP::Memory => return Err(EvalError::UndefinedSymbol(BINARY_LITERAL_SYMBOL_PREFIX.into())), // binary string intern always fails - performed by linker
                         OP::Length => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Binary(bin) => Ok(Some(bin.len().into())),
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeF32 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f32().to_le_bytes().into()))),
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeF64 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f64().to_le_bytes().into()))),
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeF80 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Float(val) => Ok(Some(Value::Binary(F80::from(val).0.into()))),
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeI8 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Integer(v) => match v.to_i8().map(|v| v as u8).or(v.to_u8()) {
+                                    Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
+                                    None => Err(IllegalReason::TruncatedSignificantBits.into()),
+                                }
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeI16 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Integer(v) => match v.to_i16().map(|v| v as u16).or(v.to_u16()) {
+                                    Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
+                                    None => Err(IllegalReason::TruncatedSignificantBits.into()),
+                                }
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeI32 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Integer(v) => match v.to_i32().map(|v| v as u32).or(v.to_u32()) {
+                                    Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
+                                    None => Err(IllegalReason::TruncatedSignificantBits.into()),
+                                }
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeI64 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Integer(v) => match v.to_i64().map(|v| v as u64).or(v.to_u64()) {
+                                    Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
+                                    None => Err(IllegalReason::TruncatedSignificantBits.into()),
+                                }
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
                             }, |_| unreachable!())?
                         }
@@ -951,21 +1009,6 @@ impl Expr {
             (_, true) => Self::chain_add(add),
             (true, false) => Some((OP::Neg, Self::chain_add(sub).unwrap()).into()),
             (false, false) => Some((OP::Sub, Self::chain_add(add).unwrap(), Self::chain_add(sub).unwrap()).into()),
-        }
-    }
-
-    /// Checks if this expression contains the specified operator.
-    /// Note that this only expects this expression; it does not follow identifiers.
-    pub(super) fn has_operator(&self, op: OP) -> bool {
-        match &*self.data.borrow() {
-            ExprData::Value(_) => false,
-            ExprData::Ident(_) => false,
-            ExprData::Uneval { op: my_op, left, right } => {
-                if op == *my_op { return true }
-                if let Some(left) = left { if left.has_operator(op) { return true } }
-                if let Some(right) = right { if right.has_operator(op) { return true } }
-                false
-            }
         }
     }
 

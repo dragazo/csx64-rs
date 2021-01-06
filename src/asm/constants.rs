@@ -85,8 +85,17 @@ lazy_static! {
     pub(super) static ref UNARY_FUNCTION_OPERATOR_TO_OP: BTreeMap<&'static str, OP> = {
         let mut m = BTreeMap::new();
 
-        insert!(m: "$bin" => OP::Binary);
+        insert!(m: "$mem" => OP::Memory);
         insert!(m: "$len" => OP::Length);
+
+        insert!(m: "$i8" => OP::EncodeI8);
+        insert!(m: "$i16" => OP::EncodeI16);
+        insert!(m: "$i32" => OP::EncodeI32);
+        insert!(m: "$i64" => OP::EncodeI64);
+
+        insert!(m: "$f32" => OP::EncodeF32);
+        insert!(m: "$f64" => OP::EncodeF64);
+        insert!(m: "$f80" => OP::EncodeF80);
         
         m
     };
@@ -346,6 +355,9 @@ pub(super) enum Instruction {
     PUSH, POP,
     INC, DEC, NEG, NOT,
     MOVS(Size), STOS(Size),
+    FINIT,
+    FLD(bool),
+    FADD(bool, bool),
     DEBUG(u8),
 }
 
@@ -589,6 +601,15 @@ lazy_static! {
         insert!(m: Caseless("STOSW") => Instruction::STOS(Size::Word));
         insert!(m: Caseless("STOSD") => Instruction::STOS(Size::Dword));
         insert!(m: Caseless("STOSQ") => Instruction::STOS(Size::Qword));
+
+        insert!(m: Caseless("FINIT") => Instruction::FINIT);
+
+        insert!(m: Caseless("FLD") => Instruction::FLD(false));
+        insert!(m: Caseless("FILD") => Instruction::FLD(true));
+
+        insert!(m: Caseless("FADD") => Instruction::FADD(false, false));
+        insert!(m: Caseless("FADDP") => Instruction::FADD(false, true));
+        insert!(m: Caseless("FIADD") => Instruction::FADD(true, false));
 
         insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
 

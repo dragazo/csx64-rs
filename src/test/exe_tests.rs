@@ -1,3 +1,5 @@
+use rug::Float;
+
 use super::*;
 use crate::exec::*;
 use crate::exec::registers::Flags;
@@ -3503,8 +3505,8 @@ fn test_extern_string() {
     extern msg, modified2
     segment text
     mov rdi, $len(msg + " -- " + extra)
-    mov rsi, $bin("mukduk " + extra + " the second time")
-    mov rdx, $bin("here's some song lyrics: '" + msg + "'\n... did you like them??")
+    mov rsi, $mem("mukduk " + extra + " the second time")
+    mov rdx, $mem("here's some song lyrics: '" + msg + "'\n... did you like them??")
     mov rcx, modified2
     hlt
     mov eax, sys_exit
@@ -3519,7 +3521,7 @@ fn test_extern_string() {
     global msg, modified2
     extern modified1
     msg: equ "hello from the otter slide!"
-    modified2: equ $bin('i' + " changed it: '" + modified1 + '\'')
+    modified2: equ $mem('i' + " changed it: '" + modified1 + '\'')
     "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
@@ -3532,4 +3534,172 @@ fn test_extern_string() {
     assert_eq!(e.memory.get(e.cpu.get_rcx(), 85).unwrap(), "i changed it: 'merp: 'hello from the otter slide! hello from the otter slide!' /merp'".as_bytes());
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(56)));
+}
+
+#[test]
+fn test_encode_size() {
+    // for this one, it suffices that it merely succeeds in assembling
+    asm_unwrap_link_unwrap!(r#"
+        static_assert $len($f32(0.0)) == 4
+        static_assert $len($f32(0.123)) == 4
+        static_assert $len($f32(23.4)) == 4
+        static_assert $len($f64(-23.4)) == 8
+        static_assert $len($f80(23.434 + 1.23)) == 10
+
+        static_assert 0 == 0
+        static_assert 0 == 0_
+        static_assert 0 == 0__
+        static_assert 0 == 0___
+        static_assert 0 == 0____
+
+        static_assert $len($i8(0)) == 1
+        static_assert $len($i8(0__)) == 1
+        static_assert $len($i8(255)) == 1
+        static_assert $len($i16(-2354)) == 2
+        static_assert $len($i32(12)) == 4
+        static_assert $len($i64(-1)) == 8
+        "#);
+}
+
+#[test]
+fn test_fld_finit() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    fld dword ptr [val1]
+    fld qword ptr [val2]
+    fld tword ptr [val3]
+    hlt
+    finit
+    hlt
+    another: equ 3459456.390485394698475698475693479845769834509459685967905438693479074356073490670576
+    fld dword ptr [$mem($f32(another))]
+    fld qword ptr [$mem($f64(another))]
+    fld tword ptr [$mem($f80(another))]
+    hlt
+    finit
+    hlt
+    fild word ptr [$mem($i16(567))]
+    fild dword ptr [$mem($i32(-3453))]
+    fild qword ptr [$mem($i64((1 << 63) - 1))]
+    hlt
+    mov eax, sys_exit
+    mov ebx, 42
+    syscall
+
+    segment rodata
+    raw: equ 574.358495909056748576498576485769847659845769845769845646534457546756867867823344356
+    val1: dd raw
+    val2: dq raw
+    val3: dt raw
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let init_top = e.fpu.status.get_top();
+    for i in 0..8 { assert!(e.fpu.get_st(i).is_none()); }
+    const PREC: u32 = 80;
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    {
+        let raw = Float::with_val(PREC, Float::parse("574.358495909056748576498576485769847659845769845769845646534457546756867867823344356").unwrap());
+        let val3 = Float::from(e.fpu.get_st(0).unwrap());
+        let val2 = Float::from(e.fpu.get_st(1).unwrap());
+        let val1 = Float::from(e.fpu.get_st(2).unwrap());
+        for i in 3..8 { assert!(e.fpu.get_st(i).is_none()); }
+        assert_ne!(val1, val2);
+        assert_ne!(val1, val3);
+        assert_ne!(val2, val3);
+
+        let diff1 = (val1 - &raw).abs();
+        let diff2 = (val2 - &raw).abs();
+        let diff3 = (val3 - &raw).abs();
+        assert!(diff1 > Float::with_val(PREC, &diff2 * 536870912));
+        assert!(diff2 > Float::with_val(PREC, &diff3 * 512));
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.fpu.status.get_top(), init_top);
+    for i in 0..8 { assert!(e.fpu.get_st(i).is_none()); }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    {
+        let raw = Float::with_val(PREC, Float::parse("3459456.390485394698475698475693479845769834509459685967905438693479074356073490670576").unwrap());
+        let val3 = Float::from(e.fpu.get_st(0).unwrap());
+        let val2 = Float::from(e.fpu.get_st(1).unwrap());
+        let val1 = Float::from(e.fpu.get_st(2).unwrap());
+        for i in 3..8 { assert!(e.fpu.get_st(i).is_none()); }
+        assert_ne!(val1, val2);
+        assert_ne!(val1, val3);
+        assert_ne!(val2, val3);
+
+        let diff1 = (val1 - &raw).abs();
+        let diff2 = (val2 - &raw).abs();
+        let diff3 = (val3 - &raw).abs();
+        assert!(diff1 > Float::with_val(PREC, &diff2 * 536870912));
+        assert!(diff2 > Float::with_val(PREC, &diff3 * 512));
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.fpu.status.get_top(), init_top);
+    for i in 0..8 { assert!(e.fpu.get_st(i).is_none()); }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    {
+        let val3 = Float::from(e.fpu.get_st(0).unwrap());
+        let val2 = Float::from(e.fpu.get_st(1).unwrap());
+        let val1 = Float::from(e.fpu.get_st(2).unwrap());
+        for i in 3..8 { assert!(e.fpu.get_st(i).is_none()); }
+        assert_eq!(val1, 567);
+        assert_eq!(val2, -3453);
+        assert_eq!(val3, i64::MAX);
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(42)));
+}
+#[test]
+fn test_fadd() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    fld tword ptr [$mem($f80(4.2343))]
+    fld tword ptr [$mem($f80(-3.14159))]
+    faddp
+    hlt
+    fadd st0, st0
+    hlt
+    fld dword ptr [$mem($f32(67.0))]
+    fadd st1, st0
+    hlt
+    mov eax, sys_exit
+    mov ebx, -33
+    syscall
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    for i in 0..8 { assert!(e.fpu.get_st(i).is_none()); }
+    const PREC: u32 = 80;
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    {
+        for i in 1..8 { assert!(e.fpu.get_st(i).is_none()); }
+        let diff = Float::from(Float::from(e.fpu.get_st(0).unwrap()) - Float::with_val(PREC, Float::parse("1.09271").unwrap())).abs();
+        assert!(diff < 1e-15);
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    {
+        for i in 1..8 { assert!(e.fpu.get_st(i).is_none()); }
+        let diff = Float::from(Float::from(e.fpu.get_st(0).unwrap()) - Float::with_val(PREC, Float::parse("2.18542").unwrap())).abs();
+        assert!(diff < 1e-15);
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    {
+        for i in 2..8 { assert!(e.fpu.get_st(i).is_none()); }
+        e.fpu.get_st(0).unwrap();
+        let diff = Float::from(Float::from(e.fpu.get_st(1).unwrap()) - Float::with_val(PREC, Float::parse("69.18542").unwrap())).abs();
+        assert!(diff < 1e-15);
+    }
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(-33)));
 }

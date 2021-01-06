@@ -390,26 +390,24 @@ impl AssembleArgs<'_> {
                         x if x.starts_with("0x") => (&x[2..], 16),
                         x if x.starts_with("0o") => (&x[2..], 8),
                         x if x.starts_with("0b") => (&x[2..], 2),
-                        x => {
-                            if x.len() > 1 && x.starts_with('0') { // disambig from C-style octal literals, which we do not support
-                                return Err(AsmError { kind: AsmErrorKind::NumericLiteralWithZeroPrefix, line_num: self.line_num, pos: Some(term_start), inner_err: None });
-                            }
-                            (x, 10)
-                        }
+                        x => (x, 10),
                     };
-                    let term_fix = { // because of prefix, we might now start with an underscore - strip all those away
-                        let p = term_fix.find(|c: char| c != '_').unwrap_or(term_fix.len());
-                        &term_fix[p..]
+                    let term_fix = { // trim off all leading and trailing underscores (might be after a prefix)
+                        let start = term_fix.find(|c: char| c != '_').unwrap_or(term_fix.len());
+                        let term_fix = &term_fix[start..];
+                        let stop = term_fix.rfind(|c: char| c != '_').map(|p| p + 1).unwrap_or(0);
+                        &term_fix[..stop]
                     };
-
                     // terms should not have signs - this should be exclusively handled by unary ops
                     debug_assert!(!term_fix.starts_with('+') && !term_fix.starts_with('-'));
                 
                     // first, try to parse the value as an integer
                     match Integer::from_str_radix(&term_fix, radix) {
-                        Ok(v) => match v.to_u64() {
-                            None => return Err(AsmError { kind: AsmErrorKind::IllFormedNumericLiteral, line_num: self.line_num, pos: Some(term_start), inner_err: None }),
-                            Some(v) => v.into(),
+                        Ok(v) => {
+                            if radix == 10 && term_fix.len() > 1 && term_fix.starts_with('0') { // disambig from C-style octal literals, which we do not support
+                                return Err(AsmError { kind: AsmErrorKind::NumericLiteralWithZeroPrefix, line_num: self.line_num, pos: Some(term_start), inner_err: None });
+                            }
+                            v.into()
                         }
                         Err(_) => {
                             // if we had a prefix, it was supposed to be an integer (failure)
@@ -1201,6 +1199,119 @@ impl AssembleArgs<'_> {
         Ok(())
     }
 
+    pub(super) fn process_fpu_value_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, integral: bool) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+        if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
+
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)?; }
+
+        match args.into_iter().next().unwrap() {
+            Argument::FPURegister(src) => self.append_byte((src.id << 4) | 0)?,
+            Argument::Address(addr) => {
+                let size = match addr.pointed_size {
+                    None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                    Some(s) => s,
+                };
+                let mode = match (integral, size) {
+                    (false, Size::Dword) => 1,
+                    (false, Size::Qword) => 2,
+                    (false, Size::Tword) => 3,
+                    (true, Size::Word) => 4,
+                    (true, Size::Dword) => 5,
+                    (true, Size::Qword) => 6,
+                    _ => return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                };
+                self.append_byte(mode)?;
+                self.append_address(addr)?;
+            }
+            _ => return Err(AsmError { kind: AsmErrorKind::ValueOpUnsupportedType, line_num: self.line_num, pos: None, inner_err: None }),
+        }
+
+        Ok(())
+    }
+    pub(super) fn process_fpu_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, integral: bool, pop: bool) -> Result<(), AsmError> {
+        if self.current_seg != Some(AsmSegment::Text) { return Err(AsmError { kind: AsmErrorKind::InstructionOutsideOfTextSegment, line_num: self.line_num, pos: None, inner_err: None }); }
+
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)?; }
+
+        if integral && pop { panic!() }
+        else if integral {
+            if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
+            match args.into_iter().next().unwrap() {
+                Argument::Address(addr) => {
+                    let mode = match addr.pointed_size {
+                        None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                        Some(size) => match size {
+                            Size::Word => 6,
+                            Size::Dword => 7,
+                            Size::Qword => 8,
+                            _ => return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                        }
+                    };
+                    self.append_byte(mode)?;
+                    self.append_address(addr)?;
+                }
+                _ => return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+            }
+        }
+        else if pop {
+            match args.len() {
+                0 => self.append_byte((1 << 4) | 2)?,
+                2 => {
+                    let mut args = args.into_iter();
+                    let a = args.next().unwrap();
+                    let b = args.next().unwrap();
+                    match (a, b) {
+                        (Argument::FPURegister(a), Argument::FPURegister(b)) => {
+                            if b.id != 0 { return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpPop2SrcNotST0, line_num: self.line_num, pos: None, inner_err: None }); }
+                            self.append_byte((a.id << 4) | 2)?;
+                        }
+                        _ => return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+                    }
+                }
+                _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[0, 2]), line_num: self.line_num, pos: None, inner_err: None }),
+            }
+        }
+        else {
+            match args.len() {
+                1 => match args.into_iter().next().unwrap() {
+                    Argument::Address(addr) => {
+                        let mode = match addr.pointed_size {
+                            None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                            Some(size) => match size {
+                                Size::Dword => 3,
+                                Size::Qword => 4,
+                                Size::Tword => 5,
+                                _ => return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
+                            }
+                        };
+                        self.append_byte(mode)?;
+                        self.append_address(addr)?;
+                    }
+                    _ => return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+                },
+                2 => {
+                    let mut args = args.into_iter();
+                    let a = args.next().unwrap();
+                    let b = args.next().unwrap();
+                    match (a, b) {
+                        (Argument::FPURegister(a), Argument::FPURegister(b)) => {
+                            if a.id == 0 { self.append_byte((b.id << 4) | 0)?; }
+                            else if b.id == 0 { self.append_byte((a.id << 4) | 1)?; }
+                            else { return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpNeitherST0, line_num: self.line_num, pos: None, inner_err: None }); }
+                        }
+                        _ => return Err(AsmError { kind: AsmErrorKind::FPUBinaryOpUnsupportedTypes, line_num: self.line_num, pos: None, inner_err: None }),
+                    }
+                }
+                _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2]), line_num: self.line_num, pos: None, inner_err: None }),
+            }
+        }
+
+        Ok(())
+    }
+
     fn verify_legal_expr(&self, expr: &Expr, line_num: usize) -> Result<(), AsmError> {
         match &*expr.data.borrow() {
             ExprData::Value(_) => (),
@@ -1476,6 +1587,27 @@ fn test_extr_expr() {
             assert!(matches!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix));
         }
     }
+    match c.extract_expr("  00  ", 1, 6) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix));
+        }
+    }
+    match c.extract_expr("  00_  ", 1, 7) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix));
+        }
+    }
+    match c.extract_expr("  0_0_  ", 1, 8) {
+        Ok(r) => panic!("{:?}", r),
+        Err(e) => {
+            assert_eq!(e.pos, Some(2));
+            assert!(matches!(e.kind, AsmErrorKind::NumericLiteralWithZeroPrefix));
+        }
+    }
     match c.extract_expr("0", 0, 1) {
         Ok((expr, aft)) => {
             assert_eq!(aft, 1);
@@ -1620,6 +1752,94 @@ fn test_extr_expr() {
             }
         }
         Err(e) => panic!("{:?}", e),
+    }
+}
+#[test]
+fn test_float_lexer() {
+    let mut c = create_context();
+    match c.extract_expr("     1.234 - 1.0    ", 1, 20) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 16);
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(v) => match v {
+                    Value::Float(v) => assert!(v - 0.234 < 0.00000000001),
+                    x => panic!("{:?}", x),
+                }
+                _ => panic!(),
+            }
+        }
+    }
+    match c.extract_expr("     1.234 -1.0    ", 1, 19) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 15);
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(v) => match v {
+                    Value::Float(v) => assert!(v - 0.234 < 0.00000000001),
+                    x => panic!("{:?}", x),
+                }
+                _ => panic!(),
+            }
+        }
+    }
+    match c.extract_expr("     1.234- 1.0    ", 1, 19) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 15);
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(v) => match v {
+                    Value::Float(v) => assert!(v - 0.234 < 0.00000000001),
+                    x => panic!("{:?}", x),
+                }
+                _ => panic!(),
+            }
+        }
+    }
+    match c.extract_expr("     1.234-1.0    ", 1, 18) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 14);
+            match expr.into_eval(&c.file.symbols).unwrap() {
+                ValueCow::Owned(v) => match v {
+                    Value::Float(v) => assert!(v - 0.234 < 0.00000000001),
+                    x => panic!("{:?}", x),
+                }
+                _ => panic!(),
+            }
+        }
+    }
+    match c.extract_expr("     574.35849590905674857649 - 8576485769847659845769845769845646534457546756867867823344356    ", 1, 97) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 93);
+            match expr.into_eval(&c.file.symbols) {
+                Ok(v) => panic!("{:?}", v),
+                Err(e) => match e {
+                    EvalError::Illegal(e) => match e {
+                        IllegalReason::IncompatibleTypes(OP::Sub, ValueType::Float, ValueType::Integer) => (),
+                        r => panic!("{:?}", r),
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+        }
+    }
+    match c.extract_expr("     574.35849590905674857649-8576485769847659845769845769845646534457546756867867823344356    ", 1, 95) {
+        Err(e) => panic!("{:?}", e),
+        Ok((expr, aft)) => {
+            assert_eq!(aft, 91);
+            match expr.into_eval(&c.file.symbols) {
+                Ok(v) => panic!("{:?}", v),
+                Err(e) => match e {
+                    EvalError::Illegal(e) => match e {
+                        IllegalReason::IncompatibleTypes(OP::Sub, ValueType::Float, ValueType::Integer) => (),
+                        r => panic!("{:?}", r),
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+        }
     }
 }
 #[test]

@@ -4,6 +4,7 @@ use rand_xorshift::XorShiftRng;
 use rand::{Rng, RngCore, SeedableRng, rngs::OsRng};
 use memchr::memchr;
 use num_traits::FromPrimitive;
+use rug::{Float, float::SmallFloat};
 
 use std::mem;
 use std::iter;
@@ -76,6 +77,12 @@ pub enum ExecError {
     FileDescriptorNotOpen,
     /// Attempt to violate established file permissions.
     FilePermissions,
+    /// Attempt to read an FPU register which was tagged as empty.
+    ReadEmptyFPURegister,
+    /// A push operation to the FPU register stack failed.
+    FPUOverflow,
+    /// A pop operation from the FPU register stack failed.
+    FPUUnderflow,
 }
 
 /// Reason why execution stopped.
@@ -699,6 +706,11 @@ impl Emulator {
 
                         OPCode::STRING => self.exec_string(),
                         
+                        OPCode::FINIT => self.exec_finit(),
+                        OPCode::FLD => self.exec_fld(),
+
+                        OPCode::FADD => self.exec_fadd(),
+
                         OPCode::DEBUG => self.exec_debug(),
                     }
                 }
@@ -1058,6 +1070,89 @@ impl Emulator {
         };
 
         Ok((s, v))
+    }
+
+    /*
+    [1:][3: i][4: mode]    ([address])
+    mode = 0: st(i)
+    mode = 1: mf32
+    mode = 2: mf64
+    mode = 3: mf80
+    mode = 4: mi16
+    mode = 5: mi32
+    mode = 6: mi64
+    else: und
+    */
+    fn read_fpu_value_op(&mut self) -> Result<F80, ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let i = (s >> 4) & 7;
+        Ok(match s & 0xf {
+            0 => match self.fpu.get_st(i) {
+                None => return Err(ExecError::ReadEmptyFPURegister),
+                Some(v) => v,
+            }
+            1 => { let m = self.get_address_adv()?; F80::from(&*SmallFloat::from(self.memory.get_f32(m)?)) }
+            2 => { let m = self.get_address_adv()?; F80::from(&*SmallFloat::from(self.memory.get_f64(m)?)) }
+            3 => { let m = self.get_address_adv()?; self.memory.get_f80(m)? }
+            4 => { let m = self.get_address_adv()?; F80::from(&*SmallFloat::from(self.memory.get_i16(m)?)) }
+            5 => { let m = self.get_address_adv()?; F80::from(&*SmallFloat::from(self.memory.get_i32(m)?)) }
+            6 => { let m = self.get_address_adv()?; F80::from(&*SmallFloat::from(self.memory.get_i64(m)?)) }
+            _ => return Err(ExecError::InvalidOpEncoding),
+        })
+    }
+    /*
+    [1:][3: i][4: mode]    ([address])
+    mode = 0: st(0) <- f(st(0), st(i))
+    mode = 1: st(i) <- f(st(i), st(0))
+    mode = 2: || + pop
+    mode = 3: st(0) <- f(st(0), mf32)
+    mode = 4: st(0) <- f(st(0), mf64)
+    mode = 5: st(0) <- f(st(0), mf80)
+    mode = 6: st(0) <- f(st(0), mi16)
+    mode = 7: st(0) <- f(st(0), mi32)
+    mode = 8: st(0) <- f(st(0), mi64)
+    else: und
+    */
+    fn read_fpu_binary_op(&mut self) -> Result<(u8, Float, Float), ExecError> {
+        let s = self.get_mem_adv_u8()?;
+        let i = (s >> 4) & 7;
+        let top: F80 = match self.fpu.get_st(0) {
+            None => return Err(ExecError::ReadEmptyFPURegister),
+            Some(v) => v,
+        };
+        let (a, b): (F80, F80) = match s & 0xf {
+            0 => match self.fpu.get_st(i) {
+                None => return Err(ExecError::ReadEmptyFPURegister),
+                Some(other) => (top, other),
+            }
+            1 | 2 => match self.fpu.get_st(i) {
+                None => return Err(ExecError::ReadEmptyFPURegister),
+                Some(other) => (other, top),
+            }
+            3 => { let m = self.get_address_adv()?; (top, F80::from(&*SmallFloat::from(self.memory.get_f32(m)?))) }
+            4 => { let m = self.get_address_adv()?; (top, F80::from(&*SmallFloat::from(self.memory.get_f64(m)?))) }
+            5 => { let m = self.get_address_adv()?; (top, self.memory.get_f80(m)?) }
+            6 => { let m = self.get_address_adv()?; (top, F80::from(&*SmallFloat::from(self.memory.get_i16(m)?))) }
+            7 => { let m = self.get_address_adv()?; (top, F80::from(&*SmallFloat::from(self.memory.get_i32(m)?))) }
+            8 => { let m = self.get_address_adv()?; (top, F80::from(&*SmallFloat::from(self.memory.get_i64(m)?))) }
+            _ => return Err(ExecError::InvalidOpEncoding),
+        };
+        let (a, b): (Float, Float) = (a.into(), b.into());
+        assert!(a.prec() == SIGNIFICANT_BITS && b.prec() == SIGNIFICANT_BITS);
+        Ok((s, a, b))
+    }
+    fn store_fpu_binary_op_result(&mut self, s: u8, res: &Float) -> Result<(), ExecError> {
+        let i = (s >> 4) & 7;
+        let res: F80 = res.into();
+        match s & 0xf {
+            1 => self.fpu.set_st(i, res),
+            2 => {
+                self.fpu.set_st(i, res);
+                self.fpu.pop().unwrap(); // we had to read st0 to get here, so we know it's not empty
+            }
+            _ => self.fpu.set_st(0, res),
+        }
+        Ok(())
     }
 
     /*
@@ -1641,6 +1736,23 @@ impl Emulator {
         }
 
         Ok(())
+    }
+
+    fn exec_finit(&mut self) -> Result<(), ExecError> {
+        self.fpu.reset();
+        Ok(())
+    }
+    fn exec_fld(&mut self) -> Result<(), ExecError> {
+        let val = self.read_fpu_value_op()?;
+        if let Err(_) = self.fpu.push(val) { return Err(ExecError::FPUOverflow); }
+        Ok(())
+    }
+    
+    fn exec_fadd(&mut self) -> Result<(), ExecError> {
+        let (s, a, b) = self.read_fpu_binary_op()?;
+        let res = a + b;
+        self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
+        self.store_fpu_binary_op_result(s, &res)
     }
 
     fn get_cpu_debug_string(&self) -> String {

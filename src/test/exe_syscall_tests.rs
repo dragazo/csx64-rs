@@ -23,7 +23,7 @@ fn test_write() {
     segment text
     mov eax, sys_write
     mov ebx, 1 ; stdout
-    mov rcx, $bin("hello world\n\0hello")
+    mov rcx, $mem("hello world\n\0hello")
     mov edx, 18
     syscall
     hlt

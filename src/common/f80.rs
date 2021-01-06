@@ -13,8 +13,8 @@ use super::serialization::*;
 #[cfg(test)]
 use rug::float::SmallFloat;
 
-const SIGNIFICANT_BITS: u32 = 64;
-const EXPONENT_BITS: u32 = 15;
+pub const SIGNIFICANT_BITS: u32 = 64;
+pub const EXPONENT_BITS: u32 = 15;
 
 const EXPONENT_BIAS: i32 = (1 << (EXPONENT_BITS - 1)) - 1;
 
@@ -39,6 +39,8 @@ pub const MIN: F80 = F80([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 
 
 /// The lowest-magnitude positive finite value.
 pub const MIN_POSITIVE: F80 = F80([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+/// The lowest-magnitude negating finite value.
+pub const MAX_NEGATIVE: F80 = F80([1, 0, 0, 0, 0, 0, 0, 0, 0, 0x80]);
 
 /// Represents an 80-bit extended precision floating point number.
 /// 
@@ -74,6 +76,14 @@ impl F80 {
     /// This is equivalent to wrapping the array, but is defined for macro expansion convenience.
     pub fn from_le_bytes(bytes: [u8; 10]) -> F80 {
         F80(bytes)
+    }
+    /// Classifies the current value.
+    pub fn classify(&self) -> FpCategory {
+        if self.0 == POSITIVE_ZERO.0 || self.0 == NEGATIVE_ZERO.0 { return FpCategory::Zero; }
+        if self.0 == POSITIVE_INFINITY.0 || self.0 == NEGATIVE_INFINITY.0 { return FpCategory::Infinite; }
+        if self.0[8] == 0xff && self.0[9] & 0x7f == 0x7f { return FpCategory::Nan; }
+        if self.0[7] & 0x80 == 0 { return FpCategory::Subnormal; } // f80 doesn't hide a bit, so subnormal is just high bit of zero
+        FpCategory::Normal
     }
 }
 
@@ -232,6 +242,14 @@ fn test_f80_cvt() {
     assert_eq!(F80::from(&Float::with_val(SIGNIFICANT_BITS, Special::Nan)).0, POSITIVE_NAN.0);
     assert_eq!(F80::from(&-Float::with_val(SIGNIFICANT_BITS, Special::Nan)).0, NEGATIVE_NAN.0);
 
+    assert_eq!(F80::from(&Float::with_val(SIGNIFICANT_BITS, Special::Nan)).classify(), FpCategory::Nan);
+    assert_eq!(F80::from(&-Float::with_val(SIGNIFICANT_BITS, Special::Nan)).classify(), FpCategory::Nan);
+
+    assert_eq!(F80([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]).classify(), FpCategory::Nan);
+    assert_eq!(F80([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0x7f]).classify(), FpCategory::Nan);
+    assert_eq!(F80([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).classify(), FpCategory::Nan);
+    assert_eq!(F80([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff]).classify(), FpCategory::Nan);
+
     assert!({ let v = Float::from(POSITIVE_NAN); v.is_nan() && v.is_sign_positive() });
     assert!({ let v = Float::from(NEGATIVE_NAN); v.is_nan() && v.is_sign_negative() });
 
@@ -277,12 +295,28 @@ fn test_f80_cvt() {
 
     assert!({ let v = Float::from(MIN_POSITIVE); v.is_finite() && !v.is_zero() && v.is_sign_positive() });
     assert_eq!(F80::from(&Float::from(MIN_POSITIVE)).0, MIN_POSITIVE.0);
+    assert_eq!(F80::from(&Float::from(MIN_POSITIVE)).classify(), FpCategory::Subnormal);
+
+    {
+        let v: Float = Float::from(MIN_POSITIVE) / 2;
+        let b = F80::from(&v);
+        assert_eq!(b.0, POSITIVE_ZERO.0);
+        assert_eq!(b.classify(), FpCategory::Zero);
+    }
+    {
+        let v: Float = Float::from(MAX_NEGATIVE) / 2;
+        let b = F80::from(&v);
+        assert_eq!(b.0, NEGATIVE_ZERO.0);
+        assert_eq!(b.classify(), FpCategory::Zero);
+    }
 
     assert!({ let v = Float::from(MAX); v.is_finite() && !v.is_zero() && v.is_sign_positive() && v > f64::MAX });
     assert_eq!(F80::from(&Float::from(MAX)).0, MAX.0);
+    assert_eq!(F80::from(&Float::from(MAX)).classify(), FpCategory::Normal);
 
     assert!({ let v = Float::from(MIN); v.is_finite() && !v.is_zero() && v.is_sign_negative() && v < f64::MIN });
     assert_eq!(F80::from(&Float::from(MIN)).0, MIN.0);
+    assert_eq!(F80::from(&Float::from(MIN)).classify(), FpCategory::Normal);
 
     let almost_2 = Float::with_val(SIGNIFICANT_BITS + 20, 2) - Float::with_val(SIGNIFICANT_BITS + 20, -66).exp2();
     assert!(almost_2 < 2);
