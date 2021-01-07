@@ -346,6 +346,10 @@ impl AssembleArgs<'_> {
                         let func = &term[..paren_pos];
                         let args = self.parse_comma_sep_exprs(raw_line, term_start + paren_pos + 1, term_stop - 1)?;
 
+                        fn chain_encode(args: Vec<Expr>, encoder: OP, line_num: usize, term_start: usize) -> Result<Expr, AsmError> {
+                            if args.len() == 0 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCountAtLeast(1), line_num, pos: Some(term_start), inner_err: None }); }
+                            Ok(Expr::chain_add(args.into_iter().map(|x| Expr::from((encoder, x))).collect()).unwrap())
+                        }
                         match func {
                             "$if" => {
                                 if args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[3]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }
@@ -355,6 +359,19 @@ impl AssembleArgs<'_> {
                                 let right = args.next().unwrap();
                                 (OP::Condition, cond, Expr::from((OP::Pair, left, right))).into()
                             }
+
+                            "$bin8" => chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?,
+                            "$bin16" => chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?,
+                            "$bin32" => chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?,
+                            "$bin64" => chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?,
+                            "$bin80" => chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?,
+                            
+                            "$rdb" => Expr::from((OP::Memory, chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?)),
+                            "$rdw" => Expr::from((OP::Memory, chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?)),
+                            "$rdd" => Expr::from((OP::Memory, chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?)),
+                            "$rdq" => Expr::from((OP::Memory, chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?)),
+                            "$rdt" => Expr::from((OP::Memory, chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?)),
+
                             _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
                                 Some(op) => {
                                     if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: Some(term_start), inner_err: None }); }

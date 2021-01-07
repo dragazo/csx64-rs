@@ -704,6 +704,7 @@ pub enum IllegalPatchReason {
     WriteIntegerAsUnsupportedSize(Size),
     WriteFloatAsUnsupportedSize(Size),
     TruncatedSignificantBits,
+    TruncatedUTF8,
 }
 
 /// Attempts to patch the hole in the given segment.
@@ -720,22 +721,24 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
     };
 
     match &*val {
-        Value::Character(v) => {
+        Value::Character(ch) => {
             if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
                 return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
             }
-            let iv = *v as u32;
+            let mut buf = [0; 4];
+            ch.encode_utf8(&mut buf);
+            let utf8 = u32::from_le_bytes(buf);
             match hole.size {
                 Size::Byte => {
-                    if iv > u8::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(iv as u8).to_le_bytes(), hole.address)
+                    if utf8 > u8::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedUTF8), line_num: hole.line_num }); }
+                    segment_write_bin(seg, &(utf8 as u8).to_le_bytes(), hole.address)
                 }
                 Size::Word => {
-                    if iv > u16::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
-                    segment_write_bin(seg, &(iv as u16).to_le_bytes(), hole.address)
+                    if utf8 > u16::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedUTF8), line_num: hole.line_num }); }
+                    segment_write_bin(seg, &(utf8 as u16).to_le_bytes(), hole.address)
                 }
-                Size::Dword => segment_write_bin(seg, &(iv as u32).to_le_bytes(), hole.address),
-                Size::Qword => segment_write_bin(seg, &(iv as u64).to_le_bytes(), hole.address),
+                Size::Dword => segment_write_bin(seg, &(utf8 as u32).to_le_bytes(), hole.address),
+                Size::Qword => segment_write_bin(seg, &(utf8 as u64).to_le_bytes(), hole.address),
                 x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
             }
         }

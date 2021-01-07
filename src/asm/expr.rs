@@ -56,8 +56,7 @@ pub enum OP {
     Memory,
     Length,
 
-    EncodeF32, EncodeF64, EncodeF80,
-    EncodeI8, EncodeI16, EncodeI32, EncodeI64,
+    EncodeBin8, EncodeBin16, EncodeBin32, EncodeBin64, EncodeBin80,
 
     // special
 
@@ -875,34 +874,21 @@ impl Expr {
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
                             }, |_| unreachable!())?
                         }
-                        OP::EncodeF32 => {
-                            unary_op(left, &right, symbols, visited, |a| match a {
-                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f32().to_le_bytes().into()))),
-                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
-                            }, |_| unreachable!())?
-                        }
-                        OP::EncodeF64 => {
-                            unary_op(left, &right, symbols, visited, |a| match a {
-                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f64().to_le_bytes().into()))),
-                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
-                            }, |_| unreachable!())?
-                        }
-                        OP::EncodeF80 => {
-                            unary_op(left, &right, symbols, visited, |a| match a {
-                                Value::Float(val) => Ok(Some(Value::Binary(F80::from(val).0.into()))),
-                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
-                            }, |_| unreachable!())?
-                        }
-                        OP::EncodeI8 => {
+                        OP::EncodeBin8 => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Integer(v) => match v.to_i8().map(|v| v as u8).or(v.to_u8()) {
                                     Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
                                     None => Err(IllegalReason::TruncatedSignificantBits.into()),
                                 }
+                                Value::Character(ch) => Ok(Some(Value::Binary({ let mut buf = [0; 4]; ch.encode_utf8(&mut buf).as_bytes().into() }))),
+                                Value::Binary(_) => Ok(None),
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
-                            }, |_| unreachable!())?
+                            }, |a| match a {
+                                Value::Binary(v) => v.into(), // binary is pass-through for bin8 encoding (like db 'hello world')
+                                _ => unreachable!(),   
+                            })?
                         }
-                        OP::EncodeI16 => {
+                        OP::EncodeBin16 => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Integer(v) => match v.to_i16().map(|v| v as u16).or(v.to_u16()) {
                                     Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
@@ -911,21 +897,29 @@ impl Expr {
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
                             }, |_| unreachable!())?
                         }
-                        OP::EncodeI32 => {
+                        OP::EncodeBin32 => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Integer(v) => match v.to_i32().map(|v| v as u32).or(v.to_u32()) {
                                     Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
                                     None => Err(IllegalReason::TruncatedSignificantBits.into()),
                                 }
+                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f32().to_le_bytes().into()))),
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
                             }, |_| unreachable!())?
                         }
-                        OP::EncodeI64 => {
+                        OP::EncodeBin64 => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Integer(v) => match v.to_i64().map(|v| v as u64).or(v.to_u64()) {
                                     Some(v) => Ok(Some(Value::Binary(v.to_le_bytes().into()))),
                                     None => Err(IllegalReason::TruncatedSignificantBits.into()),
                                 }
+                                Value::Float(val) => Ok(Some(Value::Binary(val.to_f64().to_le_bytes().into()))),
+                                a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
+                            }, |_| unreachable!())?
+                        }
+                        OP::EncodeBin80 => {
+                            unary_op(left, &right, symbols, visited, |a| match a {
+                                Value::Float(val) => Ok(Some(Value::Binary(F80::from(val).0.into()))),
                                 a => Err(IllegalReason::IncompatibleType(*op, a.get_type()).into()),
                             }, |_| unreachable!())?
                         }

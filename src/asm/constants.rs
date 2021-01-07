@@ -85,17 +85,7 @@ lazy_static! {
     pub(super) static ref UNARY_FUNCTION_OPERATOR_TO_OP: BTreeMap<&'static str, OP> = {
         let mut m = BTreeMap::new();
 
-        insert!(m: "$mem" => OP::Memory);
         insert!(m: "$len" => OP::Length);
-
-        insert!(m: "$i8" => OP::EncodeI8);
-        insert!(m: "$i16" => OP::EncodeI16);
-        insert!(m: "$i32" => OP::EncodeI32);
-        insert!(m: "$i64" => OP::EncodeI64);
-
-        insert!(m: "$f32" => OP::EncodeF32);
-        insert!(m: "$f64" => OP::EncodeF64);
-        insert!(m: "$f80" => OP::EncodeF80);
         
         m
     };

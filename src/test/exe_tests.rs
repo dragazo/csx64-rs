@@ -3398,7 +3398,7 @@ fn test_stos() {
 
     segment data
     arr1: db "hello world this is a message to the world\0"
-    arr2: db "this is not a message from the other world\0"
+    arr2: db "this is", ' ', "not a message from the other world\0"
     "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
@@ -3505,8 +3505,8 @@ fn test_extern_string() {
     extern msg, modified2
     segment text
     mov rdi, $len(msg + " -- " + extra)
-    mov rsi, $mem("mukduk " + extra + " the second time")
-    mov rdx, $mem("here's some song lyrics: '" + msg + "'\n... did you like them??")
+    mov rsi, $rdb("mukduk " + extra + " the second time")
+    mov rdx, $rdb("here's some song lyrics: '", msg, "'\n... did you like them??")
     mov rcx, modified2
     hlt
     mov eax, sys_exit
@@ -3514,14 +3514,14 @@ fn test_extern_string() {
     syscall
 
     extra: equ "more content"
-    modified1: equ "merp: '" + msg + ' ' + msg + "' /merp"
+    modified1: equ $bin8("merp: '", msg, ' ', msg, "' /merp")
     "#,
     // second file
     r#"
     global msg, modified2
     extern modified1
     msg: equ "hello from the otter slide!"
-    modified2: equ $mem('i' + " changed it: '" + modified1 + '\'')
+    modified2: equ $rdb('i' + " changed it: '" + modified1 + '\'')
     "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
@@ -3537,14 +3537,14 @@ fn test_extern_string() {
 }
 
 #[test]
-fn test_encode_size() {
+fn test_asm_encodings() {
     // for this one, it suffices that it merely succeeds in assembling
     asm_unwrap_link_unwrap!(r#"
-        static_assert $len($f32(0.0)) == 4
-        static_assert $len($f32(0.123)) == 4
-        static_assert $len($f32(23.4)) == 4
-        static_assert $len($f64(-23.4)) == 8
-        static_assert $len($f80(23.434 + 1.23)) == 10
+        static_assert $len($bin32(0.0)) == 4
+        static_assert $len($bin32(0.123)) == 4
+        static_assert $len($bin32(23.4)) == 4
+        static_assert $len($bin64(-23.4)) == 8
+        static_assert $len($bin80(23.434 + 1.23)) == 10
 
         static_assert 0 == 0
         static_assert 0 == 0_
@@ -3552,13 +3552,39 @@ fn test_encode_size() {
         static_assert 0 == 0___
         static_assert 0 == 0____
 
-        static_assert $len($i8(0)) == 1
-        static_assert $len($i8(0__)) == 1
-        static_assert $len($i8(255)) == 1
-        static_assert $len($i16(-2354)) == 2
-        static_assert $len($i32(12)) == 4
-        static_assert $len($i64(-1)) == 8
+        static_assert $len($bin8(0)) == 1
+        static_assert $len($bin8(0__)) == 1
+        static_assert $len($bin8(255)) == 1
+        static_assert $len($bin16(-2354)) == 2
+        static_assert $len($bin32(12)) == 4
+        static_assert $len($bin64(-1)) == 8
+
+        static_assert $bin8('한') == "\xed\x95\x9c"
         "#);
+    let exe = asm_unwrap_link_unwrap!(r#"
+        segment text
+        mov rax, val1
+        mov rbx, val2
+        hlt
+        mov eax, sys_exit
+        mov ebx, 23
+        syscall
+
+        segment rodata
+        val1: dd '먹'
+        val2: dd meog
+
+        meog: equ '먹'
+        "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get(e.cpu.get_rax(), 4).unwrap(), &[0xeb, 0xa8, 0xb9, 0]);
+    assert_eq!(e.memory.get(e.cpu.get_rbx(), 4).unwrap(), &[0xeb, 0xa8, 0xb9, 0]);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(23)));
 }
 
 #[test]
@@ -3572,15 +3598,15 @@ fn test_fld_finit() {
     finit
     hlt
     another: equ 3459456.390485394698475698475693479845769834509459685967905438693479074356073490670576
-    fld dword ptr [$mem($f32(another))]
-    fld qword ptr [$mem($f64(another))]
-    fld tword ptr [$mem($f80(another))]
+    fld dword ptr [$rdd(another)]
+    fld qword ptr [$rdq(another)]
+    fld tword ptr [$rdt(another)]
     hlt
     finit
     hlt
-    fild word ptr [$mem($i16(567))]
-    fild dword ptr [$mem($i32(-3453))]
-    fild qword ptr [$mem($i64((1 << 63) - 1))]
+    fild word ptr [$rdw(567)]
+    fild dword ptr [$rdd(-3453)]
+    fild qword ptr [$rdq((1 << 63) - 1)]
     hlt
     mov eax, sys_exit
     mov ebx, 42
@@ -3660,13 +3686,13 @@ fn test_fld_finit() {
 fn test_fadd() {
     let exe = asm_unwrap_link_unwrap!(r#"
     segment text
-    fld tword ptr [$mem($f80(4.2343))]
-    fld tword ptr [$mem($f80(-3.14159))]
+    fld tword ptr [$rdt(4.2343)]
+    fld tword ptr [$rdt(-3.14159)]
     faddp
     hlt
     fadd st0, st0
     hlt
-    fld dword ptr [$mem($f32(67.0))]
+    fld dword ptr [$rdd(67.0)]
     fadd st1, st0
     hlt
     mov eax, sys_exit
