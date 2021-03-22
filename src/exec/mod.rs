@@ -710,6 +710,8 @@ impl Emulator {
                         OPCode::FLD => self.exec_fld(),
 
                         OPCode::FADD => self.exec_fadd(),
+                        OPCode::FSUB => self.exec_fsub(),
+                        OPCode::FSUBR => self.exec_fsubr(),
 
                         OPCode::DEBUG => self.exec_debug(),
                     }
@@ -1138,7 +1140,7 @@ impl Emulator {
             _ => return Err(ExecError::InvalidOpEncoding),
         };
         let (a, b): (Float, Float) = (a.into(), b.into());
-        assert!(a.prec() == SIGNIFICANT_BITS && b.prec() == SIGNIFICANT_BITS);
+        debug_assert!(a.prec() == SIGNIFICANT_BITS && b.prec() == SIGNIFICANT_BITS);
         Ok((s, a, b))
     }
     fn store_fpu_binary_op_result(&mut self, s: u8, res: &Float) -> Result<(), ExecError> {
@@ -1751,6 +1753,19 @@ impl Emulator {
     fn exec_fadd(&mut self) -> Result<(), ExecError> {
         let (s, a, b) = self.read_fpu_binary_op()?;
         let res = a + b;
+        self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
+        self.store_fpu_binary_op_result(s, &res)
+    }
+    fn exec_fsub(&mut self) -> Result<(), ExecError> {
+        let (s, a, b) = self.read_fpu_binary_op()?;
+        println!("a: {} b: {}", a, b);
+        let res = a - b;
+        self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
+        self.store_fpu_binary_op_result(s, &res)
+    }
+    fn exec_fsubr(&mut self) -> Result<(), ExecError> {
+        let (s, a, b) = self.read_fpu_binary_op()?;
+        let res = b - a;
         self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
         self.store_fpu_binary_op_result(s, &res)
     }

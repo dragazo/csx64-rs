@@ -41,7 +41,7 @@ pub enum OPCode
     FINIT,
     FLD,
     
-    FADD,
+    FADD, FSUB, FSUBR,
 
     // misc instructions
 

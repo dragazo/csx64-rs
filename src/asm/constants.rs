@@ -347,7 +347,7 @@ pub(super) enum Instruction {
     MOVS(Size), STOS(Size),
     FINIT,
     FLD(bool),
-    FADD(bool, bool),
+    FADD(bool, bool), FSUB(bool, bool), FSUBR(bool, bool),
     DEBUG(u8),
 }
 
@@ -600,6 +600,14 @@ lazy_static! {
         insert!(m: Caseless("FADD") => Instruction::FADD(false, false));
         insert!(m: Caseless("FADDP") => Instruction::FADD(false, true));
         insert!(m: Caseless("FIADD") => Instruction::FADD(true, false));
+
+        insert!(m: Caseless("FSUB") => Instruction::FSUB(false, false));
+        insert!(m: Caseless("FSUBP") => Instruction::FSUB(false, true));
+        insert!(m: Caseless("FISUB") => Instruction::FSUB(true, false));
+
+        insert!(m: Caseless("FSUBR") => Instruction::FSUBR(false, false));
+        insert!(m: Caseless("FSUBRP") => Instruction::FSUBR(false, true));
+        insert!(m: Caseless("FISUBR") => Instruction::FSUBR(true, false));
 
         insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
 

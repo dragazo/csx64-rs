@@ -1317,6 +1317,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::FLD(int) => args.process_fpu_value_op(arguments, OPCode::FLD as u8, None, int)?,
 
                             Instruction::FADD(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FADD as u8, None, int, pop)?,
+                            Instruction::FSUB(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUB as u8, None, int, pop)?,
+                            Instruction::FSUBR(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUBR as u8, None, int, pop)?,
                             
                             Instruction::DEBUG(ext) => args.process_no_arg_op(arguments, Some(OPCode::DEBUG as u8), Some(ext))?,
                         }
