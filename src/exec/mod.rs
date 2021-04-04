@@ -672,7 +672,7 @@ impl Emulator {
 
                         OPCode::LEA => self.exec_lea(),
                         OPCode::MOV => self.exec_mov(),
-                        OPCode::MOVcc => self.exec_movcc(),
+                        OPCode::CMOVcc => self.exec_cmovcc(),
                         OPCode::SETcc => self.exec_setcc(),
                         OPCode::XCHG => self.exec_xchg(),
                         OPCode::REGOP => self.exec_regop(),
@@ -1232,7 +1232,7 @@ impl Emulator {
         let (s1, s2, m, _, b) = self.read_binary_op(false, None, None)?;
         self.store_binary_op_result(s1, s2, m, b)
     }
-    fn exec_movcc(&mut self) -> Result<(), ExecError> {
+    fn exec_cmovcc(&mut self) -> Result<(), ExecError> {
         let cnd = self.read_standard_condition()?;
         let (s1, s2, m, _, b) = self.read_binary_op(false, None, None)?;
         if cnd { self.store_binary_op_result(s1, s2, m, b) } else { Ok(()) }

@@ -81,8 +81,8 @@ malloc:
         mov [rax], rdx      ; update split's next (vacant)
         mov [rax + 8], rsi  ; update split's prev
         cmp rdx, r8
-        movb [rdx + 8], rax ; if next is in bounds, update next->prev
-        mov rdx, rax        ; update register that holds our next
+        cmovb [rdx + 8], rax ; if next is in bounds, update next->prev
+        mov rdx, rax         ; update register that holds our next
         
         .nosplit:
         or dl, 1 ; mark this block as occupied
@@ -147,7 +147,7 @@ malloc:
 realloc:
     ; if pointer is null, call malloc()
     cmp rdi, 0
-    movz rdi, rsi
+    cmovz rdi, rsi
     jz malloc
     
     ; if size is zero, call free()
@@ -176,7 +176,7 @@ realloc:
     cmp rcx, rsi
     jae .enough_space
     ; compute the smaller size into rcx
-    mova rcx, rsi
+    cmova rcx, rsi
     
     ; we now know we're resizing to be larger - decide what we can do
     cmp rbx, [__malloc_end]
@@ -261,15 +261,15 @@ realloc:
     .enough_space: ; rcx has (full) size of this block, rsi has aligned requested size (less than or equal to block size), rdi has allocated pointer
     cmp rcx, rsi
     je .no_split
-    lea r8, [rdi - 16]      ; my meta block
-    lea r9, [rdi + rsi]     ; split point meta block
-    mov rax, [r8]           ; rax is my meta next (has the occupied flag)
-    mov [r8], r9            ; my next is the split block
-    bts qword ptr [r8], 0   ; mark myself as allocated (in-place realloc)
-    mov [r9], rax           ; split next is my meta next (occupied because we are occupied - then we'll free it to perform the merge operation)
-    mov [r9 + 8], r8        ; split prev is my meta block
-    cmp rax, [__malloc_end] ; make sure next line is in bounds
-    movb [rax - 1 + 8], r9  ; split->next->prev = split   PROBLEM HERE
+    lea r8, [rdi - 16]       ; my meta block
+    lea r9, [rdi + rsi]      ; split point meta block
+    mov rax, [r8]            ; rax is my meta next (has the occupied flag)
+    mov [r8], r9             ; my next is the split block
+    bts qword ptr [r8], 0    ; mark myself as allocated (in-place realloc)
+    mov [r9], rax            ; split next is my meta next (occupied because we are occupied - then we'll free it to perform the merge operation)
+    mov [r9 + 8], r8         ; split prev is my meta block
+    cmp rax, [__malloc_end]  ; make sure next line is in bounds
+    cmovb [rax - 1 + 8], r9  ; split->next->prev = split   PROBLEM HERE
     push rdi
     lea rdi, [r9 + 16]
     call free ; free the split block (marked as allocated) to perform any required merging and pruning operations
@@ -299,7 +299,7 @@ free:
     jae .nomerge_right
     mov rcx, [rdx]
     bt rcx, 0
-    movnc rdx, rcx
+    cmovnc rdx, rcx
     .nomerge_right:
     
     ; get prev in rcx
@@ -313,11 +313,11 @@ free:
     .nomerge_left:
 
     ; perform all the merging we need
-    mov [rdi], rdx          ; update our next pointer
-    cmp rdx, [__malloc_end] ; check for the end pointer condition
-    movne [rdx + 8], rdi    ; rdx could be the end pointer, in which case don't dereference it (could be out of bounds)
-    jne .ret                ; if our updated next pointer is not the end pointer, we're done
-    mov [__malloc_end], rdi ; otherwise eliminate this block from the list
+    mov [rdi], rdx           ; update our next pointer
+    cmp rdx, [__malloc_end]  ; check for the end pointer condition
+    cmovne [rdx + 8], rdi    ; rdx could be the end pointer, in which case don't dereference it (could be out of bounds)
+    jne .ret                 ; if our updated next pointer is not the end pointer, we're done
+    mov [__malloc_end], rdi  ; otherwise eliminate this block from the list
     .ret: ret
 
 ; void *calloc(qword size)

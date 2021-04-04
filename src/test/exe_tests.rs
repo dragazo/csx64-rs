@@ -287,10 +287,10 @@ fn test_mov_cc() {
     segment text
     mov ax, 0xfe12
     cmp ax, 12
-    movg ah, al
+    cmovg ah, al
     hlt
     cmp ax, 12
-    movle ah, al
+    cmovle ah, al
     hlt
     xor eax, eax
     xor ebx, ebx

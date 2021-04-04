@@ -22,7 +22,7 @@ pub enum OPCode
     SYSCALL,
 
     LEA,
-    MOV, MOVcc, SETcc, XCHG,
+    MOV, CMOVcc, SETcc, XCHG,
     REGOP,
 
     AND, OR, XOR, TEST, BITWISE,

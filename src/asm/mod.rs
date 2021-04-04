@@ -1223,7 +1223,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
         
                             Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::MOVcc(ext) => args.process_binary_op(arguments, OPCode::MOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                            Instruction::CMOVcc(ext) => args.process_binary_op(arguments, OPCode::CMOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::LEA => {
                                 if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: args.line_num, pos: None, inner_err: None }); }
                                 let mut arguments = arguments.into_iter();

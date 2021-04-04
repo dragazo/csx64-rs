@@ -335,7 +335,7 @@ pub(super) enum Instruction {
     DECLARE(Size), RESERVE(Size),
     NOP, HLT, SYSCALL,
     LFENCE, SFENCE, MFENCE,
-    MOV, MOVcc(u8), SETcc(u8), LEA, XCHG,
+    MOV, CMOVcc(u8), SETcc(u8), LEA, XCHG,
     FLAGBIT(u8),
     ADD, SUB, CMP,
     AND, OR, XOR, TEST,
@@ -409,37 +409,37 @@ lazy_static! {
         
         insert!(m: Caseless("MOV") => Instruction::MOV);
         
-        insert!(m: Caseless("MOVZ") => Instruction::MOVcc(0));
-        insert!(m: Caseless("MOVNZ") => Instruction::MOVcc(1));
-        insert!(m: Caseless("MOVS") => Instruction::MOVcc(2));
-        insert!(m: Caseless("MOVNS") => Instruction::MOVcc(3));
-        insert!(m: Caseless("MOVP") => Instruction::MOVcc(4));
-        insert!(m: Caseless("MOVNP") => Instruction::MOVcc(5));
-        insert!(m: Caseless("MOVO") => Instruction::MOVcc(6));
-        insert!(m: Caseless("MOVNO") => Instruction::MOVcc(7));
-        insert!(m: Caseless("MOVC") => Instruction::MOVcc(8));
-        insert!(m: Caseless("MOVNC") => Instruction::MOVcc(9));
-        insert!(m: Caseless("MOVB") => Instruction::MOVcc(10));
-        insert!(m: Caseless("MOVBE") => Instruction::MOVcc(11));
-        insert!(m: Caseless("MOVA") => Instruction::MOVcc(12));
-        insert!(m: Caseless("MOVAE") => Instruction::MOVcc(13));
-        insert!(m: Caseless("MOVL") => Instruction::MOVcc(14));
-        insert!(m: Caseless("MOVLE") => Instruction::MOVcc(15));
-        insert!(m: Caseless("MOVG") => Instruction::MOVcc(16));
-        insert!(m: Caseless("MOVGE") => Instruction::MOVcc(17));
+        insert!(m: Caseless("CMOVZ") => Instruction::CMOVcc(0));
+        insert!(m: Caseless("CMOVNZ") => Instruction::CMOVcc(1));
+        insert!(m: Caseless("CMOVS") => Instruction::CMOVcc(2));
+        insert!(m: Caseless("CMOVNS") => Instruction::CMOVcc(3));
+        insert!(m: Caseless("CMOVP") => Instruction::CMOVcc(4));
+        insert!(m: Caseless("CMOVNP") => Instruction::CMOVcc(5));
+        insert!(m: Caseless("CMOVO") => Instruction::CMOVcc(6));
+        insert!(m: Caseless("CMOVNO") => Instruction::CMOVcc(7));
+        insert!(m: Caseless("CMOVC") => Instruction::CMOVcc(8));
+        insert!(m: Caseless("CMOVNC") => Instruction::CMOVcc(9));
+        insert!(m: Caseless("CMOVB") => Instruction::CMOVcc(10));
+        insert!(m: Caseless("CMOVBE") => Instruction::CMOVcc(11));
+        insert!(m: Caseless("CMOVA") => Instruction::CMOVcc(12));
+        insert!(m: Caseless("CMOVAE") => Instruction::CMOVcc(13));
+        insert!(m: Caseless("CMOVL") => Instruction::CMOVcc(14));
+        insert!(m: Caseless("CMOVLE") => Instruction::CMOVcc(15));
+        insert!(m: Caseless("CMOVG") => Instruction::CMOVcc(16));
+        insert!(m: Caseless("CMOVGE") => Instruction::CMOVcc(17));
 
-        alias!(m: Caseless("MOVE") => Caseless("MOVZ"));
-        alias!(m: Caseless("MOVNE") => Caseless("MOVNZ"));
-        alias!(m: Caseless("MOVPE") => Caseless("MOVP"));
-        alias!(m: Caseless("MOVPO") => Caseless("MOVNP"));
-        alias!(m: Caseless("MOVNAE") => Caseless("MOVB"));
-        alias!(m: Caseless("MOVNA") => Caseless("MOVBE"));
-        alias!(m: Caseless("MOVNBE") => Caseless("MOVA"));
-        alias!(m: Caseless("MOVNB") => Caseless("MOVAE"));
-        alias!(m: Caseless("MOVNGE") => Caseless("MOVL"));
-        alias!(m: Caseless("MOVNG") => Caseless("MOVLE"));
-        alias!(m: Caseless("MOVNLE") => Caseless("MOVG"));
-        alias!(m: Caseless("MOVNL") => Caseless("MOVGE"));
+        alias!(m: Caseless("CMOVE") => Caseless("CMOVZ"));
+        alias!(m: Caseless("CMOVNE") => Caseless("CMOVNZ"));
+        alias!(m: Caseless("CMOVPE") => Caseless("CMOVP"));
+        alias!(m: Caseless("CMOVPO") => Caseless("CMOVNP"));
+        alias!(m: Caseless("CMOVNAE") => Caseless("CMOVB"));
+        alias!(m: Caseless("CMOVNA") => Caseless("CMOVBE"));
+        alias!(m: Caseless("CMOVNBE") => Caseless("CMOVA"));
+        alias!(m: Caseless("CMOVNB") => Caseless("CMOVAE"));
+        alias!(m: Caseless("CMOVNGE") => Caseless("CMOVL"));
+        alias!(m: Caseless("CMOVNG") => Caseless("CMOVLE"));
+        alias!(m: Caseless("CMOVNLE") => Caseless("CMOVG"));
+        alias!(m: Caseless("CMOVNL") => Caseless("CMOVGE"));
         
         insert!(m: Caseless("LEA") => Instruction::LEA);
         insert!(m: Caseless("XCHG") => Instruction::XCHG);
