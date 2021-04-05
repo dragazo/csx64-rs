@@ -240,6 +240,27 @@ lazy_static! {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub(super) struct VPUMaskRegisterInfo {
+    pub(super) id: u8,
+}
+lazy_static! {
+    pub(super) static ref VPU_MASK_REGISTER_INFO: BTreeMap<Caseless<'static>, VPUMaskRegisterInfo> = {
+        let mut m = BTreeMap::new();
+
+        insert!(m: Caseless("K0") => VPUMaskRegisterInfo { id: 0 });
+        insert!(m: Caseless("K1") => VPUMaskRegisterInfo { id: 1 });
+        insert!(m: Caseless("K2") => VPUMaskRegisterInfo { id: 2 });
+        insert!(m: Caseless("K3") => VPUMaskRegisterInfo { id: 3 });
+        insert!(m: Caseless("K4") => VPUMaskRegisterInfo { id: 4 });
+        insert!(m: Caseless("K5") => VPUMaskRegisterInfo { id: 5 });
+        insert!(m: Caseless("K6") => VPUMaskRegisterInfo { id: 6 });
+        insert!(m: Caseless("K7") => VPUMaskRegisterInfo { id: 7 });
+
+        m
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(super) struct VPURegisterInfo {
     pub(super) id: u8,
     pub(super) size: Size,

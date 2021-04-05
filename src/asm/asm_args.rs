@@ -785,6 +785,46 @@ impl AssembleArgs<'_> {
         }
     }
 
+    fn extract_vpu_bracket_token<'a>(&mut self, raw_line: &'a str, raw_start: usize, raw_stop: usize) -> Result<(Option<&'a str>, usize), AsmError> {
+        match raw_line[raw_start..raw_stop].find(|c: char| !c.is_whitespace()).map(|v| v + raw_start) {
+            Some(open_pos) if raw_line[open_pos..].chars().next().unwrap() == '{' => {
+                let (token, token_aft) = grab_alnum_token(raw_line, open_pos + 1, raw_stop);
+                match raw_line[token_aft..raw_stop].find(|c: char| !c.is_whitespace()).map(|v| v + token_aft) {
+                    Some(close_pos) if raw_line[close_pos..].chars().next().unwrap() == '}' => Ok((Some(token), close_pos + 1)),
+                    _ => Err(AsmError { kind: AsmErrorKind::VPUMaskUnclosedBracket, line_num: self.line_num, pos: Some(open_pos), inner_err: None }),
+                }
+            }
+            _ => Ok((None, raw_start)),
+        }
+    }
+    fn extract_vpu_mask(&mut self, soft_err_pos: usize, raw_line: &str, raw_start: usize, raw_stop: usize) -> Result<(Option<VPUMaskType>, usize), AsmError> {
+        match self.extract_vpu_bracket_token(raw_line, raw_start, raw_stop)? {
+            (Some(mask), mask_aft) => {
+                if Caseless(mask) == Caseless("Z") { return Err(AsmError { kind: AsmErrorKind::VPUZeroingWithoutOpmask, line_num: self.line_num, pos: Some(soft_err_pos), inner_err: None }) }
+                match VPU_MASK_REGISTER_INFO.get(&Caseless(mask)) {
+                    Some(reg) => {
+                        // zero is a special encoding for no mask, so not allowed as an opmask
+                        if reg.id == 0 { return Err(AsmError { kind: AsmErrorKind::VPUOpmaskWasK0, line_num: self.line_num, pos: Some(soft_err_pos), inner_err: None }); }
+
+                        match self.extract_vpu_bracket_token(raw_line, mask_aft, raw_stop)? {
+                            (Some(mode), mode_aft) => {
+                                if Caseless(mode) == Caseless("Z") {
+                                    Ok((Some(VPUMaskType::Zero(*reg)), mode_aft))
+                                }
+                                else {
+                                    Err(AsmError { kind: AsmErrorKind::VPUMaskUnrecognizedMode, line_num: self.line_num, pos: None, inner_err: None })
+                                }
+                            }
+                            (None, _) => Ok((Some(VPUMaskType::Blend(*reg)), mask_aft)),
+                        }
+                    }
+                    None => Err(AsmError { kind: AsmErrorKind::VPUMaskNotRecognized, line_num: self.line_num, pos: Some(soft_err_pos), inner_err: None }),
+                }
+            }
+            (None, _) => Ok((None, raw_start))
+        }
+    }
+
     /// Attempts to extract an argument from the string, be it a register, address, or imm.
     /// On success, returns the extracted argument and the index just after it.
     /// On failure, the returned error is from imm extraction due to being the most general.
@@ -793,8 +833,13 @@ impl AssembleArgs<'_> {
         let (token, token_aft) = grab_alnum_token(raw_line, raw_start, raw_stop);
         if let Some(reg) = CPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::CPURegister(*reg), token_aft)); }
         if let Some(reg) = FPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::FPURegister(*reg), token_aft)); }
-        if let Some(reg) = VPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::VPURegister(*reg), token_aft)); }
         if let Some(seg) = SEGMENTS.get(&Caseless(token)) { return Ok((Argument::Segment(*seg), token_aft)); }
+        
+        // also try matching vpu register by name, but it has some extra parsing logic
+        if let Some(reg) = VPU_REGISTER_INFO.get(&Caseless(token)) {
+            let (mask, mask_aft) = self.extract_vpu_mask(token_aft - token.len(), raw_line, token_aft, raw_stop)?;
+            return Ok((Argument::VPURegister { reg: *reg, mask }, mask_aft)); 
+        }
 
         // next, try address, since it could parse as an expr if given explicit size
         match self.extract_address(raw_line, raw_start, raw_stop) {
@@ -2375,8 +2420,60 @@ fn test_parse_arg() {
         e => panic!("wrong value: {:?}", e),
     }
     match c.extract_arg("g XmM0 g", 1, 8).unwrap() {
-        (Argument::VPURegister(VPURegisterInfo { id: 0, size: Size::Xword }), 6) => (),
+        (Argument::VPURegister { reg: VPURegisterInfo { id: 0, size: Size::Xword }, mask: None }, 6) => (),
         e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g XmM0{k1} g", 1, 12).unwrap() {
+        (Argument::VPURegister { reg: VPURegisterInfo { id: 0, size: Size::Xword }, mask: Some(VPUMaskType::Blend(VPUMaskRegisterInfo { id: 1 })) }, 10) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g XmM0{k3}{z} g", 1, 15).unwrap() {
+        (Argument::VPURegister { reg: VPURegisterInfo { id: 0, size: Size::Xword }, mask: Some(VPUMaskType::Zero(VPUMaskRegisterInfo { id: 3 })) }, 13) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g  XmM0  {  k3  }  {  z  }  g", 1, 29).unwrap() {
+        (Argument::VPURegister { reg: VPURegisterInfo { id: 0, size: Size::Xword }, mask: Some(VPUMaskType::Zero(VPUMaskRegisterInfo { id: 3 })) }, 26) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g  XmM0{z}  g", 1, 13) {
+        Ok(v) => panic!("{:?}", v),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::VPUZeroingWithoutOpmask => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.pos, Some(3));
+        }
+    }
+    match c.extract_arg("g  XmM0{k0}  g", 1, 14) {
+        Ok(v) => panic!("{:?}", v),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::VPUOpmaskWasK0 => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.pos, Some(3));
+        }
+    }
+    match c.extract_arg("g  XmM0{eax}  g", 1, 15) {
+        Ok(v) => panic!("{:?}", v),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::VPUMaskNotRecognized => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.pos, Some(3));
+        }
+    }
+    match c.extract_arg("g  XmM0  {  eax  g", 1, 18) {
+        Ok(v) => panic!("{:?}", v),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::VPUMaskUnclosedBracket => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.pos, Some(9));
+        }
     }
     match c.extract_arg("g bYte PtR [20+rax] g", 1, 21).unwrap() {
         (Argument::Address(Address { .. }), 19) => (),

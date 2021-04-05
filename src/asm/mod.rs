@@ -197,6 +197,12 @@ pub enum AsmErrorKind {
     UnknownSymbol(String),
 
     StringDeclareNotByteSize,
+
+    VPUMaskNotRecognized,
+    VPUMaskUnclosedBracket,
+    VPUZeroingWithoutOpmask,
+    VPUOpmaskWasK0,
+    VPUMaskUnrecognizedMode,
 }
 impl From<BadAddress> for AsmErrorKind {
     fn from(reason: BadAddress) -> Self {
@@ -374,10 +380,16 @@ struct Address {
 }
 
 #[derive(Clone, Debug)]
+enum VPUMaskType {
+    Blend(VPUMaskRegisterInfo),
+    Zero(VPUMaskRegisterInfo),
+}
+
+#[derive(Clone, Debug)]
 enum Argument {
     CPURegister(CPURegisterInfo),
     FPURegister(FPURegisterInfo),
-    VPURegister(VPURegisterInfo),
+    VPURegister { reg: VPURegisterInfo, mask: Option<VPUMaskType> },
     Address(Address),
     Imm(Imm),
     Segment(AsmSegment),
