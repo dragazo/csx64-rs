@@ -1578,3 +1578,31 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         content,
     })
 }
+
+lazy_static! {
+    static ref STDLIB: Vec<(&'static str, Vec<u8>)> = {
+        macro_rules! assemble_physical_file {
+            ($name:literal) => {{
+                let obj = assemble($name, &mut include_str!(concat!("../asm/stdlib/", $name)).as_bytes(), Default::default()).unwrap();
+                let mut bin = vec![];
+                obj.bin_write(&mut bin).unwrap();
+                ($name, bin)
+            }}
+        }
+        vec![
+            assemble_physical_file!("start.asm"),
+            assemble_physical_file!("malloc.asm"),
+            assemble_physical_file!("exit.asm"),
+            assemble_physical_file!("ctype.asm"),
+        ]
+    };
+}
+/// Gets a copy of the C-style standard library object files for use in CSX64 asm programs.
+/// Notably, this includes the start file which is required by the linker to use entry points.
+/// The standard library includes tools such as `malloc`, `free`, `printf`, etc.
+/// 
+/// If you wish to link one or more object files to the standard library, call this function and append your object files to the end.
+/// The whole sequence can then be handed over to the linker, which will ensure that only the files that were reference are included in the result.
+pub fn stdlib() -> Vec<(String, ObjectFile)> {
+    STDLIB.iter().map(|(name, bin)| (name.to_string(), ObjectFile::bin_read(&mut bin.as_slice()).unwrap())).collect()
+}

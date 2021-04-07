@@ -1,8 +1,9 @@
 [package]
 name = "csx64"
 version = "0.1.0"
-authors = ["dragazo <37459229+dragazo@users.noreply.github.com>"]
+authors = ["Devin Jean <emailcruzjean@yahoo.com>"]
 edition = "2018"
+description = "An Intel-style x64 assembler and executor"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
