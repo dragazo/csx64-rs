@@ -3,7 +3,12 @@ name = "csx64"
 version = "0.1.0"
 authors = ["Devin Jean <emailcruzjean@yahoo.com>"]
 edition = "2018"
-description = "An Intel-style x64 assembler and executor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dragazo/csx64-rs-lib"
+documentation = "https://docs.rs/csx64"
+description = """
+An Intel-style x64 assembler and executor.
+"""
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
