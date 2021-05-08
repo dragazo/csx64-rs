@@ -5,15 +5,15 @@ use super::expr::*;
 fn test_empty() {
     match asm_unwrap_link!([vec![]] => None) {
         Ok(_) => panic!(),
-        Err(e) => match e {
-            LinkError::NothingToLink => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::NothingToLink => (),
             _ => panic!("{:?}", e),
         }
     }
     match asm_unwrap_link!([vec![]] => Some(("start", "main"))) {
         Ok(_) => panic!(),
-        Err(e) => match e {
-            LinkError::NothingToLink => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::NothingToLink => (),
             _ => panic!("{:?}", e),
         }
     }
@@ -25,22 +25,22 @@ fn test_cyclic_deps() {
     }
     match asm_unwrap_link!("global a\nextern b\na: equ b", "global b\nextern a\nb: equ a") {
         Ok(_) => panic!(),
-        Err(e) => match e{
-            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
             _ => panic!("{:?}", e),
         }
     }
     match asm_unwrap_link!("global a\nextern b\na: equ b", "global b\nextern a\nb: equ 1+a+1") {
         Ok(_) => panic!(),
-        Err(e) => match e{
-            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
             _ => panic!("{:?}", e),
         }
     }
     match asm_unwrap_link!("global a\nextern b\na: equ b+1", "global b\nextern a\nb: equ a") {
         Ok(_) => panic!(),
-        Err(e) => match e{
-            LinkError::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::EvalFailure { src: _, line_num: 3, reason: EvalError::Illegal(IllegalReason::CyclicDependency) } => (),
             _ => panic!("{:?}", e),
         }
     }

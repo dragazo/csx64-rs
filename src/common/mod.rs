@@ -1,4 +1,4 @@
-//! Everything that is used by both `asm` and `exec`.
+//! Everything needed for both assembly and execution.
 
 use std::io::{self, Read, Write};
 
@@ -13,7 +13,7 @@ use serialization::*;
 /// Nearly all of these have sub-encodings and therefore actually encode many more instructions.
 #[derive(Clone, Copy, Debug, FromPrimitive)]
 #[repr(u8)]
-pub enum OPCode
+pub(crate) enum OPCode
 {
     // x86 instructions
 
@@ -114,7 +114,7 @@ pub enum OPCode
 /// Because 32-bit writes zero the upper 32-bits and syscall codes are unsigned, it suffices to write to `EAX`.
 /// Arguments to a system call procedure should be loaded into `RBX`, `RCX`, `RDX` (or partitions thereof, depending on procedure).
 #[derive(Clone, Copy, FromPrimitive)]
-pub enum Syscall {
+pub(crate) enum Syscall {
     /// Instructs the emulator to end execution in a non-error state with the `i32` return value in `EBX`.
     /// This effectively means the program terminated rather than crashing.
     Exit,
@@ -122,13 +122,11 @@ pub enum Syscall {
     Break,
 }
 
-/// An executable file for use by the [`Emulator`].
+/// An executable file for use by [`crate::exec::Emulator`].
 /// 
-/// Executables are produced by [`link`] by combining one or more [`ObjectFile`].
+/// Executables are produced by [`crate::asm::link`] by combining one or more [`crate::asm::ObjectFile`]s.
 /// 
-/// [`Emulator`]: ../exec/struct.Emulator.html
-/// [`link`]: ../asm/fn.link.html
-/// [`ObjectFile`]: ../asm/struct.ObjectFile.html
+/// This type implements [`BinaryWrite`] and [`BinaryRead`] to convert to/from a compact binary representation.
 pub struct Executable {
     pub(crate) text_seglen: usize,
     pub(crate) rodata_seglen: usize,

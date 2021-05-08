@@ -23,6 +23,7 @@ pub(super) const COMMENT_CHAR: char = ';';
 pub(super) const LABEL_DEF_CHAR: char = ':';
 
 pub(super) const MAX_ALIGN: u64 = 1024;
+pub(super) const MAX_RESERVE: u64 = u32::MAX as u64;
 
 // these must be ordered in descending order of length to parse correctly (hence array)
 pub(super) const BINARY_OP_STR: &'static[(&'static str, OP)] = &[

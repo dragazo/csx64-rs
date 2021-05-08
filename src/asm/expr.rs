@@ -1,6 +1,6 @@
 //! Everything needed to handle expression trees.
 //! 
-//! The important types are `Expr`, which represents an expression tree, and `SymbolTable`, which is the special collection type used for evaluation.
+//! The important types are [`Expr`], which represents an expression tree, and [`SymbolTable`], which is the special collection type used for evaluation.
 
 use std::hash::Hash;
 use std::collections::{HashSet, HashMap};
@@ -19,11 +19,15 @@ use crate::common::f80::F80;
 use super::constants::*;
 
 /// Number of precision bits to use for floating point values.
+/// 
+/// This value should be used if you want to create a floating-point predefine ([`super::Predefines`]) with the maximum allowed precision.
+/// 
 /// This is strictly larger than fpu precision (64) so that we can have nigh-perfect end-results from expr after truncating to 64.
 pub const FLOAT_PRECISION: u32 = 80;
 /// Maximum number of significant bits to use for integer values.
+/// 
 /// Values exceeding this are hard errors.
-/// This should at least be high enough to compute full products of u64 and i64.
+/// This is at least be high enough to compute full products of u64 and i64.
 pub const INT_PRECISION: u32 = 136;
 
 /// The supported operations in an expr.
@@ -53,7 +57,7 @@ pub enum OP {
     // function-like operators
 
     /// Automatically generate interned binary string in rodata segment.
-    Memory,
+    Intern,
     Length,
 
     EncodeBin8, EncodeBin16, EncodeBin32, EncodeBin64, EncodeBin80,
@@ -64,8 +68,53 @@ pub enum OP {
     /// The left branch is the condition,
     /// and the right branch is a `Pair` whose left and right sub-branches are the two values to select.
     Condition,
-    /// A special op code which is illegal in all contexts other than the immediate right child of `Condition`.
+    /// A special op which is illegal in all contexts other than the immediate right child of `Condition`.
     Pair,
+}
+impl OP {
+    fn get_symbol(&self) -> &'static str {
+        match self {
+            OP::Mul => "*",
+            OP::Div => "/",
+            OP::Mod => "%",
+            OP::Add => "+",
+            OP::Sub => "-",
+
+            OP::SHL => "<<",
+            OP::SHR => ">>",
+
+            OP::Less => "<",
+            OP::LessE => "<=",
+            OP::Great => ">",
+            OP::GreatE => ">=",
+            OP::Equ => "==",
+            OP::Neq => "!=",
+
+            OP::And => "&",
+            OP::Or => "|",
+            OP::Xor => "^",
+
+            OP::Neg => "- (neg)",
+            OP::Not => "!",
+
+            OP::Intern => "intern",
+            OP::Length => "length",
+
+            OP::EncodeBin8 => "bin8",
+            OP::EncodeBin16 => "bin16",
+            OP::EncodeBin32 => "bin32",
+            OP::EncodeBin64 => "bin64",
+            OP::EncodeBin80 => "bin80",
+
+            OP::Condition => "?",
+            OP::Pair => ":",
+        }
+    }
+}
+impl fmt::Display for OP {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.get_symbol())
+    }
 }
 impl BinaryWrite for OP {
     fn bin_write<F: Write>(&self, f: &mut F) -> io::Result<()> {
@@ -91,8 +140,8 @@ fn test_invalid_op_decode() {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ValueType {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueType {
     Logical,
     Pointer,
     Character,
@@ -100,7 +149,37 @@ pub enum ValueType {
     Float,
     Binary,
 }
+impl ValueType {
+    fn get_name(&self) -> &'static str {
+        match self {
+            ValueType::Logical => "bool",
+            ValueType::Pointer => "ptr",
+            ValueType::Character => "char",
+            ValueType::Integer => "int",
+            ValueType::Float => "float",
+            ValueType::Binary => "bin",
+        }
+    }
+}
+display_from_name! { ValueType }
 
+/// Represents a value (leaf node) in an [`Expr`] tree.
+/// 
+/// The CSX64 assembler has strongly-typed value semantics (at assemble-time) based on rust.
+/// For instance, attempting to use `0` (integer) in a boolean condition will cause an assemble error.
+/// This enum differentiates all of the supported value types.
+/// 
+/// For users of this crate, you will only interact with this type in order to create instances of `Expr`.
+/// `Expr` implements `From<Value>` for this purpose, and `Value` implements `From<T>` for many primitive types:
+/// 
+/// - `Integer`: `u*`, `i*`
+/// - `Floating`: `f*`
+/// - `Logical`: `bool`
+/// - `Character`: `char`
+/// - `Binary`: `Vec<u8>`, `&[u8]`, `&str`
+/// 
+/// Note that within a CSX64 assembly file, string literals are represented as a `Binary` value.
+/// The assembler makes no distinction between arbitrary binary content and a string (regardless of encoding).
 #[derive(Debug, Clone)]
 pub enum Value {
     Logical(bool),
@@ -179,6 +258,16 @@ impl From<Vec<u8>> for Value {
         Value::Binary(val)
     }
 }
+impl From<&[u8]> for Value {
+    fn from(val: &[u8]) -> Self {
+        val.to_owned().into()
+    }
+}
+impl From<&str> for Value {
+    fn from(val: &str) -> Self {
+        val.as_bytes().into()
+    }
+}
 
 macro_rules! value_from_int_impl {
     ($($t:ty),*) => {$(
@@ -191,8 +280,19 @@ macro_rules! value_from_int_impl {
 }
 value_from_int_impl! { u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, isize, usize }
 
+macro_rules! value_from_float_impl {
+    ($($t:ty),*) => {$(
+        impl From<$t> for Value {
+            fn from(val: $t) -> Self {
+                Value::Float(Float::with_val(FLOAT_PRECISION, val))
+            }
+        }
+    )*}
+}
+value_from_float_impl! { f32, f64 }
+
 impl Value {
-    pub fn get_type(&self) -> ValueType {
+    pub(crate) fn get_type(&self) -> ValueType {
         match self {
             Value::Logical(_) => ValueType::Logical,
             Value::Pointer(_) => ValueType::Pointer,
@@ -204,7 +304,15 @@ impl Value {
     }
 }
 
-/// Holds the information needed to create an instance of `Expr`.
+/// Holds the information needed to create an instance of [`Expr`].
+/// 
+/// This is either a value (leaf node), an identifier in the symbol table (leaf node),
+/// or an unevaluated expression with an operation and a left branch (always) and/or right branch (binary operation).
+/// 
+/// This type inplements `From<T>` for any type `T` which can be converted into [`Value`].
+/// Additionally, `From<(OP, T)>` and `From<(OP, T, U)>` are implemented for creating unevaluated expressions as shorthand.
+/// 
+/// Note that if you want to refer to an identifier you must explicitly use the `ExprData::Ident` variant.
 /// 
 /// # Example
 /// ```
@@ -317,8 +425,12 @@ impl<T> From<(OP, T)> for ExprData where Expr: From<T> {
 
 /// An expression.
 /// 
-/// This is an effectively-immutable (see `SymbolTable` example) numeric syntax tree.
-/// It is completely opaque aside from getting the value via `eval()`, and should be constructed via `ExprData`.
+/// This is an effectively-immutable (see [`SymbolTable`] example) expression tree for a value of any type.
+/// It is completely opaque to users.
+/// 
+/// Users cannot directly create an instance of this type.
+/// Instead, this should be created from [`ExprData`] or [`Value`] via `into()`.
+/// Note that `Value` has its own `From<T>` conversions so that primitive types can be used; e.g., `let v: Expr = 2.into()`.
 #[derive(Clone)]
 pub struct Expr {
     pub(super) data: RefCell<ExprData>,
@@ -356,17 +468,17 @@ impl<T> From<T> for Expr where ExprData: From<T> {
 /// ```
 /// # use csx64::asm::expr::*;
 /// let mut symbols: SymbolTable<usize> = Default::default();
-/// symbols.define("foo".into(), 2u64.into(), 0).unwrap();
+/// symbols.define("foo".into(), 2.into(), 0).unwrap();
+/// symbols.define("bar".into(), 3.14159.into(), 26).unwrap();
+/// symbols.define("hello".into(), "world".into(), 30).unwrap();
 /// ```
 /// 
-/// Note that in the above example `expr` was technically modified despite `eval()` being an immutable method.
-/// This is what will be referred to as auto-reducing logic: the value of `expr` isn't actually different, it's just a simpler representation of the same value.
-/// From a rust perspective, this is perfectly safe because, aside from using debug formatting, it would be impossible to know anything had happened at all
-/// due to the fact that `SymbolTable` is appendonly and `Expr` is opaque.
+/// This example creates an empty symbol table with `usize` tags.
+/// We then add a symbol named `foo` with an integer value of `2` and a tag of `0`,
+/// a symbol named `bar` with a floating-point value of `3.14159` and a tag of `26`,
+/// and a symbol named `hello` with a binary (string) value of `world` and a tag of `30`.
 /// 
-/// The way this is done is that any sub-expression in the expression tree which successfully evaluates is replaced with a value node with equivalent content.
-/// Because of this, if an `Expr` is evaluated using a given symbol table, it should typically never be evaluated with any other symbol table, lest the final value be potentially corrupted.
-/// Best practice has that there should be only one symbol table, which is what the assembly and linking functions included in this crate do implicitly.
+/// Currently, user-created symbol tables are only used by [`super::Predefines`], which use `()` as the tag type.
 #[derive(Clone, Default)]
 pub struct SymbolTable<T> {
     pub(super) raw: HashMap<String, (Expr, T)>,
@@ -392,7 +504,7 @@ impl<T> Debug for SymbolTable<T> where T: Debug {
 
 /// The specific reason why an illegal operation failed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IllegalReason {
+pub(crate) enum IllegalReason {
     IncompatibleTypes(OP, ValueType, ValueType),
     IncompatibleType(OP, ValueType),
     CyclicDependency,
@@ -403,13 +515,28 @@ pub enum IllegalReason {
     IntegerTooLarge,
     TruncatedSignificantBits,
 }
+impl fmt::Display for IllegalReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IllegalReason::IncompatibleTypes(op, t1, t2) => write!(f, "operation {} was given incompatible types {} and {}", op, t1, t2),
+            IllegalReason::IncompatibleType(op, t) => write!(f, "operation {} was given incompatible type {}", op, t),
+            IllegalReason::CyclicDependency => write!(f, "encountered a cyclic dependency"),
+
+            IllegalReason::DivideByZero => write!(f, "integer division by zero"),
+            IllegalReason::PointerUnderflow => write!(f, "pointer value underflow"),
+            IllegalReason::PointerOverflow => write!(f, "pointer value overflow"),
+            IllegalReason::IntegerTooLarge => write!(f, "integer value too large to represent"),
+            IllegalReason::TruncatedSignificantBits => write!(f, "writing integer to output truncated significant bits"),
+        }
+    }
+}
 
 /// The reason why an expression failed to be evaluated.
 /// 
 /// `Illegal` deontes an unrecoverable failure during assembly or linking.
 /// Any other type of failure can be recovered so long as all problems are resolved at least by the last phase of linking.
 #[derive(Debug)]
-pub enum EvalError {
+pub(crate) enum EvalError {
     /// Denotes that the user did something illegal (e.g. incorrect types to operators or cyclic dependencies).
     /// If this is encountered during assembly/linking, it is considered a hard error.
     /// The stored value further explains what went wrong.
@@ -420,6 +547,14 @@ pub enum EvalError {
 impl From<IllegalReason> for EvalError {
     fn from(reason: IllegalReason) -> Self {
         EvalError::Illegal(reason)
+    }
+}
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            EvalError::Illegal(reason) => write!(f, "illegal expression:\n    {}", reason),
+            EvalError::UndefinedSymbol(symbol) => write!(f, "undefined symbol: '{}'", symbol),
+        }
     }
 }
 
@@ -452,7 +587,10 @@ fn test_all_legal() {
     }
 }
 
-pub trait SymbolTableCore {
+/// The core behaviors of a symbol table minus any tag values.
+/// 
+/// This is used to avoid monomorphization if tag values aren't needed.
+pub(crate) trait SymbolTableCore {
     /// Checks if the symbol table is empty.
     fn is_empty(&self) -> bool;
     /// Gets the number of defined symbols.
@@ -558,6 +696,19 @@ impl<'a> Debug for ValueCow<'a> {
 }
 
 impl Expr {
+    pub(crate) fn to_ident(self) -> Option<String> {
+        match &*self.data.borrow() {
+            ExprData::Ident(ident) => Some(ident.clone()),
+            _ => None,
+        }
+    }
+    pub(crate) fn into_ident(self) -> Option<String> {
+        match self.data.into_inner() {
+            ExprData::Ident(ident) => Some(ident),
+            _ => None,
+        }
+    }
+
     /// Gets the value of an expression which is already known to be evaluated (not just evaluatable).
     /// Panics if this is not the case.
     fn eval_evaluated<'a>(&'a self, symbols: &'a dyn SymbolTableCore) -> ValueRef<'a> {
@@ -867,7 +1018,7 @@ impl Expr {
                                 _ => unreachable!(),
                             })?
                         }
-                        OP::Memory => return Err(EvalError::UndefinedSymbol(BINARY_LITERAL_SYMBOL_PREFIX.into())), // binary string intern always fails - performed by linker
+                        OP::Intern => return Err(EvalError::UndefinedSymbol(BINARY_LITERAL_SYMBOL_PREFIX.into())), // binary string intern always fails - performed by linker
                         OP::Length => {
                             unary_op(left, &right, symbols, visited, |a| match a {
                                 Value::Binary(bin) => Ok(Some(bin.len().into())),

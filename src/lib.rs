@@ -1,20 +1,50 @@
 #![forbid(unsafe_code)]
 
-//! An implementation of the CSX64 library in native, safe rust.
-//! 
-//! **Note: This crate is still in the initial phases of functionality, and does not yet have support for all instructions.**
-//! 
 //! CSX64 is effectively a cross-platform, custom 64-bit processor emulator featuring its own execution engine, machine code, assembly language, and linker.
 //! It was originally intended to be an educational tool to teach assembly programming in a safe, well-defined, platform-independent framework.
+//! This crate contains only the CSX64 library code (no application/cli).
 //! 
-//! This crate contains only the CSX64 library code.
-//! A CLI driver program will be released as a separate GitHub project.
+//! # Example of Usage
 //! 
-//! There are also [C#](https://github.com/dragazo/CSX64) and [C++](https://github.com/dragazo/CSX64-cpp) implementations of CSX64,
-//! however they've largely been deprecated in favor of this implementation (eventually) and will likely not be up to date with the features present in this version.
-//! Note that, while any CSX64 assembly program should work identically in any implementation (of the same version),
-//! CSX64 object files and executables are not compatible across different implementations;
-//! however, they are compatible across different platforms using the same implementation.
+//! ```
+//! # use csx64::*;
+//! // an example program just to show the assemble/link/execute process
+//! let prog_name = "demo.asm";
+//! let prog = r"
+//!     global main
+//! 
+//!     segment text
+//!     main:
+//!         mov edi, 5
+//!         mov esi, 4
+//!         add edi, esi
+//!         
+//!         mov eax, edi
+//!         ret
+//! ";
+//! 
+//! // assemble the assembly program into an object file
+//! let obj = match asm::assemble(prog_name, &mut prog.as_bytes(), Default::default()) {
+//!     Ok(obj) => obj,
+//!     Err(e) => panic!("{}", e), // assemble errors (above program has no errors)
+//! };
+//! 
+//! // get a copy of the C standard library object files (implemented in CSX64 assembly)
+//! let mut objs = asm::stdlib();
+//! objs.push((String::from(prog_name), obj)); // add our object file(s) to the end
+//! 
+//! // link the object files into an executable - we want the starting point to be `main`
+//! let exe = match asm::link(objs, Some(("start", "main"))) {
+//!     Ok(exe) => exe,
+//!     Err(e) => panic!("{}", e), // link errors (above program has no errors)
+//! };
+//! 
+//! // create an emulator, load up the executable, and execute
+//! let mut emu = exec::Emulator::new();
+//! emu.init(&exe, &Default::default());
+//! let (_, state) = emu.execute_cycles(u64::MAX);
+//! assert_eq!(state, exec::StopReason::Terminated(9)); // should terminate with result 9
+//! ```
 
 #[macro_use] extern crate num_derive;
 #[macro_use] extern crate lazy_static;

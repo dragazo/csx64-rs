@@ -1,3 +1,5 @@
+//! Tools for giving the emulator access to files.
+
 use std::io::{Error, ErrorKind, Cursor, SeekFrom, Read, Write, Seek};
 use std::sync::{Arc, Mutex};
 

@@ -2,16 +2,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write, BufRead};
-use std::{mem, iter};
+use std::{fmt, mem, iter};
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use num_traits::FromPrimitive;
-
-pub mod binary_set;
-pub mod expr;
-pub mod caseless;
-mod constants;
-mod asm_args;
 
 use binary_set::BinarySet;
 use expr::*;
@@ -22,11 +16,38 @@ use caseless::Caseless;
 use crate::common::serialization::*;
 use crate::common::f80::F80;
 use crate::common::{OPCode, Executable, Syscall};
+use crate::common::util::Punctuated;
+
+macro_rules! slice_slice {
+    ($t:ty: $([$($v:ident),*$(,)?]),*$(,)?) => {
+        &[
+            $(&[$(<$t>::$v),*] as &[$t]),*
+        ] as &[&[$t]]
+    }
+}
+macro_rules! display_from_name {
+    ($t:ty, $($tr:path),*) => {
+        $(impl $tr for $t {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.get_name())
+            }
+        })*
+    };
+    ($t:ty) => {
+        display_from_name! { $t, fmt::Display, fmt::Debug }
+    }
+}
+
+mod binary_set;
+pub mod expr;
+mod caseless;
+mod constants;
+mod asm_args;
 
 /// The types of errors associated with failed address parsing,
 /// but for which we know the argument was intended to be an address.
 #[derive(Debug)]
-pub enum BadAddress {
+pub(crate) enum BadAddress {
     Unterminated,
     SizeMissingPtr,
     RegMultNotCriticalExpr(EvalError),
@@ -37,171 +58,137 @@ pub enum BadAddress {
     InvalidRegMults,
     ConflictingSizes,
     SizeUnsupported,
-    TypeUnsupported,
+    TypeUnsupported(ValueType),
     InteriorNotSingleExpr,
     PtrSpecWithoutSize,
     SizeNotRecognized,
     IllegalExpr(IllegalReason),
     BadBase,
 }
+impl fmt::Display for BadAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BadAddress::Unterminated => write!(f, "unterminated address"),
+            BadAddress::SizeMissingPtr => write!(f, "pointed size specifier missing 'ptr'. e.g. dword ptr [...]"),
+            BadAddress::RegMultNotCriticalExpr(e) => write!(f, "register multiplier was not a critical expression: {}", e),
+            BadAddress::RegIllegalOp => write!(f, "register was connected by an operation other than +/-"),
+            BadAddress::InvalidRegMults => write!(f, "invalid register multipliers. can have at most 2 registers, with one having 1x and the other having 1,2,4,8x"),
+            BadAddress::ConflictingSizes => write!(f, "address expression had conflicting sizes"),
+            BadAddress::SizeUnsupported => write!(f, "address expression had unsupported size. must be 16, 32, or 64 bits"),
+            BadAddress::TypeUnsupported(t) => write!(f, "address expression had unsupported type: {}. must be integral", t),
+            BadAddress::InteriorNotSingleExpr => write!(f, "address interior was not a (single) expression"),
+            BadAddress::PtrSpecWithoutSize => write!(f, "'ptr' spec encountered without a size"),
+            BadAddress::SizeNotRecognized => write!(f, "pointer size not recognized"),
+            BadAddress::IllegalExpr(r) => write!(f, "address expression was illegal: {}", r),
+            BadAddress::BadBase => write!(f, "failed to parse address expression"),
+        }
+    }
+}
 
 /// The kinds of errors that can occur during assembly.
 /// These are meant to be specific enough to have customized, detailed error messages.
 #[derive(Debug)]
-pub enum AsmErrorKind {
+pub(crate) enum AsmErrorKind {
     /// A read error occurred, which cause assembly to halt prematurely.
     ReadError(io::Error),
 
-    // --------------------------------------------------------------------------
-
     /// Incorrect number of arguments supplied. Expected this many.
-    ArgsExpectedCount(&'static [u8]),
-    /// Incorrect number of arguments supplied. Expected at least this many.
-    ArgsExpectedCountAtLeast(u8),
-    /// There was unknown content after the arguments list.
+    ArgsExpectedCount(&'static [usize]),
+    ArgsExpectedCountAtLeast(usize),
     ExtraContentAfterArgs,
 
-    // --------------------------------------------------------------------------
+    /// If index is `None` it implies there is only one argument.
+    ValueInvalidType { index: Option<usize>, got: ValueType, expected: &'static [ValueType] },
+    ArgumentInvalidType { index: Option<usize>, got: ArgumentType, expected: &'static [ArgumentType] },
+    ArgumentsInvalidTypes { got: Vec<ArgumentType>, expected: &'static [&'static [ArgumentType]] },
+    ArgumentInvalidSize { index: Option<usize>, got: Size, expected: Vec<Size> },
+    SizeSpecNotAllowed { index: Option<usize> },
 
     /// Failed to evaluate a critical expression for the given reason.
     FailedCriticalExpression(EvalError),
+    AssertFailure,
 
-    /// The prefix on this instruction is not allowed.
-    InvalidPrefixForThisInstruction,
-
+    InvalidPrefixForInstruction,
     PrefixWithoutInstruction,
-    
-    ExpectedSegment,
+
     SegmentAlreadyCompleted,
     LabelOnSegmentLine,
-
-    AssertFailure,
-    AssertArgHadSizeSpec,
-    AssertArgNotLogical(ValueType),
+    UseOfTildeNot,
+    NumericLiteralWithZeroPrefix,
 
     ExpectedString,
-    UnexpectedString,
     IncompleteString,
     IncompleteEscape,
     InvalidEscape,
 
-    ExpectedExprTerm,
-    ExpectedOpenParen,
-    MissingCloseParen,
-    UnexpectedOpenParen,
-    UnexpectedCloseParen,
+    ExpectedExpr,
+    UnclosedParen,
     ParenInteriorNotExpr,
     ExpectedCommaBeforeToken,
     UnrecognizedMacroInvocation,
-
-    UseOfTildeNot,
-
     IllFormedNumericLiteral,
-    NumericLiteralWithZeroPrefix,
     
+    ExpectedAddress,
+    BadAddress(BadAddress),
+
+    SymbolAlreadyDefined,
     LocalSymbolBeforeNonlocal,
     InvalidSymbolName,
     ReservedSymbolName,
-
-    ExpectedBinaryValue,
-    EmptyBinaryValue,
 
     CharacterLiteralNotUnicode,
     CharacterLiteralNotSingleChar,
 
     LabelOutsideOfSegment,
-    SymbolAlreadyDefined,
-    IllegalInCurrentSegment,
-    TimesIterOutisideOfTimes,
-
-    ExpectedAddress,
-    BadAddress(BadAddress),
+    AddressOutsideOfSegment,
     
+    TimesIterOutisideOfTimes,
     TimesMissingCount,
-    TimesCountNotImm,
-    TimesCountHadSizeSpec,
-    TimesCountNotCriticalExpression,
-    TimesCountNotInteger,
     TimesCountWasNegative,
     TimesCountTooLarge,
     TimesUsedOnEmptyLine,
 
     IfMissingExpr,
-    IfExprNotImm,
-    IfExprHadSizeSpec,
-    IfExprNotCriticalExpression,
-    IfExprNotLogical,
     IfUsedOnEmptyLine,
 
     UnrecognizedInstruction,
-
-    ExpectedExpressionArg(u8),
 
     WriteOutsideOfSegment,
     WriteInBssSegment,
     InstructionOutsideOfTextSegment,
 
     IllegalPatch(IllegalPatchReason),
-
     ExprIllegalError(IllegalReason),
 
-    UnsupportedOperandSize,
-    OperandsHadDifferentSizes,
-    ForcedSizeViolation,
+    UnsupportedOperandSize { got: Size, expected: &'static [Size] },
+    OperandsHadDifferentSizes(Size, Size),
     CouldNotDeduceOperandSize,
-    
-    TernaryOpUnsupportedTypes,
-    BinaryOpUnsupportedTypes,
-    UnaryOpUnsupportedType,
-    ValueOpUnsupportedType,
-    BinaryLvalueOpUnsupportedTypes,
-    BinaryLvalueUnorderedOpUnsupportedTypes,
-    FPUBinaryOpUnsupportedTypes,
 
     FPUBinaryOpNeitherST0,
     FPUBinaryOpPop2SrcNotST0,
 
     EQUWithoutLabel,
-    EQUArgumentHadSizeSpec,
 
-    AlignArgumentHadSizeSpec,
-    AlignValueNotExpr,
-    AlignValueNotCriticalExpr,
-    AlignValueNotPowerOf2,
-    AlignValueNotInteger,
-    AlignValueNegative,
-    AlignValueExceedsMaxAlign,
+    AlignValueNegative(rug::Integer),
+    AlignValueExceedsMaxAlign(rug::Integer),
+    AlignValueNotPowerOf2(u64),
     AlignOutsideOfSegment,
 
-    DeclareValueHadSizeSpec,
-    DeclareValueNotExpr,
-
-    ReserveValueNotExpr,
-    ReserveValueHadSizeSpec,
-    ReserveValueNotCriticalExpr,
-    ReserveValueNegative,
-    ReserveValueNotInteger,
-    ReserveValueTooLarge,
+    ReserveValueNegative(rug::Integer),
+    ReserveValueExceedsMaxReserve(rug::Integer),
     ReserveOutsideOfBss,
 
-    ExpectedIdentifier,
-    IdentifierHadSizeSpec,
     IdentifierIsGlobalAndExtern,
     RedundantGlobalOrExternDecl { prev_line_num: usize },
-
-    LEADestNotRegister,
-    LEADestByte,
-    LEASrcNotAddress,
-
-    GlobalSymbolWasNotDefined,
+    GlobalSymbolWasNotDefined(String),
     UnknownSymbol(String),
 
     StringDeclareNotByteSize,
 
-    VPUMaskNotRecognized,
+    VPUFailedToParseMaskArg,
     VPUMaskUnclosedBracket,
-    VPUZeroingWithoutOpmask,
     VPUOpmaskWasK0,
+    VPUZeroingWithoutOpmask,
     VPUMaskUnrecognizedMode,
 }
 impl From<BadAddress> for AsmErrorKind {
@@ -210,20 +197,191 @@ impl From<BadAddress> for AsmErrorKind {
     }
 }
 
+/// The cause of a failure from [`assemble`].
+/// 
+/// This includes the line number and column of the error, and the inner error, if any.
+/// However, to future-proof the assembler, the enum representing the actual error is private.
+/// 
+/// This type implements `Display` to get a user-level error message.
+/// These error messages try to be as clear as possible and give hints about correct usage.
 #[derive(Debug)]
 pub struct AsmError {
     /// The type of error that was encountered.
-    pub kind: AsmErrorKind,
-    /// Line number of the error.
+    pub(crate) kind: AsmErrorKind,
+    /// Line number of the error
     pub line_num: usize,
-    /// Byte index of the error in the line (if relevant).
+    /// Byte index of the error in the line (if relevant and available)
     pub pos: Option<usize>,
-    /// Error which caused this error (if relevant).
+    /// Error which caused this error (if relevant)
     pub inner_err: Option<Box<AsmError>>,
+}
+impl fmt::Display for AsmError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.pos {
+            Some(pos) => write!(f, "line {}:{} - ", self.line_num, pos),
+            None => write!(f, "line {} - ", self.line_num),
+        }?;
+        match &self.kind {
+            AsmErrorKind::ReadError(_) => write!(f, "io read error while assembling"),
+
+            AsmErrorKind::ArgsExpectedCount(counts) => write!(f, "expected {} arguments", Punctuated::or(counts)),
+            AsmErrorKind::ArgsExpectedCountAtLeast(min) => write!(f, "expected at least {} arguments", min),
+            AsmErrorKind::ExtraContentAfterArgs => write!(f, "extra content after argument list (maybe a missing comma or semicolon?)"),
+
+            AsmErrorKind::ValueInvalidType { index, got, expected } => match index {
+                Some(index) => write!(f, "value {} invalid type {} - expected {}", index + 1, got, Punctuated::or(expected)),
+                None => write!(f, "value invalid type {} - expected {}", got, Punctuated::or(expected)),
+            }
+            AsmErrorKind::ArgumentInvalidType { index, got, expected } => match index {
+                Some(index) => write!(f, "argument {} invalid type {} - expected {}", index + 1, got, Punctuated::or(expected)),
+                None => write!(f, "argument invalid type {} - expected {}", got, Punctuated::or(expected)),
+            }
+            AsmErrorKind::ArgumentsInvalidTypes { got, expected } => {
+                write!(f, "arguments {:?} invalid types - expected {:?}", got, Punctuated::or(expected))
+            }
+            AsmErrorKind::ArgumentInvalidSize { index, got, expected } => match index {
+                Some(index) => write!(f, "argument {} invalid size {} - expected {}", index + 1, got, Punctuated::or(expected)),
+                None => write!(f, "argument invalid size {} - expected {}", got, Punctuated::or(expected)),
+            }
+            AsmErrorKind::SizeSpecNotAllowed { index } => match index {
+                Some(index) => write!(f, "size specifier on argument {} not allowed", index + 1),
+                None => write!(f, "size specifier not allowed"),
+            }
+
+            AsmErrorKind::FailedCriticalExpression(e) => write!(f, "failed to evaluate a critical expression:\n    {}", e),
+            AsmErrorKind::AssertFailure => write!(f, "assertion failed"),
+
+            AsmErrorKind::InvalidPrefixForInstruction => write!(f, "invalid prefix for this instruction"),
+            AsmErrorKind::PrefixWithoutInstruction => write!(f, "prefix encountered without an instruction"),
+
+            AsmErrorKind::SegmentAlreadyCompleted => write!(f, "attempt to start a segment which is already defined"),
+            AsmErrorKind::LabelOnSegmentLine => write!(f, "label encountered on a segment instruction (ambiguous target)"),
+            AsmErrorKind::UseOfTildeNot => write!(f, "use of '~' for bitwise not. use '!' instead"),
+            AsmErrorKind::NumericLiteralWithZeroPrefix => write!(f, "encountered C-style octal prefix. use '0o' instead"),
+
+            AsmErrorKind::ExpectedString => write!(f, "expected a string"),
+            AsmErrorKind::IncompleteString => write!(f, "incomplete string literal"),
+            AsmErrorKind::IncompleteEscape => write!(f, "incomplete escape sequence"),
+            AsmErrorKind::InvalidEscape => write!(f, "invalid escape sequence"),
+
+            AsmErrorKind::ExpectedExpr => write!(f, "expected an expression term"),
+            AsmErrorKind::UnclosedParen => write!(f, "unclosed parenthesis"),
+            AsmErrorKind::ParenInteriorNotExpr => write!(f, "interior of parenthesized group was not a (single) expression"),
+            AsmErrorKind::ExpectedCommaBeforeToken => write!(f, "expected comma before additional argument"),
+            AsmErrorKind::UnrecognizedMacroInvocation => write!(f, "unrecognized macro invocation"),
+            AsmErrorKind::IllFormedNumericLiteral => write!(f, "ill-formed numeric literal"),
+            
+            AsmErrorKind::ExpectedAddress => write!(f, "expected address"),
+            AsmErrorKind::BadAddress(b) => write!(f, "bad address: {}", b),
+
+            AsmErrorKind::SymbolAlreadyDefined => write!(f, "symbol was already defined"),
+            AsmErrorKind::LocalSymbolBeforeNonlocal => write!(f, "local symbol with no prior global symbol"),
+            AsmErrorKind::InvalidSymbolName => write!(f, "invalid symbol name"),
+            AsmErrorKind::ReservedSymbolName => write!(f, "reserved symbol name"),
+
+            AsmErrorKind::CharacterLiteralNotUnicode => write!(f, "character literal was not unicode"),
+            AsmErrorKind::CharacterLiteralNotSingleChar => write!(f, "character literal was not a single character"),
+
+            AsmErrorKind::LabelOutsideOfSegment => write!(f, "label outside of segment"),
+            AsmErrorKind::AddressOutsideOfSegment => write!(f, "address macro outside of segment"),
+
+            AsmErrorKind::TimesIterOutisideOfTimes => write!(f, "times iter macro outside of times directive"),
+            AsmErrorKind::TimesMissingCount => write!(f, "times directive missing iteration count"),
+            AsmErrorKind::TimesCountWasNegative => write!(f, "times directive count was negative"),
+            AsmErrorKind::TimesCountTooLarge => write!(f, "times directive count was too large"),
+            AsmErrorKind::TimesUsedOnEmptyLine => write!(f, "times directive used without an instruction to modify"),
+
+            AsmErrorKind::IfMissingExpr => write!(f, "if directive missing condition"),
+            AsmErrorKind::IfUsedOnEmptyLine => write!(f, "if directive used without an instruction to modify"),
+
+            AsmErrorKind::UnrecognizedInstruction => write!(f, "unrecognized instruction"),
+
+            AsmErrorKind::WriteOutsideOfSegment => write!(f, "attempt to write data outside of any segment"),
+            AsmErrorKind::WriteInBssSegment => write!(f, "attempt to write in bss segment (zeroed at runtime)"),
+            AsmErrorKind::InstructionOutsideOfTextSegment => write!(f, "attempt to write instructions outside of text segment (not executable)"),
+
+            AsmErrorKind::IllegalPatch(r) => write!(f, "invalid value encoding: {}", r),
+            AsmErrorKind::ExprIllegalError(r) => write!(f, "expr illegal: {}", r),
+
+            AsmErrorKind::UnsupportedOperandSize { got, expected } => write!(f, "operand size {} got not supported - expected {}", got, Punctuated::or(expected)),
+            AsmErrorKind::OperandsHadDifferentSizes(s1, s2) => write!(f, "conflicting sizes: {} vs {}", s1, s2),
+            AsmErrorKind::CouldNotDeduceOperandSize => write!(f, "failed to deduce operand sizes"),
+
+            AsmErrorKind::FPUBinaryOpNeitherST0 => write!(f, "one of the arguments must be st0"),
+            AsmErrorKind::FPUBinaryOpPop2SrcNotST0 => write!(f, "a popping fpu operation requires the source be st0"),
+
+            AsmErrorKind::EQUWithoutLabel => write!(f, "the EQU directive requires a label, which becomes the symbol name"),
+
+            AsmErrorKind::AlignValueNegative(val) => write!(f, "align value ({}) was negative", val),
+            AsmErrorKind::AlignValueExceedsMaxAlign(val) => write!(f, "align value ({}) exceeded max align ({})", val, MAX_ALIGN),
+            AsmErrorKind::AlignValueNotPowerOf2(val) => write!(f, "align value ({}) was not a power of 2", val),
+            AsmErrorKind::AlignOutsideOfSegment => write!(f, "align outside of a segment"),
+
+            AsmErrorKind::ReserveValueNegative(val) => write!(f, "reserve count ({}) was negative", val),
+            AsmErrorKind::ReserveValueExceedsMaxReserve(val) => write!(f, "reserve count ({}) exceeded max reserve ({})", val, MAX_RESERVE),
+            AsmErrorKind::ReserveOutsideOfBss => write!(f, "reserve can only be used inside the bss segment"),
+
+            AsmErrorKind::IdentifierIsGlobalAndExtern => write!(f, "symbol marked as both global and extern"),
+            AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num } => write!(f, "global/extern symbol was already declared on line {}", prev_line_num),
+            AsmErrorKind::GlobalSymbolWasNotDefined(sym) => write!(f, "global symbol '{}' was never defined", sym),
+            AsmErrorKind::UnknownSymbol(sym) => write!(f, "unknown symbol: '{}'", sym),
+
+            AsmErrorKind::StringDeclareNotByteSize => write!(f, "attempt to write string with non-byte width (if utf16/32 encoding is desired, use the $utf16/32 macros"),
+
+            AsmErrorKind::VPUFailedToParseMaskArg => write!(f, "failed to parse vpu opmask argument"),
+            AsmErrorKind::VPUMaskUnclosedBracket => write!(f, "unclosed brace on vpu register opmask"),
+            AsmErrorKind::VPUOpmaskWasK0 => write!(f, "used k0 as opmask (reserved encoding for no masking)"),
+            AsmErrorKind::VPUZeroingWithoutOpmask => write!(f, "vpu opmask specified zeroing without a mask"),
+            AsmErrorKind::VPUMaskUnrecognizedMode => write!(f, "vpu opmask unrecognized mode string"),
+        }
+    }
+}
+
+/// The cause of a failure from [`link`].
+/// 
+/// This contains information about any linking failure, including the source file(s) and line numbers, when necessary.
+/// However, due to the variety of information needed for link errors and the need for future-proofing, this information is private.
+/// 
+/// This type implements `Display` to get a user level error message.
+#[derive(Debug)]
+pub struct LinkError {
+    pub(crate) kind: LinkErrorKind,
+}
+impl From<LinkErrorKind> for LinkError {
+    fn from(kind: LinkErrorKind) -> Self {
+        Self { kind }
+    }
+}
+impl fmt::Display for LinkError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.kind {
+            LinkErrorKind::NothingToLink => write!(f, "nothing to link"),
+
+            LinkErrorKind::EntryPointSourceNotExtern => write!(f, "start file did not declare the entry point source as extern"),
+            LinkErrorKind::EntryPointTargetNotValidIdent => write!(f, "entry point target was not a valid identifier"),
+            LinkErrorKind::EntryPointTargetWasReservedSymbol => write!(f, "entry point target was a reserved symbol"),
+            LinkErrorKind::EntryPointTargetAlreadyExisted => write!(f, "start file defined a symbol with the same name as the entry point target"),
+            LinkErrorKind::EntryPointTargetNotDefined => write!(f, "entry point target was not a global symbol from any input file"),
+
+            LinkErrorKind::GlobalSymbolMultipleSources { ident, src1, src2 } => {
+                write!(f, "global symbol '{}' was defined by both {}:{} and {}:{}", ident, src1.0, src1.1, src2.0, src2.1)
+            }
+            LinkErrorKind::ExternSymbolNotDefined { ident, required_by } => {
+                write!(f, "extern symbol '{}' (required by {}) was not a global symbol from any input file", ident, required_by)
+            }
+
+            LinkErrorKind::EvalFailure { src, line_num, reason } => {
+                write!(f, "failed to evaluate expr from {}:{} - {}", src, line_num, reason)
+            }
+            LinkErrorKind::PatchIllegal { src, line_num, reason } => {
+                write!(f, "failed to patch missing value in {}:{} - {}", src, line_num, reason)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
-pub enum LinkError {
+pub(crate) enum LinkErrorKind {
     NothingToLink,
 
     EntryPointSourceNotExtern,
@@ -385,18 +543,58 @@ enum VPUMaskType {
     Zero(VPUMaskRegisterInfo),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgumentType {
+    CPURegister,
+    FPURegister,
+    VPURegister,
+    VPUMaskRegister,
+    Address,
+    Imm, Ident, // ident is subtype of imm
+    Segment,
+}
+impl ArgumentType {
+    fn get_name(&self) -> &'static str {
+        match self {
+            ArgumentType::CPURegister => "reg",
+            ArgumentType::FPURegister => "st",
+            ArgumentType::VPURegister => "vreg",
+            ArgumentType::VPUMaskRegister => "kreg",
+            ArgumentType::Address => "mem",
+            ArgumentType::Imm => "imm",
+            ArgumentType::Ident => "ident",
+            ArgumentType::Segment => "seg",
+        }
+    }
+}
+display_from_name! { ArgumentType }
+
 #[derive(Clone, Debug)]
 enum Argument {
     CPURegister(CPURegisterInfo),
     FPURegister(FPURegisterInfo),
+    VPUMaskRegisterInfo(VPUMaskRegisterInfo),
     VPURegister { reg: VPURegisterInfo, mask: Option<VPUMaskType> },
     Address(Address),
     Imm(Imm),
     Segment(AsmSegment),
 }
+impl Argument {
+    fn get_type(&self) -> ArgumentType {
+        match self {
+            Argument::CPURegister(_) => ArgumentType::CPURegister,
+            Argument::FPURegister(_) => ArgumentType::FPURegister,
+            Argument::VPUMaskRegisterInfo(_) => ArgumentType::VPUMaskRegister,
+            Argument::VPURegister { .. } => ArgumentType::VPURegister,
+            Argument::Address(_) => ArgumentType::Address,
+            Argument::Imm(_) => ArgumentType::Imm,
+            Argument::Segment(_) => ArgumentType::Segment,
+        }
+    }
+}
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Size {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Size {
     Byte,
     Word,
     Dword,
@@ -408,7 +606,23 @@ pub enum Size {
 
     Tword,
 }
+display_from_name! { Size }
 impl Size {
+    fn get_name(&self) -> &'static str {
+        match self {
+            Size::Byte => "byte",
+            Size::Word => "word",
+            Size::Dword => "dword",
+            Size::Qword => "qword",
+
+            Size::Xword => "xword",
+            Size::Yword => "yword",
+            Size::Zword => "zword",
+
+            Size::Tword => "tword",
+        }
+    }
+
     /// Returns the size of this type in bytes.
     fn size(self) -> usize {
         match self {
@@ -484,9 +698,9 @@ fn test_size_fns() {
     assert_eq!(Size::Yword.size(), 32);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, FromPrimitive)]
+#[derive(Clone, Copy, PartialEq, Eq, FromPrimitive)]
 #[repr(u8)]
-pub enum HoleType {
+pub(crate) enum HoleType {
     Pointer, // only pointer
     Integer, // integer or pointer
     Float,   // only float
@@ -505,6 +719,17 @@ impl BinaryRead for HoleType {
         }
     }
 }
+impl HoleType {
+    fn get_name(&self) -> &'static str {
+        match self {
+            HoleType::Pointer => "ptr",
+            HoleType::Integer => "int",
+            HoleType::Float => "float",
+            HoleType::Any => "any",
+        }
+    }
+}
+display_from_name! { HoleType }
 
 #[derive(Clone)]
 struct Hole {
@@ -534,6 +759,14 @@ impl BinaryRead for Hole {
     }
 }
 
+/// An assembled CSX64 object file.
+/// 
+/// These are produced from [`assemble`] and can be passed to [`link`] to generate an executable.
+/// 
+/// This type implements [`BinaryWrite`] and [`BinaryRead`] for serializing to/from a compact cross-platform binary representation.
+/// Due to a quirk of the symbol table for expression collapsing, this type is not currently `Sync`, so it cannot be shared between threads.
+/// However, you could convert it into a `Vec<u8>` via `BinaryWrite` and share that representation among multiple threads.
+/// This is currently how [`stdlib`] stores its global object files.
 #[derive(Clone)]
 pub struct ObjectFile {
     global_symbols: HashMap<String, usize>,
@@ -710,13 +943,24 @@ enum PatchErrorKind {
     NotPatched(EvalError),
 }
 #[derive(Debug)]
-pub enum IllegalPatchReason {
+pub(crate) enum IllegalPatchReason {
     IllegalExpr(IllegalReason),
-    HoleContentInvalidType(HoleType),
-    WriteIntegerAsUnsupportedSize(Size),
-    WriteFloatAsUnsupportedSize(Size),
-    TruncatedSignificantBits,
-    TruncatedUTF8,
+    HoleContentInvalidType(HoleType, ValueType),
+    WriteAsUnsupportedSize(ValueType, Size),
+    TruncatedSignificantBits(ValueType, Size),
+}
+impl fmt::Display for IllegalPatchReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IllegalPatchReason::IllegalExpr(r) => write!(f, "illegal expression: {}", r),
+            IllegalPatchReason::HoleContentInvalidType(t1, t2) => match t1 {
+                HoleType::Any => write!(f, "type {} is not encodable", t2),
+                _ => write!(f, "invalid type: expected {} got {}", t1, t2),
+            }
+            IllegalPatchReason::WriteAsUnsupportedSize(t, s) => write!(f, "attempt to encode {} as unsupported size ({})", t, s),
+            IllegalPatchReason::TruncatedSignificantBits(t, s) => write!(f, "encoding {} value as size {} truncated significant bits", t, s),
+        }
+    }
 }
 
 /// Attempts to patch the hole in the given segment.
@@ -735,82 +979,82 @@ fn patch_hole(seg: &mut Vec<u8>, hole: &Hole, symbols: &dyn SymbolTableCore) -> 
     match &*val {
         Value::Character(ch) => {
             if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
-                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
+                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type, val.get_type())), line_num: hole.line_num });
             }
             let mut buf = [0; 4];
             ch.encode_utf8(&mut buf);
             let utf8 = u32::from_le_bytes(buf);
             match hole.size {
                 Size::Byte => {
-                    if utf8 > u8::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedUTF8), line_num: hole.line_num }); }
+                    if utf8 > u8::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(utf8 as u8).to_le_bytes(), hole.address)
                 }
                 Size::Word => {
-                    if utf8 > u16::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedUTF8), line_num: hole.line_num }); }
+                    if utf8 > u16::MAX as u32 { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(utf8 as u16).to_le_bytes(), hole.address)
                 }
                 Size::Dword => segment_write_bin(seg, &(utf8 as u32).to_le_bytes(), hole.address),
                 Size::Qword => segment_write_bin(seg, &(utf8 as u64).to_le_bytes(), hole.address),
-                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
+                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteAsUnsupportedSize(val.get_type(), x)), line_num: hole.line_num }),
             }
         }
         Value::Integer(v) => {
             if hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
-                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
+                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type, val.get_type())), line_num: hole.line_num });
             }
             match hole.size {
                 Size::Byte => match v.to_i8().map(|v| v as u8).or(v.to_u8()) {
-                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }),
                     Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
                 Size::Word => match v.to_i16().map(|v| v as u16).or(v.to_u16()) {
-                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }),
                     Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
                 Size::Dword => match v.to_i32().map(|v| v as u32).or(v.to_u32()) {
-                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }),
                     Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
                 Size::Qword => match v.to_i64().map(|v| v as u64).or(v.to_u64()) {
-                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }),
+                    None => return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }),
                     Some(v) => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
                 }
-                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
+                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteAsUnsupportedSize(val.get_type(), x)), line_num: hole.line_num }),
             }
         }
         Value::Pointer(v) => {
             if hole.allowed_type != HoleType::Pointer && hole.allowed_type != HoleType::Integer && hole.allowed_type != HoleType::Any {
-                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
+                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type, val.get_type())), line_num: hole.line_num });
             }
             match hole.size {
                 Size::Byte => {
-                    if *v as u8 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    if *v as u8 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(*v as u8).to_le_bytes(), hole.address)
                 }
                 Size::Word => {
-                    if *v as u16 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    if *v as u16 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(*v as u16).to_le_bytes(), hole.address)
                 }
                 Size::Dword => {
-                    if *v as u32 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits), line_num: hole.line_num }); }
+                    if *v as u32 as u64 != *v { return Err(PatchError{ kind: PatchErrorKind::Illegal(IllegalPatchReason::TruncatedSignificantBits(val.get_type(), hole.size)), line_num: hole.line_num }); }
                     segment_write_bin(seg, &(*v as u32).to_le_bytes(), hole.address)
                 }
                 Size::Qword => segment_write_bin(seg, &v.to_le_bytes(), hole.address),
-                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteIntegerAsUnsupportedSize(x)), line_num: hole.line_num }),
+                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteAsUnsupportedSize(val.get_type(), x)), line_num: hole.line_num }),
             }
         }
         Value::Float(v) => {
             if hole.allowed_type != HoleType::Float && hole.allowed_type != HoleType::Any {
-                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num });
+                return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type, val.get_type())), line_num: hole.line_num });
             }
             match hole.size {
                 Size::Dword => segment_write_bin(seg, &v.to_f32().to_le_bytes(), hole.address),
                 Size::Qword => segment_write_bin(seg, &v.to_f64().to_le_bytes(), hole.address),
                 Size::Tword => segment_write_bin(seg, &F80::from(v).0, hole.address),
-                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteFloatAsUnsupportedSize(x)), line_num: hole.line_num }),
+                x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::WriteAsUnsupportedSize(val.get_type(), x)), line_num: hole.line_num }),
             }
         }
-        _ => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type)), line_num: hole.line_num }),
+        x => return Err(PatchError { kind: PatchErrorKind::Illegal(IllegalPatchReason::HoleContentInvalidType(hole.allowed_type, x.get_type())), line_num: hole.line_num }),
     }
     Ok(())
 }
@@ -831,8 +1075,8 @@ fn elim_all_holes<F: Fn(usize) -> String>(seg: &mut Vec<u8>, holes: &[MergedHole
         match patch_hole(seg, &hole.hole, symbols) {
             Ok(()) => (),
             Err(e) => match e.kind {
-                PatchErrorKind::NotPatched(reason) => return Err(LinkError::EvalFailure { src: src(hole.src), line_num: e.line_num, reason }),
-                PatchErrorKind::Illegal(reason) => return Err(LinkError::PatchIllegal { src: src(hole.src), line_num: e.line_num, reason }),
+                PatchErrorKind::NotPatched(reason) => return Err(LinkErrorKind::EvalFailure { src: src(hole.src), line_num: e.line_num, reason }.into()),
+                PatchErrorKind::Illegal(reason) => return Err(LinkErrorKind::PatchIllegal { src: src(hole.src), line_num: e.line_num, reason }.into()),
             }
         }
     }
@@ -841,22 +1085,22 @@ fn elim_all_holes<F: Fn(usize) -> String>(seg: &mut Vec<u8>, holes: &[MergedHole
 
 fn process_global_extern(arguments: Vec<Argument>, add_to: &mut HashMap<String, usize>, check_in: &HashMap<String, usize>, line_num: usize) -> Result<(), AsmError> {
     if arguments.is_empty() { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCountAtLeast(1), line_num, pos: None, inner_err: None }); }
-    for arg in arguments {
+    for (i, arg) in arguments.into_iter().enumerate() {
         match arg {
-            Argument::Imm(v) => {
-                if v.size.is_some() { return Err(AsmError { kind: AsmErrorKind::IdentifierHadSizeSpec, line_num, pos: None, inner_err: None }); }
-                match v.expr.data.into_inner() {
-                    ExprData::Ident(ident) => {
+            Argument::Imm(v) => { // supertype of desired type: ident
+                if v.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: Some(i) }, line_num, pos: None, inner_err: None }); }
+                match v.expr.into_ident() {
+                    Some(ident) => {
                         debug_assert!(is_valid_symbol_name(&ident) && !is_reserved_symbol_name(&ident));
                         if check_in.contains_key(&ident) { return Err(AsmError { kind: AsmErrorKind::IdentifierIsGlobalAndExtern, line_num, pos: None, inner_err: None }); }
                         if let Some(prev) = add_to.insert(ident, line_num) {
                             return Err(AsmError { kind: AsmErrorKind::RedundantGlobalOrExternDecl { prev_line_num: prev }, line_num, pos: None, inner_err: None });
                         }
                     }
-                    _ => return Err(AsmError { kind: AsmErrorKind::ExpectedIdentifier, line_num, pos: None, inner_err: None }),
+                    None => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: Some(i), got: ArgumentType::Imm, expected: &[ArgumentType::Ident] }, line_num, pos: None, inner_err: None })
                 }
             }
-            _ => return Err(AsmError { kind: AsmErrorKind::ExpectedIdentifier, line_num, pos: None, inner_err: None }),
+            x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: Some(i), got: x.get_type(), expected: &[ArgumentType::Ident] }, line_num, pos: None, inner_err: None }),
         }
     }
     Ok(())
@@ -873,6 +1117,10 @@ fn test_align_off() {
         let r = align_off(v, 4);
         assert!(r < 4 && (v + r) % 4 == 0);
     }
+}
+#[test]
+fn test_zero_pow2() {
+    assert!(!0u64.is_power_of_two());
 }
 
 /// Pads `v` with `count` zeros.
@@ -920,9 +1168,18 @@ struct MergedHole {
 }
 
 /// The symbols to introduce to the assembler prior to parsing any source.
+/// 
+/// This type implements `Default`, which will give the set of default predefines.
+/// These includes things such as the system call codes.
+/// You can add more symbols on top of this with [`Predefines::append`].
+/// 
+/// Alternatively, you can use `From<SymbolTable<()>>` to construct a predefines table which has only your symbols.
+/// Note that this will not have the default symbols.
 pub struct Predefines(SymbolTable<usize>);
 impl From<SymbolTable<()>> for Predefines {
     /// Constructs a new set of predefines from a symbol table.
+    /// 
+    /// Note that this will not include any of the default symbols.
     fn from(symbols: SymbolTable<()>) -> Predefines {
         let transformed = symbols.raw.into_iter().map(|(key, (value, _))| (key, (value, 0))).collect();
         Predefines(SymbolTable { raw: transformed })
@@ -960,8 +1217,11 @@ impl Default for Predefines {
     }
 }
 
-/// Attempts to assemble the `asm` source file into an `ObjectFile`.
-/// It is not required that `asm` be an actual file - it can just be in memory.
+/// Attempts to assemble the `asm` source file into an [`ObjectFile`].
+/// 
+/// It is not required that `asm` be an actual file.
+/// Notably, `&mut &[u8]` can be used, which is useful for assembling an asm file stored in a string: `&mut some_string.as_bytes()`.
+/// 
 /// `asm_name` is the effective name of the source file (the assembly program can access its own file name).
 /// It is recommended that `asm_name` be meaningful, as it is might be used by the `asm` program to construct error messages, but this is not required.
 pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -> Result<ObjectFile, AsmError> {
@@ -1067,16 +1327,16 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                         Some((Prefix::REP, prefix_pos)) => match instruction {
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((1 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((8 << 2) | size.basic_sizecode().unwrap()))?,
-                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPZ, prefix_pos)) => match instruction {
-                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPNZ, prefix_pos)) => match instruction {
-                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::LOCK, prefix_pos)) => match instruction {
-                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForThisInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
+                            _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         None => match instruction {
                             Instruction::EQU => match &args.label_def {
@@ -1088,11 +1348,11 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                     let val = match arguments.into_iter().next().unwrap() {
                                         Argument::Imm(imm) => {
                                             if let Some(_) = imm.size {
-                                                return Err(AsmError { kind: AsmErrorKind::EQUArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None });
+                                                return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: None }, line_num: args.line_num, pos: None, inner_err: None });
                                             }
                                             imm.expr
                                         }
-                                        _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
+                                        x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                     };
                                     if let Err(_) = args.file.symbols.define(name.clone(), val, args.line_num) {
                                         return Err(AsmError { kind: AsmErrorKind::SymbolAlreadyDefined, line_num: args.line_num, pos: None, inner_err: None });
@@ -1103,7 +1363,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 let seg = match arguments.into_iter().next().unwrap() {
                                     Argument::Segment(seg) => seg,
-                                    _ => return Err(AsmError { kind: AsmErrorKind::ExpectedSegment, line_num: args.line_num, pos: None, inner_err: None }),
+                                    x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Segment] }, line_num: args.line_num, pos: None, inner_err: None }),
                                 };
         
                                 if args.done_segs.contains(&seg) { return Err(AsmError { kind: AsmErrorKind::SegmentAlreadyCompleted, line_num: args.line_num, pos: None, inner_err: None }); }
@@ -1118,22 +1378,22 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
-                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AlignArgumentHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: None }, line_num: args.line_num, pos: None, inner_err: None }); }
                                         let val = match imm.expr.eval(&args.file.symbols) {
-                                            Err(_) => return Err(AsmError { kind: AsmErrorKind::AlignValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                            Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: args.line_num, pos: None, inner_err: None }),
                                             Ok(res) => match &*res {
                                                 Value::Integer(v) => {
-                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::AlignValueNegative(v.clone()), line_num: args.line_num, pos: None, inner_err: None }); }
                                                     match v.to_u64() {
-                                                        None => return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }),
+                                                        None => return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign(v.clone()), line_num: args.line_num, pos: None, inner_err: None }),
                                                         Some(v) => v,
                                                     }
                                                 }
-                                                _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
+                                                x => return Err(AsmError { kind: AsmErrorKind::ValueInvalidType { index: None, got: x.get_type(), expected: &[ValueType::Integer] }, line_num: args.line_num, pos: None, inner_err: None }),
                                             }
                                         };
-                                        if val > MAX_ALIGN { return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign, line_num: args.line_num, pos: None, inner_err: None }); }
-                                        if !val.is_power_of_two() { return Err(AsmError { kind: AsmErrorKind::AlignValueNotPowerOf2, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if val > MAX_ALIGN { return Err(AsmError { kind: AsmErrorKind::AlignValueExceedsMaxAlign(val.into()), line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if !val.is_power_of_two() { return Err(AsmError { kind: AsmErrorKind::AlignValueNotPowerOf2(val), line_num: args.line_num, pos: None, inner_err: None }); }
                                         let val = val as usize;
                                         debug_assert!(val != 0 && MAX_ALIGN <= usize::MAX as u64 && MAX_ALIGN <= u32::MAX as u64);
         
@@ -1147,32 +1407,32 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                             }
                                         }
                                     }
-                                    _ => return Err(AsmError { kind: AsmErrorKind::AlignValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                    x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                 }
                             }
                             Instruction::ASSERT => {
                                 if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 let cond = match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
-                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::AssertArgHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: None }, line_num: args.line_num, pos: None, inner_err: None }); }
                                         match imm.expr.eval(&args.file.symbols) {
                                             Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: args.line_num, pos: None, inner_err: None }),
                                             Ok(res) => match &*res {
                                                 Value::Logical(v) => *v,
-                                                v => return Err(AsmError { kind: AsmErrorKind::AssertArgNotLogical(v.get_type()), line_num: args.line_num, pos: None, inner_err: None }),
+                                                v => return Err(AsmError { kind: AsmErrorKind::ValueInvalidType { index: None, got: v.get_type(), expected: &[ValueType::Logical] }, line_num: args.line_num, pos: None, inner_err: None }),
                                             }
                                         }
                                     }
-                                    _ => return Err(AsmError { kind: AsmErrorKind::ExpectedExpressionArg(0), line_num: args.line_num, pos: None, inner_err: None }),
+                                    x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                 };
                                 if !cond { return Err(AsmError { kind: AsmErrorKind::AssertFailure, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                             }
                             Instruction::DECLARE(size) => {
                                 if arguments.len() < 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCountAtLeast(1), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
-                                for arg in arguments {
+                                for (i, arg) in arguments.into_iter().enumerate() {
                                     match arg {
                                         Argument::Imm(imm) => {
-                                            if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::DeclareValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                            if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: Some(i) }, line_num: args.line_num, pos: None, inner_err: None }); }
                                             let handled = match imm.expr.eval(&args.file.symbols) {
                                                 Ok(val) => match &*val {
                                                     Value::Binary(content) => {
@@ -1195,7 +1455,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                             };
                                             if !handled { args.append_val(size, imm.expr, HoleType::Any)?; }
                                         }
-                                        _ => return Err(AsmError { kind: AsmErrorKind::DeclareValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                        x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: Some(i), got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                     }
                                 }
                             }
@@ -1204,25 +1464,25 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 if arguments.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }); }
                                 match arguments.into_iter().next().unwrap() {
                                     Argument::Imm(imm) => {
-                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::ReserveValueHadSizeSpec, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if imm.size.is_some() { return Err(AsmError { kind: AsmErrorKind::SizeSpecNotAllowed { index: None }, line_num: args.line_num, pos: None, inner_err: None }); }
                                         let count = match imm.expr.eval(&args.file.symbols) {
-                                            Err(_) => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotCriticalExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                            Err(e) => return Err(AsmError { kind: AsmErrorKind::FailedCriticalExpression(e), line_num: args.line_num, pos: None, inner_err: None }),
                                             Ok(res) => match &*res {
                                                 Value::Integer(v) => {
-                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative, line_num: args.line_num, pos: None, inner_err: None }); }
+                                                    if v.cmp0() == Ordering::Less { return Err(AsmError { kind: AsmErrorKind::ReserveValueNegative(v.clone()), line_num: args.line_num, pos: None, inner_err: None }); }
                                                     match v.to_u64() {
-                                                        None => return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }),
+                                                        None => return Err(AsmError { kind: AsmErrorKind::ReserveValueExceedsMaxReserve(v.clone()), line_num: args.line_num, pos: None, inner_err: None }),
                                                         Some(v) => v,
                                                     }
                                                 }
-                                                _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotInteger, line_num: args.line_num, pos: None, inner_err: None }),
+                                                x => return Err(AsmError { kind: AsmErrorKind::ValueInvalidType { index: None, got: x.get_type(), expected: &[ValueType::Integer] }, line_num: args.line_num, pos: None, inner_err: None }),
                                             }
                                         };
-                                        if count > usize::MAX as u64 { return Err(AsmError { kind: AsmErrorKind::ReserveValueTooLarge, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        if count > MAX_RESERVE { return Err(AsmError { kind: AsmErrorKind::ReserveValueExceedsMaxReserve(count.into()), line_num: args.line_num, pos: None, inner_err: None }); }
                                         let bytes = count as usize * size.size();
                                         args.file.bss_len += bytes;
                                     }
-                                    _ => return Err(AsmError { kind: AsmErrorKind::ReserveValueNotExpr, line_num: args.line_num, pos: None, inner_err: None }),
+                                    x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                 }
                             }
         
@@ -1239,17 +1499,19 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::LEA => {
                                 if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: args.line_num, pos: None, inner_err: None }); }
                                 let mut arguments = arguments.into_iter();
-        
-                                let reg = match arguments.next().unwrap() {
-                                    Argument::CPURegister(reg) => {
-                                        if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::LEADestByte, line_num: args.line_num, pos: None, inner_err: None }); }
-                                        reg
+                                let a = arguments.next().unwrap();
+                                let b = arguments.next().unwrap();
+
+                                let supported_types = slice_slice!(ArgumentType:
+                                    [CPURegister, Address],
+                                );
+
+                                let (reg, addr) = match (a, b) {
+                                    (Argument::CPURegister(reg), Argument::Address(addr)) => {
+                                        if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(0), got: reg.size, expected: vec![Size::Word, Size::Dword, Size::Qword] }, line_num: args.line_num, pos: None, inner_err: None }); }
+                                        (reg, addr)
                                     }
-                                    _ => return Err(AsmError { kind: AsmErrorKind::LEADestNotRegister, line_num: args.line_num, pos: None, inner_err: None }),
-                                };
-                                let addr = match arguments.next().unwrap() {
-                                    Argument::Address(addr) => addr,
-                                    _ => return Err(AsmError { kind: AsmErrorKind::LEASrcNotAddress, line_num: args.line_num, pos: None, inner_err: None }),
+                                    (a, b) => return Err(AsmError { kind: AsmErrorKind::ArgumentsInvalidTypes { got: vec![a.get_type(), b.get_type()], expected: supported_types }, line_num: args.line_num, pos: None, inner_err: None }),
                                 };
         
                                 args.append_byte(OPCode::LEA as u8)?;
@@ -1365,27 +1627,34 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
     // now we just need to do the final soundness verifications and return the result
     args.finalize()
 }
-/// Attempts to link one or more (named) object files into an executable.
+/// Attempts to link one or more (named) [`ObjectFile`]s into an [`Executable`].
+/// 
+/// This function combines several incomplete object files together into a final, complete version.
+/// This starts with the first file, `objs[0]`, and branches out to includes any extern symbols, recursively.
+/// Only files which are needed will be included in the final result.
+/// 
 /// The first object file, `objs[0]` is known as the "start file".
 /// The start file's text segment (starting at the beginning) is the first thing to execute upon running the resulting executable.
 /// For very basic programs this is fine, but using a higher-level framework might require setup prior to running the "main" logic.
 /// Typically, this is denoted by a generic symbol such as "start" (hence, start file).
 /// If `entry_point` is `Some((from, to))`, the linker will perform a renaming operation for identifiers in the start file (only).
-/// For example, a typical C-like program would use `Some(("start", "main"))` - any occurence of `start` would be replaced by `main`.
+/// 
+/// If you wish to use the included C standard library functions, first call [`stdlib`] to get the object files, which includes its own start file at the front of the vec.
+/// Then, you need only add your object files to the end (with a global named "main" somewhere), and pass `Some(("start", "main"))`.
 pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str)>) -> Result<Executable, LinkError> {
-    if objs.is_empty() { return Err(LinkError::NothingToLink); }
+    if objs.is_empty() { return Err(LinkErrorKind::NothingToLink.into()); }
 
     // if an entry point was specified, perform the replacement
     if let Some((from, to)) = entry_point {
-        if !objs[0].1.extern_symbols.contains_key(from) { return Err(LinkError::EntryPointSourceNotExtern); }
+        if !objs[0].1.extern_symbols.contains_key(from) { return Err(LinkErrorKind::EntryPointSourceNotExtern.into()); }
 
-        if !is_valid_symbol_name(to) { return Err(LinkError::EntryPointTargetNotValidIdent); }
-        if is_reserved_symbol_name(to) { return Err(LinkError::EntryPointTargetWasReservedSymbol); }
+        if !is_valid_symbol_name(to) { return Err(LinkErrorKind::EntryPointTargetNotValidIdent.into()); }
+        if is_reserved_symbol_name(to) { return Err(LinkErrorKind::EntryPointTargetWasReservedSymbol.into()); }
 
         match objs[0].1.rename_symbol(from, to) {
             Ok(()) => (),
             Err(e) => match e {
-                RenameError::TargetAlreadyExisted => return Err(LinkError::EntryPointTargetAlreadyExisted),
+                RenameError::TargetAlreadyExisted => return Err(LinkErrorKind::EntryPointTargetAlreadyExisted.into()),
             }
         }
     }
@@ -1399,7 +1668,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     for (i, obj) in objs.iter().enumerate() {
         for (global, &here_line) in obj.1.global_symbols.iter() {
             if let Some(there_line) = global_to_obj.insert(global.into(), i) {
-                return Err(LinkError::GlobalSymbolMultipleSources { ident: global.into(), src1: (objs[there_line].0.to_owned(), there_line), src2: (obj.0.to_owned(), here_line) });
+                return Err(LinkErrorKind::GlobalSymbolMultipleSources { ident: global.into(), src1: (objs[there_line].0.to_owned(), there_line), src2: (obj.0.to_owned(), here_line) }.into());
             }
         }
     }
@@ -1461,8 +1730,8 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         for (req, _) in obj.extern_symbols.iter() {
             match global_to_obj.get(req) {
                 None => match is_entry_point(req) {
-                    false => return Err(LinkError::ExternSymbolNotDefined { ident: req.to_owned(), required_by: obj_name.to_owned() }),
-                    true => return Err(LinkError::EntryPointTargetNotDefined),
+                    false => return Err(LinkErrorKind::ExternSymbolNotDefined { ident: req.to_owned(), required_by: obj_name.to_owned() }.into()),
+                    true => return Err(LinkErrorKind::EntryPointTargetNotDefined.into()),
                 }
                 Some(other_index) => if !included.contains_key(other_index) && !include_queue.contains(other_index) {
                     include_queue.push_back(*other_index); // only schedule for inclusion if not already included and not already scheduled
@@ -1477,7 +1746,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
         match expr {
             ExprData::Value(_) => (),
             ExprData::Ident(_) => (),
-            ExprData::Uneval { op: OP::Memory, left, right } => {
+            ExprData::Uneval { op: OP::Intern, left, right } => {
                 if let Some(_) = right.as_ref() { panic!("expr unary op node had a right branch"); }
                 macro_rules! handle_content {
                     ($self:ident, $v:expr) => {
@@ -1489,12 +1758,12 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
                                     ExprData::Ident(format!("{}{:x}", BINARY_LITERAL_SYMBOL_PREFIX, idx)) // good binary is mapped to a unique key in the merged symbol table
                                 }
                             }
-                            a => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: IllegalReason::IncompatibleType(OP::Memory, a.get_type()).into() }),
+                            a => return Err(LinkErrorKind::EvalFailure { src: src.into(), line_num, reason: IllegalReason::IncompatibleType(OP::Intern, a.get_type()).into() }.into()),
                         }
                     }
                 }
                 let res: ExprData = match left.take().expect("expr unary op node was missing the left branch").into_eval(symbols) {
-                    Err(e) => return Err(LinkError::EvalFailure { src: src.into(), line_num, reason: e }),
+                    Err(e) => return Err(LinkErrorKind::EvalFailure { src: src.into(), line_num, reason: e }.into()),
                     Ok(val) => match val {
                         ValueCow::Owned(v) => handle_content!(self, v),
                         ValueCow::Borrowed(v) => handle_content!(self, &*v),
@@ -1560,7 +1829,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     // make sure all symbols were evaluated - not strictly necessary, but it would be bad practice to permit them
     for (_, (expr, tag)) in merged_symbols.iter() {
         if let Err(e) = expr.eval(&merged_symbols) {
-            return Err(LinkError::EvalFailure { src: objs[tag.src].0.to_owned(), line_num: tag.line_num, reason: e });
+            return Err(LinkErrorKind::EvalFailure { src: objs[tag.src].0.to_owned(), line_num: tag.line_num, reason: e }.into());
         }
     }
 
@@ -1597,8 +1866,9 @@ lazy_static! {
         ]
     };
 }
-/// Gets a copy of the C-style standard library object files for use in CSX64 asm programs.
-/// Notably, this includes the start file which is required by the linker to use entry points.
+/// Gets a copy of the C-style standard library [`ObjectFile`]s for use in CSX64 asm programs.
+/// 
+/// Notably, this includes the start file which is required by [`link`] to use entry points.
 /// The standard library includes tools such as `malloc`, `free`, `printf`, etc.
 /// 
 /// If you wish to link one or more object files to the standard library, call this function and append your object files to the end.

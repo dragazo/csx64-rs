@@ -323,7 +323,7 @@ impl Tag {
     }
 }
 
-/// The valid values for a register tag.
+/// The valid values for an fpu register tag.
 #[repr(u8)]
 pub enum TagValue {
     NonZero = 0,

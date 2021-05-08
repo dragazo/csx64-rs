@@ -15,8 +15,8 @@ fn test_no_main() {
     ");
     match res {
         Ok(_) => panic!(),
-        Err(e) => match e {
-            LinkError::EntryPointTargetNotDefined => (),
+        Err(e) => match e.kind {
+            LinkErrorKind::EntryPointTargetNotDefined => (),
             x => panic!("{:?}", x),
         }
     }

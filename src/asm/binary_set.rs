@@ -41,15 +41,15 @@ impl BinaryRead for SliceInfo {
 /// Moreover, the collection is appendonly, so once a slice is added it will remain at that index.
 /// Iteration is guaranteed to maintain this ordering.
 /// 
-/// # Example
-/// ```
-/// # use csx64::asm::binary_set::*;
-/// let mut b = BinarySet::new();
-/// b.add([1, 2, 3, 4].as_ref());     // insert first slice (backed by itself)
-/// b.add(vec![2, 3]);                // this one will overlap with previous
-/// assert_eq!(b.bytes(), 6);         // 6 bytes are stored (slices)
-/// assert_eq!(b.backing_bytes(), 4); // using only 4 backing bytes (internal data)
-/// ```
+// # Example
+// ```
+// # use csx64::asm::binary_set::*;
+// let mut b = BinarySet::new();
+// b.add([1, 2, 3, 4].as_ref());     // insert first slice (backed by itself)
+// b.add(vec![2, 3]);                // this one will overlap with previous
+// assert_eq!(b.bytes(), 6);         // 6 bytes are stored (slices)
+// assert_eq!(b.backing_bytes(), 4); // using only 4 backing bytes (internal data)
+// ```
 #[derive(Default, Clone, Debug)]
 pub struct BinarySet {
     data: Vec<Vec<u8>>,     // the backing data

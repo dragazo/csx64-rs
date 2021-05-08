@@ -26,7 +26,7 @@ fn test_segment() {
     match assemble("test.asm", &mut "segment eegrf".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::ExpectedSegment));
+            assert!(matches!(e.kind, AsmErrorKind::ArgumentInvalidType { index: None, got: ArgumentType::Imm, expected: &[ArgumentType::Segment] }));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
@@ -156,7 +156,7 @@ fn test_assert() {
     match assemble("test.asm", &mut "static_assert qword true".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::AssertArgHadSizeSpec));
+            assert!(matches!(e.kind, AsmErrorKind::SizeSpecNotAllowed { index: None }));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
@@ -183,7 +183,16 @@ fn test_assert() {
     match assemble("test.asm", &mut "  static_assert 1; hello".as_bytes(), Default::default()) {
         Ok(_) => panic!(),
         Err(e) => {
-            assert!(matches!(e.kind, AsmErrorKind::AssertArgNotLogical(ValueType::Integer)));
+            assert!(matches!(e.kind, AsmErrorKind::ValueInvalidType { index: None, got: ValueType::Integer, expected: &[ValueType::Logical] }));
+            assert_eq!(e.line_num, 1);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "  static_assert eax; hello".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            assert!(matches!(e.kind, AsmErrorKind::ArgumentInvalidType { index: None, got: ArgumentType::CPURegister, expected: &[ArgumentType::Imm] }));
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
             assert!(e.inner_err.is_none());
@@ -440,7 +449,7 @@ fn test_bad_addr() {
             assert_eq!(e.pos, Some(9));
             let inner = *e.inner_err.unwrap();
             match inner.kind {
-                AsmErrorKind::ExpectedExprTerm => (),
+                AsmErrorKind::ExpectedExpr => (),
                 _ => panic!("{:?}", inner.kind),
             }
             assert_eq!(inner.line_num, 2);
@@ -459,7 +468,7 @@ fn test_bad_addr() {
             assert_eq!(e.pos, Some(9));
             let inner = *e.inner_err.unwrap();
             match inner.kind {
-                AsmErrorKind::ExpectedExprTerm => (),
+                AsmErrorKind::ExpectedExpr => (),
                 _ => panic!("{:?}", inner.kind),
             }
             assert_eq!(inner.line_num, 2);
@@ -480,6 +489,85 @@ fn test_late_expr_errors() {
             }
             assert_eq!(e.line_num, 1);
             assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_times_errors() {
+    match assemble("test.asm", &mut "segment text\n times dword 5 nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::SizeSpecNotAllowed { index: None } => (),
+                r => panic!("{:?}", r),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(1));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\n   times eax nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ArgumentInvalidType { index: None, got: ArgumentType::CPURegister, expected: &[ArgumentType::Imm] } => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(3));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\n   times 5.6 nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ValueInvalidType { index: None, got: ValueType::Float, expected: &[ValueType::Integer] } => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(3));
+            assert!(e.inner_err.is_none());
+        }
+    }
+}
+#[test]
+fn test_if_errors() {
+    match assemble("test.asm", &mut "segment text\n if dword true nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::SizeSpecNotAllowed { index: None } => (),
+                r => panic!("{:?}", r),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(1));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\n   if eax nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ArgumentInvalidType { index: None, got: ArgumentType::CPURegister, expected: &[ArgumentType::Imm] } => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(3));
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\n   if 5 nop".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ValueInvalidType { index: None, got: ValueType::Integer, expected: &[ValueType::Logical] } => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, Some(3));
             assert!(e.inner_err.is_none());
         }
     }
