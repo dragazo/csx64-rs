@@ -1472,7 +1472,7 @@ impl AssembleArgs<'_> {
         })
     }
 
-    pub(crate) fn process_vpu_vec_move(&mut self, args: Vec<Argument>, elem_size: Option<Size>, packed: bool, aligned: bool) -> Result<(), AsmError> {
+    pub(crate) fn process_vpu_move(&mut self, args: Vec<Argument>, elem_size: Option<Size>, packed: bool, aligned: bool) -> Result<(), AsmError> {
         debug_assert!(packed || elem_size.is_some()); // scalar => elem_size
         debug_assert!(packed || !aligned);            // scalar => !aligned
         let ext_op_base = (if !packed { 44 } else if aligned { 20 } else { 32 }) + elem_size.unwrap_or(Size::Qword).basic_sizecode().unwrap();
@@ -1575,7 +1575,7 @@ impl AssembleArgs<'_> {
                     if packed && size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest.size, size), line_num: self.line_num, pos: None, inner_err: None }); }
                     if !packed && size != elem_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: size, expected: vec![elem_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
                 }
-                
+
                 self.append_byte(0x80)?;
                 self.append_address(addr)?;
             }
@@ -2897,7 +2897,7 @@ fn test_extract_header() {
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Local);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  times 45 nop  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 11))), 14));
+    assert_eq!(c.extract_header("  times 45 nop  ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 11))), 14));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, Some(TimesInfo { total_count: 45, current: 0 }));
 
@@ -2938,35 +2938,35 @@ fn test_extract_header() {
         }
     }
 
-    assert_eq!(c.extract_header("  label: tiMEs 5 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
+    assert_eq!(c.extract_header("  label: tiMEs 5 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "label");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 5, current: 0 }));
 
-    assert_eq!(c.extract_header("  label: tiMEs 0 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
+    assert_eq!(c.extract_header("  label: tiMEs 0 NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "label");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 0, current: 0 }));
 
-    assert_eq!(c.extract_header("  merp: NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 8))), 11));
+    assert_eq!(c.extract_header("  merp: NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 8))), 11));
     assert_eq!(c.label_def.as_ref().unwrap().0, "merp");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 2))), 5));
+    assert_eq!(c.extract_header("  NoP  ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 2))), 5));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header("  NoP; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 2))), 5));
+    assert_eq!(c.extract_header("  NoP; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 2))), 5));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
 
-    assert_eq!(c.extract_header(" lab: if true nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 14))), 17));
+    assert_eq!(c.extract_header(" lab: if true nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 14))), 17));
     assert_eq!(c.label_def.as_ref().unwrap().0, "lab");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Nonlocal);
     assert_eq!(c.times, Some(TimesInfo { total_count: 1, current: 0 }));
 
-    assert_eq!(c.extract_header(" .lab2: if false nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NOP, 17))), 20));
+    assert_eq!(c.extract_header(" .lab2: if false nop ' ; this is a comment ").unwrap(), (Some((None, (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 17))), 20));
     assert_eq!(c.label_def.as_ref().unwrap().0, "thingy.lab2");
     assert_eq!(c.label_def.as_ref().unwrap().1, Locality::Local);
     assert_eq!(c.times, Some(TimesInfo { total_count: 0, current: 0 }));
@@ -2979,7 +2979,7 @@ fn test_extract_header() {
         }
     }
 
-    assert_eq!(c.extract_header("  reP NoP  ").unwrap(), (Some((Some((Prefix::REP, 2)), (Instruction::NOP, 6))), 9));
+    assert_eq!(c.extract_header("  reP NoP  ").unwrap(), (Some((Some((Prefix::REP, 2)), (Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None }, 6))), 9));
     assert_eq!(c.label_def, None);
     assert_eq!(c.times, None);
 

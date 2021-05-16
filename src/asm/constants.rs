@@ -1,7 +1,7 @@
 use std::collections::{HashMap, BTreeMap, BTreeSet};
 
 use super::expr::*;
-use super::{Size, AsmSegment};
+use super::{Size, AsmSegment, HoleType};
 use super::caseless::Caseless;
 use crate::common::OPCode;
 
@@ -358,33 +358,33 @@ pub(super) enum Prefix {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Instruction {
-    EQU,
+    EQU, ASSERT,
     SEGMENT,
     GLOBAL, EXTERN,
-    ALIGN,
-    ASSERT,
-    DECLARE(Size), RESERVE(Size),
-    NOP, HLT, SYSCALL,
-    LFENCE, SFENCE, MFENCE,
-    MOV, CMOVcc(u8), SETcc(u8), LEA, XCHG,
-    FLAGBIT(u8),
-    ADD, SUB, CMP,
-    AND, OR, XOR, TEST,
-    SHIFT(u8), SHIFTX(u8), BTX(u8),
-    MUL, IMUL, MULX, IMULX, DIV, IDIV,
-    JMP, Jcc(u8), LOOPcc(u8), CALL, RET,
-    PUSH, POP,
-    INC, DEC, NEG, NOT,
+    ALIGN, DECLARE(Size), RESERVE(Size),
+    LEA, CMP,
+    MUL, IMUL,
     MOVS(Size), STOS(Size),
-    FINIT,
-    FLD(bool),
-    FADD(bool, bool), FSUB(bool, bool), FSUBR(bool, bool),
-    KMOV(Size),
+
+    NoArg { op: Option<u8>, ext_op: Option<u8> },
+    Unary { op: u8, ext_op: Option<u8>, allowed_sizes: &'static [Size] },
+    Binary { op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &'static [Size], force_b_rm_size: Option<Size>, force_b_imm_size: Option<Size> },
+    BinaryLvalueUnord { op: u8, ext_op: Option<u8>, allowed_sizes: &'static [Size] },
+    Ternary { op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &'static [Size], force_b_rm_size: Option<Size>, force_b_imm_size: Option<Size> },
+    Value { op: u8, ext_op: Option<u8>, allowed_type: HoleType, allowed_sizes: &'static [Size], default_size: Option<Size> },
+
+    FPUBinary { op: u8, ext_op: Option<u8>, int: bool, pop: bool },
+    FPUValue { op: u8, ext_op: Option<u8>, int: bool },
+
+    VPUKMove { size: Size },
     VPUMove { elem_size: Option<Size>, packed: bool, aligned: bool },
     VPUBinary { op: u8, ext_op: Option<u8>, elem_size: Size, packed: bool },
-    DEBUG(u8),
+    
     Suggest { from: Caseless<'static>, to: &'static [Caseless<'static>] },
 }
+
+pub(crate) const STANDARD_SIZES: &'static [Size] = &[Size::Byte, Size::Word, Size::Dword, Size::Qword];
+pub(crate) const NON_BYTE_STANDARD_SIZES: &'static [Size] = &[Size::Word, Size::Dword, Size::Qword];
 
 lazy_static! {
     pub(super) static ref PREFIXES: BTreeMap<Caseless<'static>, Prefix> = {
@@ -432,36 +432,36 @@ lazy_static! {
         insert!(m: Caseless("RESZ") => Instruction::RESERVE(Size::Zword));
         insert!(m: Caseless("REST") => Instruction::RESERVE(Size::Tword));
 
-        insert!(m: Caseless("NOP") => Instruction::NOP);
-        insert!(m: Caseless("HLT") => Instruction::HLT);
-        insert!(m: Caseless("SYSCALL") => Instruction::SYSCALL);
+        insert!(m: Caseless("NOP") => Instruction::NoArg { op: Some(OPCode::NOP as u8), ext_op: None });
+        insert!(m: Caseless("HLT") => Instruction::NoArg { op: Some(OPCode::HLT as u8), ext_op: None });
+        insert!(m: Caseless("SYSCALL") => Instruction::NoArg { op: Some(OPCode::SYSCALL as u8), ext_op: None });
 
         alias!(m: Caseless("PAUSE") => Caseless("HLT"));
 
-        insert!(m: Caseless("LFENCE") => Instruction::LFENCE);
-        insert!(m: Caseless("SFENCE") => Instruction::SFENCE);
-        insert!(m: Caseless("MFENCE") => Instruction::MFENCE);
+        insert!(m: Caseless("LFENCE") => Instruction::NoArg { op: None, ext_op: None });
+        insert!(m: Caseless("SFENCE") => Instruction::NoArg { op: None, ext_op: None });
+        insert!(m: Caseless("MFENCE") => Instruction::NoArg { op: None, ext_op: None });
         
-        insert!(m: Caseless("MOV") => Instruction::MOV);
+        insert!(m: Caseless("MOV") => Instruction::Binary { op: OPCode::MOV as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
         
-        insert!(m: Caseless("CMOVZ") => Instruction::CMOVcc(0));
-        insert!(m: Caseless("CMOVNZ") => Instruction::CMOVcc(1));
-        insert!(m: Caseless("CMOVS") => Instruction::CMOVcc(2));
-        insert!(m: Caseless("CMOVNS") => Instruction::CMOVcc(3));
-        insert!(m: Caseless("CMOVP") => Instruction::CMOVcc(4));
-        insert!(m: Caseless("CMOVNP") => Instruction::CMOVcc(5));
-        insert!(m: Caseless("CMOVO") => Instruction::CMOVcc(6));
-        insert!(m: Caseless("CMOVNO") => Instruction::CMOVcc(7));
-        insert!(m: Caseless("CMOVC") => Instruction::CMOVcc(8));
-        insert!(m: Caseless("CMOVNC") => Instruction::CMOVcc(9));
-        insert!(m: Caseless("CMOVB") => Instruction::CMOVcc(10));
-        insert!(m: Caseless("CMOVBE") => Instruction::CMOVcc(11));
-        insert!(m: Caseless("CMOVA") => Instruction::CMOVcc(12));
-        insert!(m: Caseless("CMOVAE") => Instruction::CMOVcc(13));
-        insert!(m: Caseless("CMOVL") => Instruction::CMOVcc(14));
-        insert!(m: Caseless("CMOVLE") => Instruction::CMOVcc(15));
-        insert!(m: Caseless("CMOVG") => Instruction::CMOVcc(16));
-        insert!(m: Caseless("CMOVGE") => Instruction::CMOVcc(17));
+        insert!(m: Caseless("CMOVZ") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(0), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVNZ") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(1), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVS") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(2), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVNS") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(3), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVP") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(4), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVNP") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(5), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVO") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(6), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVNO") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(7), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVC") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(8), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVNC") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(9), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVB") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(10), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVBE") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(11), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVA") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(12), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVAE") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(13), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVL") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(14), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVLE") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(15), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVG") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(16), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("CMOVGE") => Instruction::Binary { op: OPCode::CMOVcc as u8, ext_op: Some(17), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
 
         alias!(m: Caseless("CMOVE") => Caseless("CMOVZ"));
         alias!(m: Caseless("CMOVNE") => Caseless("CMOVNZ"));
@@ -477,26 +477,26 @@ lazy_static! {
         alias!(m: Caseless("CMOVNL") => Caseless("CMOVGE"));
         
         insert!(m: Caseless("LEA") => Instruction::LEA);
-        insert!(m: Caseless("XCHG") => Instruction::XCHG);
+        insert!(m: Caseless("XCHG") => Instruction::BinaryLvalueUnord { op: OPCode::XCHG as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
 
-        insert!(m: Caseless("SETZ") => Instruction::SETcc(0));
-        insert!(m: Caseless("SETNZ") => Instruction::SETcc(1));
-        insert!(m: Caseless("SETS") => Instruction::SETcc(2));
-        insert!(m: Caseless("SETNS") => Instruction::SETcc(3));
-        insert!(m: Caseless("SETP") => Instruction::SETcc(4));
-        insert!(m: Caseless("SETNP") => Instruction::SETcc(5));
-        insert!(m: Caseless("SETO") => Instruction::SETcc(6));
-        insert!(m: Caseless("SETNO") => Instruction::SETcc(7));
-        insert!(m: Caseless("SETC") => Instruction::SETcc(8));
-        insert!(m: Caseless("SETNC") => Instruction::SETcc(9));
-        insert!(m: Caseless("SETB") => Instruction::SETcc(10));
-        insert!(m: Caseless("SETBE") => Instruction::SETcc(11));
-        insert!(m: Caseless("SETA") => Instruction::SETcc(12));
-        insert!(m: Caseless("SETAE") => Instruction::SETcc(13));
-        insert!(m: Caseless("SETL") => Instruction::SETcc(14));
-        insert!(m: Caseless("SETLE") => Instruction::SETcc(15));
-        insert!(m: Caseless("SETG") => Instruction::SETcc(16));
-        insert!(m: Caseless("SETGE") => Instruction::SETcc(17));
+        insert!(m: Caseless("SETZ") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(0), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETNZ") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(1), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETS") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(2), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETNS") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(3), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETP") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(4), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETNP") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(5), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETO") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(6), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETNO") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(7), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETC") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(8), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETNC") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(9), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETB") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(10), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETBE") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(11), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETA") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(12), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETAE") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(13), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETL") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(14), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETLE") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(15), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETG") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(16), allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("SETGE") => Instruction::Unary { op: OPCode::SETcc as u8, ext_op: Some(17), allowed_sizes: STANDARD_SIZES });
 
         alias!(m: Caseless("SETE") => Caseless("SETZ"));
         alias!(m: Caseless("SETNE") => Caseless("SETNZ"));
@@ -511,80 +511,80 @@ lazy_static! {
         alias!(m: Caseless("SETNLE") => Caseless("SETG"));
         alias!(m: Caseless("SETNL") => Caseless("SETGE"));
 
-        insert!(m: Caseless("STAC") => Instruction::FLAGBIT(0));
-        insert!(m: Caseless("CLAC") => Instruction::FLAGBIT(1));
-        insert!(m: Caseless("CMAC") => Instruction::FLAGBIT(2));
-        insert!(m: Caseless("STC") => Instruction::FLAGBIT(3));
-        insert!(m: Caseless("CLC") => Instruction::FLAGBIT(4));
-        insert!(m: Caseless("CMC") => Instruction::FLAGBIT(5));
-        insert!(m: Caseless("STD") => Instruction::FLAGBIT(6));
-        insert!(m: Caseless("CLD") => Instruction::FLAGBIT(7));
-        insert!(m: Caseless("CMD") => Instruction::FLAGBIT(8));
-        insert!(m: Caseless("STI") => Instruction::FLAGBIT(9));
-        insert!(m: Caseless("CLI") => Instruction::FLAGBIT(10));
-        insert!(m: Caseless("CMI") => Instruction::FLAGBIT(11));
+        insert!(m: Caseless("STAC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(0) });
+        insert!(m: Caseless("CLAC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(1) });
+        insert!(m: Caseless("CMAC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(2) });
+        insert!(m: Caseless("STC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(3) });
+        insert!(m: Caseless("CLC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(4) });
+        insert!(m: Caseless("CMC") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(5) });
+        insert!(m: Caseless("STD") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(6) });
+        insert!(m: Caseless("CLD") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(7) });
+        insert!(m: Caseless("CMD") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(8) });
+        insert!(m: Caseless("STI") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(9) });
+        insert!(m: Caseless("CLI") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(10) });
+        insert!(m: Caseless("CMI") => Instruction::NoArg { op: Some(OPCode::REGOP as u8), ext_op: Some(11) });
 
-        insert!(m: Caseless("ADD") => Instruction::ADD);
-        insert!(m: Caseless("SUB") => Instruction::SUB);
+        insert!(m: Caseless("ADD") => Instruction::Binary { op: OPCode::ADD as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("SUB") => Instruction::Binary { op: OPCode::SUB as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
         insert!(m: Caseless("CMP") => Instruction::CMP);
 
-        insert!(m: Caseless("AND") => Instruction::AND);
-        insert!(m: Caseless("OR") => Instruction::OR);
-        insert!(m: Caseless("XOR") => Instruction::XOR);
-        insert!(m: Caseless("TEST") => Instruction::TEST);
+        insert!(m: Caseless("AND") => Instruction::Binary { op: OPCode::AND as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("OR") => Instruction::Binary { op: OPCode::OR as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("XOR") => Instruction::Binary { op: OPCode::XOR as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("TEST") => Instruction::Binary { op: OPCode::TEST as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
 
-        insert!(m: Caseless("SHL") => Instruction::SHIFT(0));
-        insert!(m: Caseless("SHR") => Instruction::SHIFT(1));
-        insert!(m: Caseless("SAR") => Instruction::SHIFT(2));
+        insert!(m: Caseless("SHL") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(0), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("SHR") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(1), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("SAR") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(2), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
         
-        insert!(m: Caseless("ROL") => Instruction::SHIFT(3));
-        insert!(m: Caseless("ROR") => Instruction::SHIFT(4));
-        insert!(m: Caseless("RCL") => Instruction::SHIFT(5));
-        insert!(m: Caseless("RCR") => Instruction::SHIFT(6));
+        insert!(m: Caseless("ROL") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(3), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("ROR") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(4), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("RCL") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(5), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("RCR") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(6), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: Some(Size::Byte), force_b_imm_size: Some(Size::Byte) });
 
-        insert!(m: Caseless("SHLX") => Instruction::SHIFTX(7));
-        insert!(m: Caseless("SHRX") => Instruction::SHIFTX(8));
-        insert!(m: Caseless("SARX") => Instruction::SHIFTX(9));
+        insert!(m: Caseless("SHLX") => Instruction::Ternary { op: OPCode::BITWISE as u8, ext_op: Some(7), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("SHRX") => Instruction::Ternary { op: OPCode::BITWISE as u8, ext_op: Some(8), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("SARX") => Instruction::Ternary { op: OPCode::BITWISE as u8, ext_op: Some(9), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
 
         alias!(m: Caseless("SAL") => Caseless("SHL"));
         alias!(m: Caseless("SALX") => Caseless("SHLX"));
 
-        insert!(m: Caseless("BT") => Instruction::BTX(10));
-        insert!(m: Caseless("BTC") => Instruction::BTX(11));
-        insert!(m: Caseless("BTR") => Instruction::BTX(12));
-        insert!(m: Caseless("BTS") => Instruction::BTX(13));
+        insert!(m: Caseless("BT") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(10), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("BTC") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(11), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("BTR") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(12), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
+        insert!(m: Caseless("BTS") => Instruction::Binary { op: OPCode::BITWISE as u8, ext_op: Some(13), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: Some(Size::Byte) });
 
         insert!(m: Caseless("MUL") => Instruction::MUL);
         insert!(m: Caseless("IMUL") => Instruction::IMUL);
-        insert!(m: Caseless("MULX") => Instruction::MULX);
-        insert!(m: Caseless("IMULX") => Instruction::IMULX);
+        insert!(m: Caseless("MULX") => Instruction::Ternary { op: OPCode::MULDIV as u8, ext_op: Some(3), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
+        insert!(m: Caseless("IMULX") => Instruction::Ternary { op: OPCode::MULDIV as u8, ext_op: Some(7), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, force_b_rm_size: None, force_b_imm_size: None });
 
-        insert!(m: Caseless("DIV") => Instruction::DIV);
-        insert!(m: Caseless("IDIV") => Instruction::IDIV);
+        insert!(m: Caseless("DIV") => Instruction::Value { op: OPCode::MULDIV as u8, ext_op: Some(8), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, default_size: None });
+        insert!(m: Caseless("IDIV") => Instruction::Value { op: OPCode::MULDIV as u8, ext_op: Some(9), allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, default_size: None });
 
-        insert!(m: Caseless("JMP") => Instruction::JMP);
+        insert!(m: Caseless("JMP") => Instruction::Value { op: OPCode::JMP as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
 
-        insert!(m: Caseless("JZ") => Instruction::Jcc(0));
-        insert!(m: Caseless("JNZ") => Instruction::Jcc(1));
-        insert!(m: Caseless("JS") => Instruction::Jcc(2));
-        insert!(m: Caseless("JNS") => Instruction::Jcc(3));
-        insert!(m: Caseless("JP") => Instruction::Jcc(4));
-        insert!(m: Caseless("JNP") => Instruction::Jcc(5));
-        insert!(m: Caseless("JO") => Instruction::Jcc(6));
-        insert!(m: Caseless("JNO") => Instruction::Jcc(7));
-        insert!(m: Caseless("JC") => Instruction::Jcc(8));
-        insert!(m: Caseless("JNC") => Instruction::Jcc(9));
-        insert!(m: Caseless("JB") => Instruction::Jcc(10));
-        insert!(m: Caseless("JBE") => Instruction::Jcc(11));
-        insert!(m: Caseless("JA") => Instruction::Jcc(12));
-        insert!(m: Caseless("JAE") => Instruction::Jcc(13));
-        insert!(m: Caseless("JL") => Instruction::Jcc(14));
-        insert!(m: Caseless("JLE") => Instruction::Jcc(15));
-        insert!(m: Caseless("JG") => Instruction::Jcc(16));
-        insert!(m: Caseless("JGE") => Instruction::Jcc(17));
-        insert!(m: Caseless("JCXZ") => Instruction::Jcc(18));
-        insert!(m: Caseless("JECXZ") => Instruction::Jcc(19));
-        insert!(m: Caseless("JRCXZ") => Instruction::Jcc(20));
+        insert!(m: Caseless("JZ") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(0), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JNZ") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(1), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JS") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(2), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JNS") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(3), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JP") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(4), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JNP") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(5), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JO") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(6), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JNO") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(7), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JC") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(8), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JNC") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(9), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JB") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(10), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JBE") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(11), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JA") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(12), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JAE") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(13), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JL") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(14), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JLE") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(15), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JG") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(16), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JGE") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(17), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JCXZ") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(18), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JECXZ") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(19), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("JRCXZ") => Instruction::Value { op: OPCode::Jcc as u8, ext_op: Some(20), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
 
         alias!(m: Caseless("JE") => Caseless("JZ"));
         alias!(m: Caseless("JNE") => Caseless("JNZ"));
@@ -599,24 +599,24 @@ lazy_static! {
         alias!(m: Caseless("JNLE") => Caseless("JG"));
         alias!(m: Caseless("JNL") => Caseless("JGE"));
 
-        insert!(m: Caseless("LOOP") => Instruction::LOOPcc(0));
-        insert!(m: Caseless("LOOPZ") => Instruction::LOOPcc(1));
-        insert!(m: Caseless("LOOPNZ") => Instruction::LOOPcc(2));
+        insert!(m: Caseless("LOOP") => Instruction::Value { op: OPCode::LOOPcc as u8, ext_op: Some(0), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("LOOPZ") => Instruction::Value { op: OPCode::LOOPcc as u8, ext_op: Some(1), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("LOOPNZ") => Instruction::Value { op: OPCode::LOOPcc as u8, ext_op: Some(2), allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
 
         alias!(m: Caseless("LOOPE") => Caseless("LOOPZ"));
         alias!(m: Caseless("LOOPNE") => Caseless("LOOPNZ"));
 
-        insert!(m: Caseless("CALL") => Instruction::CALL);
-        insert!(m: Caseless("RET") => Instruction::RET);
+        insert!(m: Caseless("CALL") => Instruction::Value { op: OPCode::CALL as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: NON_BYTE_STANDARD_SIZES, default_size: Some(Size::Qword) });
+        insert!(m: Caseless("RET") => Instruction::NoArg { op: Some(OPCode::RET as u8), ext_op: None });
 
-        insert!(m: Caseless("PUSH") => Instruction::PUSH);
-        insert!(m: Caseless("POP") => Instruction::POP);
+        insert!(m: Caseless("PUSH") => Instruction::Value { op: OPCode::PUSH as u8, ext_op: None, allowed_type: HoleType::Integer, allowed_sizes: STANDARD_SIZES, default_size: None });
+        insert!(m: Caseless("POP") => Instruction::Unary { op: OPCode::POP as u8, ext_op: None, allowed_sizes: NON_BYTE_STANDARD_SIZES });
 
-        insert!(m: Caseless("INC") => Instruction::INC);
-        insert!(m: Caseless("DEC") => Instruction::DEC);
-        insert!(m: Caseless("NEG") => Instruction::NEG);
-        insert!(m: Caseless("NOT") => Instruction::NOT);
-
+        insert!(m: Caseless("INC") => Instruction::Unary { op: OPCode::INC as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("DEC") => Instruction::Unary { op: OPCode::DEC as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("NEG") => Instruction::Unary { op: OPCode::NEG as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
+        insert!(m: Caseless("NOT") => Instruction::Unary { op: OPCode::NOT as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
+        
         insert!(m: Caseless("MOVSB") => Instruction::MOVS(Size::Byte));
         insert!(m: Caseless("MOVSW") => Instruction::MOVS(Size::Word));
         insert!(m: Caseless("MOVSD") => Instruction::MOVS(Size::Dword));
@@ -627,27 +627,27 @@ lazy_static! {
         insert!(m: Caseless("STOSD") => Instruction::STOS(Size::Dword));
         insert!(m: Caseless("STOSQ") => Instruction::STOS(Size::Qword));
 
-        insert!(m: Caseless("FINIT") => Instruction::FINIT);
+        insert!(m: Caseless("FINIT") => Instruction::NoArg { op: Some(OPCode::FINIT as u8), ext_op: None });
 
-        insert!(m: Caseless("FLD") => Instruction::FLD(false));
-        insert!(m: Caseless("FILD") => Instruction::FLD(true));
+        insert!(m: Caseless("FLD") => Instruction::FPUValue { op: OPCode::FLD as u8, ext_op: None, int: false });
+        insert!(m: Caseless("FILD") => Instruction::FPUValue { op: OPCode::FLD as u8, ext_op: None, int: true });
 
-        insert!(m: Caseless("FADD") => Instruction::FADD(false, false));
-        insert!(m: Caseless("FADDP") => Instruction::FADD(false, true));
-        insert!(m: Caseless("FIADD") => Instruction::FADD(true, false));
+        insert!(m: Caseless("FADD") => Instruction::FPUBinary { op: OPCode::FADD as u8, ext_op: None, int: false, pop: false });
+        insert!(m: Caseless("FADDP") => Instruction::FPUBinary { op: OPCode::FADD as u8, ext_op: None, int: false, pop: true });
+        insert!(m: Caseless("FIADD") => Instruction::FPUBinary { op: OPCode::FADD as u8, ext_op: None, int: true, pop: false });
 
-        insert!(m: Caseless("FSUB") => Instruction::FSUB(false, false));
-        insert!(m: Caseless("FSUBP") => Instruction::FSUB(false, true));
-        insert!(m: Caseless("FISUB") => Instruction::FSUB(true, false));
+        insert!(m: Caseless("FSUB") => Instruction::FPUBinary { op: OPCode::FSUB as u8, ext_op: None, int: false, pop: false });
+        insert!(m: Caseless("FSUBP") => Instruction::FPUBinary { op: OPCode::FSUB as u8, ext_op: None, int: false, pop: true });
+        insert!(m: Caseless("FISUB") => Instruction::FPUBinary { op: OPCode::FSUB as u8, ext_op: None, int: true, pop: false });
 
-        insert!(m: Caseless("FSUBR") => Instruction::FSUBR(false, false));
-        insert!(m: Caseless("FSUBRP") => Instruction::FSUBR(false, true));
-        insert!(m: Caseless("FISUBR") => Instruction::FSUBR(true, false));
+        insert!(m: Caseless("FSUBR") => Instruction::FPUBinary { op: OPCode::FSUBR as u8, ext_op: None, int: false, pop: false });
+        insert!(m: Caseless("FSUBRP") => Instruction::FPUBinary { op: OPCode::FSUBR as u8, ext_op: None, int: false, pop: true });
+        insert!(m: Caseless("FISUBR") => Instruction::FPUBinary { op: OPCode::FSUBR as u8, ext_op: None, int: true, pop: false });
 
-        insert!(m: Caseless("KMOVB") => Instruction::KMOV(Size::Byte));
-        insert!(m: Caseless("KMOVW") => Instruction::KMOV(Size::Word));
-        insert!(m: Caseless("KMOVD") => Instruction::KMOV(Size::Dword));
-        insert!(m: Caseless("KMOVQ") => Instruction::KMOV(Size::Qword));
+        insert!(m: Caseless("KMOVB") => Instruction::VPUKMove { size: Size::Byte });
+        insert!(m: Caseless("KMOVW") => Instruction::VPUKMove { size: Size::Word });
+        insert!(m: Caseless("KMOVD") => Instruction::VPUKMove { size: Size::Dword });
+        insert!(m: Caseless("KMOVQ") => Instruction::VPUKMove { size: Size::Qword });
 
         insert!(m: Caseless("VMOVDQA") => Instruction::VPUMove { elem_size: None, packed: true, aligned: true });
         insert!(m: Caseless("VMOVDQA64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: true });
@@ -702,7 +702,7 @@ lazy_static! {
         suggest!(m: Caseless("ADDSS") => [ Caseless("VADDSS") ]);
         suggest!(m: Caseless("ADDPS") => [ Caseless("VADDPS") ]);
 
-        insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
+        insert!(m: Caseless("DEBUG_CPU") => Instruction::NoArg { op: Some(OPCode::DEBUG as u8), ext_op: Some(0) });
 
         m
     };

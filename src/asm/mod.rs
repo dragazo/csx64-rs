@@ -1361,6 +1361,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         None => match instruction {
+                            Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((0 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((7 << 2) | size.basic_sizecode().unwrap()))?,
+
                             Instruction::EQU => match &args.label_def {
                                 None => return Err(AsmError { kind: AsmErrorKind::EQUWithoutLabel, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }),
                                 Some((name, _)) => {
@@ -1507,17 +1510,6 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                     x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: x.get_type(), expected: &[ArgumentType::Imm] }, line_num: args.line_num, pos: None, inner_err: None }),
                                 }
                             }
-        
-                            Instruction::NOP => args.process_no_arg_op(arguments, Some(OPCode::NOP as u8), None)?,
-                            Instruction::HLT => args.process_no_arg_op(arguments, Some(OPCode::HLT as u8), None)?,
-                            Instruction::SYSCALL => args.process_no_arg_op(arguments, Some(OPCode::SYSCALL as u8), None)?,
-        
-                            Instruction::LFENCE => args.process_no_arg_op(arguments, None, None)?,
-                            Instruction::SFENCE => args.process_no_arg_op(arguments, None, None)?,
-                            Instruction::MFENCE => args.process_no_arg_op(arguments, None, None)?,
-        
-                            Instruction::MOV => args.process_binary_op(arguments, OPCode::MOV as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::CMOVcc(ext) => args.process_binary_op(arguments, OPCode::CMOVcc as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::LEA => {
                                 if arguments.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: args.line_num, pos: None, inner_err: None }); }
                                 let mut arguments = arguments.into_iter();
@@ -1541,12 +1533,6 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 args.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2))?;
                                 args.append_address(addr)?;
                             }
-                            Instruction::XCHG => args.process_binary_lvalue_unordered_op(arguments, OPCode::XCHG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::SETcc(ext) => args.process_unary_op(arguments, OPCode::SETcc as u8, Some(ext), &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::FLAGBIT(ext) => args.process_no_arg_op(arguments, Some(OPCode::REGOP as u8), Some(ext))?,
-
-                            Instruction::ADD => args.process_binary_op(arguments, OPCode::ADD as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::SUB => args.process_binary_op(arguments, OPCode::SUB as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
                             Instruction::CMP => {
                                 let is_cmpz = arguments.len() == 2 && match &arguments[1] {
                                     Argument::Imm(imm) => match imm.expr.eval(&args.file.symbols) {
@@ -1561,68 +1547,36 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 };
                                 if is_cmpz {
                                     arguments.pop();
-                                    args.process_unary_op(arguments, OPCode::CMPZ as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?
+                                    args.process_unary_op(arguments, OPCode::CMPZ as u8, None, STANDARD_SIZES)?
                                 }
-                                else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)? }
+                                else { args.process_binary_op(arguments, OPCode::CMP as u8, None, HoleType::Integer, STANDARD_SIZES, None, None)? }
                             }
-        
-                            Instruction::AND => args.process_binary_op(arguments, OPCode::AND as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::OR => args.process_binary_op(arguments, OPCode::OR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::XOR => args.process_binary_op(arguments, OPCode::XOR as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::TEST => args.process_binary_op(arguments, OPCode::TEST as u8, None, HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-        
-                            Instruction::SHIFT(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], Some(Size::Byte), Some(Size::Byte))?,
-                            Instruction::SHIFTX(ext) => args.process_ternary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, Some(Size::Byte))?,
-                            Instruction::BTX(ext) => args.process_binary_op(arguments, OPCode::BITWISE as u8, Some(ext), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, Some(Size::Byte))?,
-
                             Instruction::MUL => match arguments.len() {
-                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(2), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(0), HoleType::Integer, STANDARD_SIZES, None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(1), HoleType::Integer, STANDARD_SIZES, None, None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(2), HoleType::Integer, STANDARD_SIZES, None, None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
                             Instruction::IMUL => match arguments.len() {
-                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
+                                1 => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(4), HoleType::Integer, STANDARD_SIZES, None)?,
+                                2 => args.process_binary_op(arguments, OPCode::MULDIV as u8, Some(5), HoleType::Integer, STANDARD_SIZES, None, None)?,
+                                3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, STANDARD_SIZES, None, None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
-                            Instruction::MULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(3), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::IMULX => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(7), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None, None)?,
-                            Instruction::DIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(8), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::IDIV => args.process_value_op(arguments, OPCode::MULDIV as u8, Some(9), HoleType::Integer, &[Size::Byte, Size::Word, Size::Dword, Size::Qword], None)?,
 
-                            Instruction::JMP => args.process_value_op(arguments, OPCode::JMP as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
-                            Instruction::Jcc(ext) => args.process_value_op(arguments, OPCode::Jcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
-                            Instruction::LOOPcc(ext) => args.process_value_op(arguments, OPCode::LOOPcc as u8, Some(ext), HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
-                            Instruction::CALL => args.process_value_op(arguments, OPCode::CALL as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], Some(Size::Qword))?,
-                            Instruction::RET => args.process_no_arg_op(arguments, Some(OPCode::RET as u8), None)?,
+                            Instruction::NoArg { op, ext_op } => args.process_no_arg_op(arguments, op, ext_op)?,
+                            Instruction::Unary { op, ext_op, allowed_sizes } => args.process_unary_op(arguments, op, ext_op, allowed_sizes)?,
+                            Instruction::Binary { op, ext_op, allowed_type, allowed_sizes, force_b_rm_size, force_b_imm_size } => args.process_binary_op(arguments, op, ext_op, allowed_type, allowed_sizes, force_b_rm_size, force_b_imm_size)?,
+                            Instruction::BinaryLvalueUnord { op, ext_op, allowed_sizes } => args.process_binary_lvalue_unordered_op(arguments, op, ext_op, allowed_sizes)?,
+                            Instruction::Ternary { op, ext_op, allowed_type, allowed_sizes, force_b_rm_size, force_b_imm_size } => args.process_ternary_op(arguments, op, ext_op, allowed_type, allowed_sizes, force_b_rm_size, force_b_imm_size)?,
+                            Instruction::Value { op, ext_op, allowed_type, allowed_sizes, default_size } => args.process_value_op(arguments, op, ext_op, allowed_type, allowed_sizes, default_size)?,
 
-                            Instruction::PUSH => args.process_value_op(arguments, OPCode::PUSH as u8, None, HoleType::Integer, &[Size::Word, Size::Dword, Size::Qword], None)?,
-                            Instruction::POP => args.process_unary_op(arguments, OPCode::POP as u8, None, &[Size::Word, Size::Dword, Size::Qword])?,
-
-                            Instruction::INC => args.process_unary_op(arguments, OPCode::INC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::DEC => args.process_unary_op(arguments, OPCode::DEC as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::NEG => args.process_unary_op(arguments, OPCode::NEG as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-                            Instruction::NOT => args.process_unary_op(arguments, OPCode::NOT as u8, None, &[Size::Byte, Size::Word, Size::Dword, Size::Qword])?,
-
-                            Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((0 << 2) | size.basic_sizecode().unwrap()))?,
-                            Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((7 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::FPUBinary { op, ext_op, int, pop } => args.process_fpu_binary_op(arguments, op, ext_op, int, pop)?,
+                            Instruction::FPUValue { op, ext_op, int } => args.process_fpu_value_op(arguments, op, ext_op, int)?,
                             
-                            Instruction::FINIT => args.process_no_arg_op(arguments, Some(OPCode::FINIT as u8), None)?,
-
-                            Instruction::FLD(int) => args.process_fpu_value_op(arguments, OPCode::FLD as u8, None, int)?,
-
-                            Instruction::FADD(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FADD as u8, None, int, pop)?,
-                            Instruction::FSUB(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUB as u8, None, int, pop)?,
-                            Instruction::FSUBR(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUBR as u8, None, int, pop)?,
-                            
-                            Instruction::KMOV(size) => args.process_kmov(arguments, size)?,
-
-                            Instruction::VPUMove { elem_size, packed, aligned } => args.process_vpu_vec_move(arguments, elem_size, packed, aligned)?,
+                            Instruction::VPUKMove { size } => args.process_kmov(arguments, size)?,
+                            Instruction::VPUMove { elem_size, packed, aligned } => args.process_vpu_move(arguments, elem_size, packed, aligned)?,
                             Instruction::VPUBinary { op, ext_op, elem_size, packed } => args.process_vpu_binary_op(arguments, op, ext_op, elem_size, packed)?,
-
-                            Instruction::DEBUG(ext) => args.process_no_arg_op(arguments, Some(OPCode::DEBUG as u8), Some(ext))?,
 
                             Instruction::Suggest { from, to } => return Err(AsmError { kind: AsmErrorKind::SuggestInstruction { from, to }, line_num: args.line_num, pos: None, inner_err: None }),
                         }
@@ -1886,14 +1840,12 @@ lazy_static! {
                 let mut bin = vec![];
                 obj.bin_write(&mut bin).unwrap();
                 ($name, bin)
-            }}
+            }};
+            ([ $($name:literal),+$(,)? ]) => {
+                vec![$(assemble_physical_file!($name)),+]
+            }
         }
-        vec![
-            assemble_physical_file!("start.asm"),
-            assemble_physical_file!("malloc.asm"),
-            assemble_physical_file!("exit.asm"),
-            assemble_physical_file!("ctype.asm"),
-        ]
+        assemble_physical_file!([ "start.asm", "malloc.asm", "exit.asm", "ctype.asm", "arglist.asm" ])
     };
 }
 /// Gets a copy of the C-style standard library [`ObjectFile`]s for use in CSX64 asm programs.
