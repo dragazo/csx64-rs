@@ -3826,3 +3826,256 @@ fn test_fsubr() {
 
     assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(-33)));
 }
+
+#[test]
+fn test_kmov() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    mov rax, val
+    hlt
+    kmovb k0, byte ptr [val]
+    hlt
+    mov eax, 0xdeadbeef
+    kmovw k1, eax
+    mov [val], qword -1
+    hlt
+    kmovd [val], k1
+    hlt
+    kmovb k0, k1
+    hlt
+    kmovq rdi, k1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment bss
+    align 8
+    val: resq 1
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    let val = e.cpu.get_rax();
+    assert_eq!(e.memory.get_u64(val).unwrap(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_u64(val).unwrap(), 0);
+    assert_eq!(e.vpu.kregs[0], 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rax(), 0xdeadbeef);
+    assert_eq!(e.vpu.kregs[1], 0xbeef);
+    assert_eq!(e.memory.get_u64(val).unwrap(), u64::MAX);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.memory.get_u64(val).unwrap(), 0xffffffff0000beef);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.kregs[0], 0xef);
+    assert_eq!(e.vpu.kregs[1], 0xbeef);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.cpu.get_rdi(), 0xbeef);
+    assert_eq!(e.vpu.kregs[0], 0xef);
+    assert_eq!(e.vpu.kregs[1], 0xbeef);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+}
+#[test]
+fn test_movdqau() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    vmovdqa xmm0, [vals]
+    hlt
+    mov eax, 13
+    kmovb k1, eax
+    vmovdqu32 xmm0{k1}, [vals + 4]
+    hlt
+    vmovdqa32 xmm1{k1}{z}, xmm0
+    hlt
+    vmovdqa [buf], xmm1
+    mov rax, buf
+    hlt
+    vmovd xmm1, [vals + 12]
+    hlt
+    xor eax, eax
+    kmovb k3, eax
+    vmovss xmm0{k3}, xmm1
+    hlt
+    vmovss xmm0{k3}{z}, xmm1
+    hlt
+    vmovss xmm0, xmm1
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment data
+    align 16
+    vals: dd 16, 54, 34, -25, 69420
+
+    segment bss
+    align 16
+    buf: resd 4
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[0].get_u32(0), 16);
+    assert_eq!(e.vpu.regs[0].get_u32(1), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(2), 34);
+    assert_eq!(e.vpu.regs[0].get_u32(3), -25i32 as u32);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[0].get_u32(0), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(1), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[0].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[1].get_u32(0), 54);
+    assert_eq!(e.vpu.regs[1].get_u32(1), 0);
+    assert_eq!(e.vpu.regs[1].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[1].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[1].get_u32(0), 54);
+    assert_eq!(e.vpu.regs[1].get_u32(1), 0);
+    assert_eq!(e.vpu.regs[1].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[1].get_u32(3), 69420);
+    let buf = e.cpu.get_rax();
+    assert_eq!(e.memory.get_u32(buf + 0).unwrap(), 54);
+    assert_eq!(e.memory.get_u32(buf + 4).unwrap(), 0);
+    assert_eq!(e.memory.get_u32(buf + 8).unwrap(), -25i32 as u32);
+    assert_eq!(e.memory.get_u32(buf + 12).unwrap(), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[1].get_u32(0), -25i32 as u32);
+    assert_eq!(e.vpu.regs[1].get_u32(1), 0);
+    assert_eq!(e.vpu.regs[1].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[1].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[0].get_u32(0), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(1), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[0].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[0].get_u32(0), 0);
+    assert_eq!(e.vpu.regs[0].get_u32(1), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[0].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert_eq!(e.vpu.regs[0].get_u32(0), -25i32 as u32);
+    assert_eq!(e.vpu.regs[0].get_u32(1), 54);
+    assert_eq!(e.vpu.regs[0].get_u32(2), -25i32 as u32);
+    assert_eq!(e.vpu.regs[0].get_u32(3), 69420);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+    assert_eq!(e.get_state(), State::Terminated(0));
+
+    e.init(&asm_unwrap_link_unwrap!("segment text\nvmovdqa xmm0, [4]"), &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::Error(ExecError::VPUAlignmentViolation)));
+    assert_eq!(e.get_state(), State::Error(ExecError::VPUAlignmentViolation));
+
+    e.init(&asm_unwrap_link_unwrap!("segment text\nvmovdqa [4], xmm0"), &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::Error(ExecError::VPUAlignmentViolation)));
+    assert_eq!(e.get_state(), State::Error(ExecError::VPUAlignmentViolation));
+}
+
+#[test]
+fn test_vec_addf() {
+    let exe = asm_unwrap_link_unwrap!(r#"
+    segment text
+    vmovapd ymm0, [v1]
+    vaddpd ymm1, ymm0, [v2]
+    hlt
+    vaddpd xmm1, xmm0
+    hlt
+    mov eax, 5
+    kmovb k7, eax
+    vaddpd ymm0{k7}, ymm1, ymm1
+    hlt
+    vaddpd ymm0{k7}{z}, ymm0
+    hlt
+    vaddsd ymm0, ymm1, ymm1
+    hlt
+    xor eax, eax
+    kmovb k4, eax
+    vaddsd zmm0{k4}, zmm0
+    hlt
+    vaddsd zmm0{k4}{z}, zmm0
+    hlt
+    mov eax, sys_exit
+    xor ebx, ebx
+    syscall
+
+    segment data
+    align 32
+    v1: dq 1.2, 3.4, 5.6, -12.4
+    v2: dq 4.7, 2.2, 1.9, 7.3
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    let f64_epsilon = 1e-10;
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[1].get_f64(0) - 5.9).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(1) - 5.6).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(2) - 7.5).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(3) - -5.1).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[1].get_f64(0) - 7.1).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(1) - 9.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(2) - 7.5).abs() < f64_epsilon);
+    assert!((e.vpu.regs[1].get_f64(3) - -5.1).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[0].get_f64(0) - 14.2).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(1) - 3.4).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(2) - 15.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(3) - -12.4).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[0].get_f64(0) - 28.4).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(1) - 0.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(2) - 30.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(3) - 0.0).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[0].get_f64(0) - 14.2).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(1) - 0.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(2) - 30.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(3) - 0.0).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (4, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[0].get_f64(0) - 14.2).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(1) - 0.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(2) - 30.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(3) - 0.0).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (2, StopReason::ForfeitTimeslot));
+    assert!((e.vpu.regs[0].get_f64(0) - 0.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(1) - 0.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(2) - 30.0).abs() < f64_epsilon);
+    assert!((e.vpu.regs[0].get_f64(3) - 0.0).abs() < f64_epsilon);
+
+    assert_eq!(e.execute_cycles(u64::MAX), (3, StopReason::Terminated(0)));
+    assert_eq!(e.get_state(), State::Terminated(0));
+
+    e.init(&asm_unwrap_link_unwrap!("segment text\nvaddpd xmm0, [4]"), &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+    assert_eq!(e.execute_cycles(u64::MAX), (0, StopReason::Error(ExecError::VPUAlignmentViolation)));
+    assert_eq!(e.get_state(), State::Error(ExecError::VPUAlignmentViolation));
+}

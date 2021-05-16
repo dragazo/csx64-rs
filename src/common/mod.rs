@@ -43,7 +43,13 @@ pub(crate) enum OPCode
     
     FADD, FSUB, FSUBR,
 
+    // vec instructions
+
+    VPUBinary,
+
     // misc instructions
+
+    TRANS,
 
     DEBUG,
     
@@ -101,11 +107,6 @@ pub(crate) enum OPCode
 
     // VPUCVT,
 
-    // // misc instructions
-
-    // TRANS,
-
-    // DEBUG,
 }
 
 /// The system calls recognized by the emulator.

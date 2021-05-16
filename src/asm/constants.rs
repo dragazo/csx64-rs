@@ -3,6 +3,7 @@ use std::collections::{HashMap, BTreeMap, BTreeSet};
 use super::expr::*;
 use super::{Size, AsmSegment};
 use super::caseless::Caseless;
+use crate::common::OPCode;
 
 macro_rules! insert {
     ($m:ident : $key:expr => $val:expr) => {
@@ -16,6 +17,14 @@ macro_rules! alias {
     ($m:ident : $from:expr => $to:expr) => {{
         let v = *$m.get(&$to).unwrap();
         insert!($m: $from => v);
+    }}
+}
+macro_rules! suggest {
+    ($m:ident : $from:expr => [$($to:expr),+]) => {{
+        let from = $from;
+        const TO: &'static [Caseless<'static>] = &[$($to),+];
+        for x in TO { assert!($m.get(x).is_some()); }
+        insert!($m: from => Instruction::Suggest { from, to: TO });
     }}
 }
 
@@ -370,7 +379,11 @@ pub(super) enum Instruction {
     FINIT,
     FLD(bool),
     FADD(bool, bool), FSUB(bool, bool), FSUBR(bool, bool),
+    KMOV(Size),
+    VPUMove { elem_size: Option<Size>, packed: bool, aligned: bool },
+    VPUBinary { op: u8, ext_op: Option<u8>, elem_size: Size, packed: bool },
     DEBUG(u8),
+    Suggest { from: Caseless<'static>, to: &'static [Caseless<'static>] },
 }
 
 lazy_static! {
@@ -631,6 +644,64 @@ lazy_static! {
         insert!(m: Caseless("FSUBRP") => Instruction::FSUBR(false, true));
         insert!(m: Caseless("FISUBR") => Instruction::FSUBR(true, false));
 
+        insert!(m: Caseless("KMOVB") => Instruction::KMOV(Size::Byte));
+        insert!(m: Caseless("KMOVW") => Instruction::KMOV(Size::Word));
+        insert!(m: Caseless("KMOVD") => Instruction::KMOV(Size::Dword));
+        insert!(m: Caseless("KMOVQ") => Instruction::KMOV(Size::Qword));
+
+        insert!(m: Caseless("VMOVDQA") => Instruction::VPUMove { elem_size: None, packed: true, aligned: true });
+        insert!(m: Caseless("VMOVDQA64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: true });
+        insert!(m: Caseless("VMOVDQA32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: true });
+        insert!(m: Caseless("VMOVDQA16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: true });
+        insert!(m: Caseless("VMOVDQA8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: true });
+
+        suggest!(m: Caseless("MOVDQA") => [ Caseless("VMOVDQA") ]);
+        suggest!(m: Caseless("MOVDQA64") => [ Caseless("VMOVDQA64") ]);
+        suggest!(m: Caseless("MOVDQA32") => [ Caseless("VMOVDQA32") ]);
+        suggest!(m: Caseless("MOVDQA16") => [ Caseless("VMOVDQA16") ]);
+        suggest!(m: Caseless("MOVDQA8") => [ Caseless("VMOVDQA8") ]);
+
+        insert!(m: Caseless("VMOVDQU") => Instruction::VPUMove { elem_size: None, packed: true, aligned: false });
+        insert!(m: Caseless("VMOVDQU64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: false });
+        insert!(m: Caseless("VMOVDQU32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: false });
+        insert!(m: Caseless("VMOVDQU16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: false });
+        insert!(m: Caseless("VMOVDQU8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: false });
+
+        suggest!(m: Caseless("MOVDQU") => [ Caseless("VMOVDQU") ]);
+        suggest!(m: Caseless("MOVDQU64") => [ Caseless("VMOVDQU64") ]);
+        suggest!(m: Caseless("MOVDQU32") => [ Caseless("VMOVDQU32") ]);
+        suggest!(m: Caseless("MOVDQU16") => [ Caseless("VMOVDQU16") ]);
+        suggest!(m: Caseless("MOVDQU8") => [ Caseless("VMOVDQU8") ]);
+
+        insert!(m: Caseless("VMOVQ") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: false, aligned: false });
+        insert!(m: Caseless("VMOVD") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: false, aligned: false });
+        insert!(m: Caseless("VMOVW") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: false, aligned: false });
+        insert!(m: Caseless("VMOVB") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: false, aligned: false });
+
+        suggest!(m: Caseless("MOVQ") => [ Caseless("VMOVQ") ]);
+        suggest!(m: Caseless("MOVD") => [ Caseless("VMOVD") ]);
+        suggest!(m: Caseless("MOVW") => [ Caseless("VMOVW") ]);
+        suggest!(m: Caseless("MOVB") => [ Caseless("VMOVB"), Caseless("CMOVB") ]);
+
+        alias!(m: Caseless("VMOVAPD") => Caseless("VMOVDQA64"));
+        alias!(m: Caseless("VMOVAPS") => Caseless("VMOVDQA32"));
+
+        alias!(m: Caseless("VMOVUPD") => Caseless("VMOVDQU64"));
+        alias!(m: Caseless("VMOVUPS") => Caseless("VMOVDQU32"));
+
+        alias!(m: Caseless("VMOVSD") => Caseless("VMOVQ"));
+        alias!(m: Caseless("VMOVSS") => Caseless("VMOVD"));
+
+        insert!(m: Caseless("VADDSD") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(0), elem_size: Size::Qword, packed: false });
+        insert!(m: Caseless("VADDPD") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(0), elem_size: Size::Qword, packed: true });
+        insert!(m: Caseless("VADDSS") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(1), elem_size: Size::Dword, packed: false });
+        insert!(m: Caseless("VADDPS") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(1), elem_size: Size::Dword, packed: true });
+
+        suggest!(m: Caseless("ADDSD") => [ Caseless("VADDSD") ]);
+        suggest!(m: Caseless("ADDPD") => [ Caseless("VADDPD") ]);
+        suggest!(m: Caseless("ADDSS") => [ Caseless("VADDSS") ]);
+        suggest!(m: Caseless("ADDPS") => [ Caseless("VADDPS") ]);
+
         insert!(m: Caseless("DEBUG_CPU") => Instruction::DEBUG(0));
 
         m
@@ -667,6 +738,7 @@ lazy_static! {
         s.extend(CPU_REGISTER_INFO.keys().copied());
         s.extend(FPU_REGISTER_INFO.keys().copied());
         s.extend(VPU_REGISTER_INFO.keys().copied());
+        s.extend(VPU_MASK_REGISTER_INFO.keys().copied());
         s.extend(SEGMENTS.keys().copied());
         s.extend(PREFIXES.keys().copied());
         s.extend(INSTRUCTIONS.keys().copied());

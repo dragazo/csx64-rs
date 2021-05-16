@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fmt;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -38,6 +39,12 @@ impl Ord for Caseless<'_> {
 impl PartialOrd<Caseless<'_>> for Caseless<'_> {
     fn partial_cmp(&self, other: &Caseless<'_>) -> Option<Ordering> {
         Some(cmp_ignore_ascii_case(self.0, other.0))
+    }
+}
+
+impl fmt::Display for Caseless<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

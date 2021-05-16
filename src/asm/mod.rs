@@ -152,6 +152,7 @@ pub(crate) enum AsmErrorKind {
     IfUsedOnEmptyLine,
 
     UnrecognizedInstruction,
+    SuggestInstruction { from: Caseless<'static>, to: &'static [Caseless<'static>] },
 
     WriteOutsideOfSegment,
     WriteInBssSegment,
@@ -190,6 +191,9 @@ pub(crate) enum AsmErrorKind {
     VPUOpmaskWasK0,
     VPUZeroingWithoutOpmask,
     VPUMaskUnrecognizedMode,
+    VPUMaskOnNondestArg,
+    VPUMaskOnInstructionWithoutElemSize,
+    VPUMaskOnNonVecInstruction,
 }
 impl From<BadAddress> for AsmErrorKind {
     fn from(reason: BadAddress) -> Self {
@@ -295,6 +299,7 @@ impl fmt::Display for AsmError {
             AsmErrorKind::IfUsedOnEmptyLine => write!(f, "if directive used without an instruction to modify"),
 
             AsmErrorKind::UnrecognizedInstruction => write!(f, "unrecognized instruction"),
+            AsmErrorKind::SuggestInstruction { from, to } => write!(f, "for clarity/consistency, {} is not a supported instruction. use {} instead.", from, Punctuated::or(to)),
 
             AsmErrorKind::WriteOutsideOfSegment => write!(f, "attempt to write data outside of any segment"),
             AsmErrorKind::WriteInBssSegment => write!(f, "attempt to write in bss segment (zeroed at runtime)"),
@@ -333,6 +338,9 @@ impl fmt::Display for AsmError {
             AsmErrorKind::VPUOpmaskWasK0 => write!(f, "used k0 as opmask (reserved encoding for no masking)"),
             AsmErrorKind::VPUZeroingWithoutOpmask => write!(f, "vpu opmask specified zeroing without a mask"),
             AsmErrorKind::VPUMaskUnrecognizedMode => write!(f, "vpu opmask unrecognized mode string"),
+            AsmErrorKind::VPUMaskOnNondestArg => write!(f, "vpu opmasks are only allowed on the first operand"),
+            AsmErrorKind::VPUMaskOnInstructionWithoutElemSize => write!(f, "vpu opmasks can only be used on instruction with fixed element size (e.g. vmovdqa won't work, but vmovdqa32 would)"),
+            AsmErrorKind::VPUMaskOnNonVecInstruction => write!(f, "vpu opmasks can only be used on vector instructions"),
         }
     }
 }
@@ -573,9 +581,9 @@ display_from_name! { ArgumentType }
 enum Argument {
     CPURegister(CPURegisterInfo),
     FPURegister(FPURegisterInfo),
-    VPUMaskRegisterInfo(VPUMaskRegisterInfo),
+    VPUMaskRegister(VPUMaskRegisterInfo),
     VPURegister { reg: VPURegisterInfo, mask: Option<VPUMaskType> },
-    Address(Address),
+    Address { addr: Address, mask: Option<VPUMaskType> },
     Imm(Imm),
     Segment(AsmSegment),
 }
@@ -584,9 +592,9 @@ impl Argument {
         match self {
             Argument::CPURegister(_) => ArgumentType::CPURegister,
             Argument::FPURegister(_) => ArgumentType::FPURegister,
-            Argument::VPUMaskRegisterInfo(_) => ArgumentType::VPUMaskRegister,
+            Argument::VPUMaskRegister(_) => ArgumentType::VPUMaskRegister,
             Argument::VPURegister { .. } => ArgumentType::VPURegister,
-            Argument::Address(_) => ArgumentType::Address,
+            Argument::Address { .. } => ArgumentType::Address,
             Argument::Imm(_) => ArgumentType::Imm,
             Argument::Segment(_) => ArgumentType::Segment,
         }
@@ -1146,9 +1154,23 @@ impl AlignTo for usize {
 
 /// Given a segment and a current base alignment, aligns the end to tail_align and updates the base align to be whichever is larger.
 fn align_seg<T: AlignTo>(seg: &mut T, seg_align: &mut usize, tail_align: usize) {
-    let align = tail_align.max(*seg_align);
-    seg.align_to(align);
-    *seg_align = align;
+    seg.align_to(tail_align);
+    *seg_align = tail_align.max(*seg_align);
+}
+#[test]
+fn test_align_seg() {
+    let mut seg: Vec<u8> = vec![];
+    let mut align = 1;
+
+    align_seg(&mut seg, &mut align, 8);
+    assert_eq!(seg.len(), 0);
+    assert_eq!(align, 8);
+
+    seg.push(0);
+    assert_eq!(seg.len(), 1);
+    align_seg(&mut seg, &mut align, 4);
+    assert_eq!(seg.len(), 4);
+    assert_eq!(align, 8);
 }
 
 struct SegmentBases {
@@ -1223,7 +1245,7 @@ impl Default for Predefines {
 /// Notably, `&mut &[u8]` can be used, which is useful for assembling an asm file stored in a string: `&mut some_string.as_bytes()`.
 /// 
 /// `asm_name` is the effective name of the source file (the assembly program can access its own file name).
-/// It is recommended that `asm_name` be meaningful, as it is might be used by the `asm` program to construct error messages, but this is not required.
+/// It is recommended that `asm_name` be meaningful, as it might be used by the `asm` program to construct error messages, but this is not required.
 pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -> Result<ObjectFile, AsmError> {
     let mut args = AssembleArgs {
         file_name: asm_name,
@@ -1507,7 +1529,8 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 );
 
                                 let (reg, addr) = match (a, b) {
-                                    (Argument::CPURegister(reg), Argument::Address(addr)) => {
+                                    (Argument::CPURegister(reg), Argument::Address { addr, mask }) => {
+                                        if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: args.line_num, pos: None, inner_err: None }); }
                                         if reg.size == Size::Byte { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(0), got: reg.size, expected: vec![Size::Word, Size::Dword, Size::Qword] }, line_num: args.line_num, pos: None, inner_err: None }); }
                                         (reg, addr)
                                     }
@@ -1594,7 +1617,14 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::FSUB(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUB as u8, None, int, pop)?,
                             Instruction::FSUBR(int, pop) => args.process_fpu_binary_op(arguments, OPCode::FSUBR as u8, None, int, pop)?,
                             
+                            Instruction::KMOV(size) => args.process_kmov(arguments, size)?,
+
+                            Instruction::VPUMove { elem_size, packed, aligned } => args.process_vpu_vec_move(arguments, elem_size, packed, aligned)?,
+                            Instruction::VPUBinary { op, ext_op, elem_size, packed } => args.process_vpu_binary_op(arguments, op, ext_op, elem_size, packed)?,
+
                             Instruction::DEBUG(ext) => args.process_no_arg_op(arguments, Some(OPCode::DEBUG as u8), Some(ext))?,
+
+                            Instruction::Suggest { from, to } => return Err(AsmError { kind: AsmErrorKind::SuggestInstruction { from, to }, line_num: args.line_num, pos: None, inner_err: None }),
                         }
                     }
         
@@ -1796,7 +1826,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     // account for segment alignments so we can start taking absolute addresses
     { let s = text.len();                             pad(&mut text, align_off(s, rodata_align)); }
     { let s = text.len() + rodata.len();              pad(&mut rodata, align_off(s, data_align)); }
-    { let s = text.len() + rodata.len() + data.len(); pad(&mut text, align_off(s, rodata_align)); }
+    { let s = text.len() + rodata.len() + data.len(); pad(&mut data, align_off(s, bss_align)); }
     let illegal_tag = MergedSymbolTag { src: !0, line_num: !0 }; // we use this tag for things that will always succeed
 
     // now we can go ahead and resolve all the missing binaries with absolute addresses in rodata

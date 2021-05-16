@@ -82,6 +82,8 @@ pub enum ExecError {
     FPUOverflow,
     /// A pop operation from the FPU register stack failed.
     FPUUnderflow,
+    /// An aligned vector instruction was given unaligned memory.
+    VPUAlignmentViolation,
 }
 
 /// Reason why execution stopped.
@@ -370,6 +372,25 @@ impl Memory {
         [ get_f64, set_f64 => f64 ],
         [ get_f80, set_f80 => F80 ],
     }
+
+    pub(crate) fn get_raw(&self, pos: u64, size: u8) -> Result<u64, ExecError> {
+        Ok(match size {
+            0 => self.get_u8(pos)? as u64,
+            1 => self.get_u16(pos)? as u64,
+            2 => self.get_u32(pos)? as u64,
+            3 => self.get_u64(pos)?,
+            _ => panic!(),
+        })
+    }
+    pub(crate) fn set_raw(&mut self, pos: u64, size: u8, value: u64) -> Result<(), ExecError> {
+        match size {
+            0 => self.set_u8(pos, value as u8),
+            1 => self.set_u16(pos, value as u16),
+            2 => self.set_u32(pos, value as u32),
+            3 => self.set_u64(pos, value),
+            _ => panic!(),
+        }
+    }
 }
 
 macro_rules! register_aliases {
@@ -580,6 +601,7 @@ impl Default for FPU {
 #[derive(Default)]
 pub struct VPU {
     pub regs: [ZMMRegister; 32],
+    pub kregs: [u64; 8],
     pub mxcsr: MXCSR,
 }
 
@@ -677,6 +699,9 @@ impl Emulator {
         }
         for reg in self.vpu.regs.iter_mut() {
             self.rng.fill_bytes(&mut reg.0);
+        }
+        for reg in self.vpu.kregs.iter_mut() {
+            *reg = self.rng.gen();
         }
 
         // but these registers have a well defined initial state
@@ -806,6 +831,8 @@ impl Emulator {
                         OPCode::FSUB => self.exec_fsub(),
                         OPCode::FSUBR => self.exec_fsubr(),
 
+                        OPCode::TRANS => self.exec_trans(),
+                        OPCode::VPUBinary => self.exec_vpu_binary_op(),
                         OPCode::DEBUG => self.exec_debug(),
                     }
                 }
@@ -1851,7 +1878,6 @@ impl Emulator {
     }
     fn exec_fsub(&mut self) -> Result<(), ExecError> {
         let (s, a, b) = self.read_fpu_binary_op()?;
-        println!("a: {} b: {}", a, b);
         let res = a - b;
         self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
         self.store_fpu_binary_op_result(s, &res)
@@ -1861,6 +1887,183 @@ impl Emulator {
         let res = b - a;
         self.fpu.status.0 ^= self.rng.gen::<u16>() & mask!(Status: MASK_C0 | MASK_C2 | MASK_C3);
         self.store_fpu_binary_op_result(s, &res)
+    }
+
+    /*
+    [8: op]
+        op = 0:  kmovb -- kreg <- reg [3: kreg][1:][4: reg]
+        op = 1:  kmovw -- kreg <- reg [3: kreg][1:][4: reg]
+        op = 2:  kmovd -- kreg <- reg [3: kreg][1:][4: reg]
+        op = 3:  kmovq -- kreg <- reg [3: kreg][1:][4: reg]
+
+        op = 4:  kmovb -- reg <- kreg [4: reg][1:][3: kreg]
+        op = 5:  kmovw -- reg <- kreg [4: reg][1:][3: kreg]
+        op = 6:  kmovd -- reg <- kreg [4: reg][1:][3: kreg]
+        op = 7:  kmovq -- reg <- kreg [4: reg][1:][3: kreg]
+
+        op = 8:  kmovb -- kreg <- kreg [3: dest][2:][3: src]
+        op = 9:  kmovw -- kreg <- kreg [3: dest][2:][3: src]
+        op = 10: kmovd -- kreg <- kreg [3: dest][2:][3: src]
+        op = 11: kmovq -- kreg <- kreg [3: dest][2:][3: src]
+
+        op = 12: kmovb -- kreg <- mem [3: dest][5:]    [address]
+        op = 13: kmovw -- kreg <- mem [3: dest][5:]    [address]
+        op = 14: kmovd -- kreg <- mem [3: dest][5:]    [address]
+        op = 15: kmovq -- kreg <- mem [3: dest][5:]    [address]
+
+        op = 16: kmovb -- mem <- kreg [5:][3: src]    [address]
+        op = 17: kmovw -- mem <- kreg [5:][3: src]    [address]
+        op = 18: kmovd -- mem <- kreg [5:][3: src]    [address]
+        op = 19: kmovq -- mem <- kreg [5:][3: src]    [address]
+
+        op = 20: movdqa8  -- vreg <- mem  [3: mask][5: dest]    [1: zeroing][2: vreg size][5:]        [address src]
+        op = 21: movdqa16 -- vreg <- mem  [3: mask][5: dest]    [1: zeroing][2: vreg size][5:]        [address src]
+        op = 22: movdqa32 -- vreg <- mem  [3: mask][5: dest]    [1: zeroing][2: vreg size][5:]        [address src]
+        op = 23: movdqa64 -- vreg <- mem  [3: mask][5: dest]    [1: zeroing][2: vreg size][5:]        [address src]
+
+        op = 24: movdqa8  -- mem <- vreg  [3: mask][5:]         [1: zeroing][2: vreg size][5: src]    [address dest]
+        op = 25: movdqa16 -- mem <- vreg  [3: mask][5:]         [1: zeroing][2: vreg size][5: src]    [address dest]
+        op = 26: movdqa32 -- mem <- vreg  [3: mask][5:]         [1: zeroing][2: vreg size][5: src]    [address dest]
+        op = 27: movdqa64 -- mem <- vreg  [3: mask][5:]         [1: zeroing][2: vreg size][5: src]    [address dest]
+
+        op = 28: movdqa8  -- vreg <- vreg [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src]
+        op = 29: movdqa16 -- vreg <- vreg [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src]
+        op = 30: movdqa32 -- vreg <- vreg [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src]
+        op = 31: movdqa64 -- vreg <- vreg [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src]
+
+        op = 32-43: same as 20-31 except unaligned
+        op = 44-55: same as 20-31 except (unaligned) scalar
+    */
+    fn exec_trans(&mut self) -> Result<(), ExecError> {
+        match self.get_mem_adv_u8()? {
+            v @ 0..=19 => {
+                let s = self.get_mem_adv_u8()? as usize;
+                let size = v & 3;
+                match v {
+                    0..=3 => self.vpu.kregs[s >> 5] = truncate(self.cpu.regs[s & 15].0, size),
+                    4..=7 => self.cpu.regs[s >> 4].0 = truncate(self.vpu.kregs[s & 7], size),
+                    8..=11 => { let t = self.vpu.kregs[s & 7]; self.vpu.kregs[s >> 5] = truncate(t, size); }
+                    12..=19 => {
+                        let m = self.get_address_adv()?;
+                        match v {
+                            12..=15 => self.vpu.kregs[s >> 5] = self.memory.get_raw(m, size)?,
+                            16..=19 => self.memory.set_raw(m, size, self.vpu.kregs[s & 7])?,
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            v @ 20..=55 => {
+                let s1 = self.get_mem_adv_u8()?;
+                let s2 = self.get_mem_adv_u8()?;
+                let reg_size = (s2 >> 5) & 3;
+                let elem_size = v & 3;
+                let zeroing = s2 & 0x80 != 0;
+                let aligned = v <= 31;
+                let scalar = v >= 44;
+                let mut mask = { let t = s1 as usize >> 5; if t != 0 { self.vpu.kregs[t] } else { u64::MAX } };
+                match v {
+                    20..=23 | 32..=35 | 44..=47 => {
+                        let mut m = self.get_address_adv()?;
+                        if aligned && m & ((16 << reg_size) - 1) != 0 { return Err(ExecError::VPUAlignmentViolation); }
+                        let dest = &mut self.vpu.regs[s1 as usize & 31];
+                        for i in 0..if scalar { 1 } else { (16 << reg_size) >> elem_size } {
+                            if mask & 1 != 0 {
+                                dest.set(i, elem_size, self.memory.get_raw(m, elem_size)?);
+                            }
+                            else if zeroing {
+                                dest.set(i, elem_size, 0);
+                            }
+                            m += 1 << elem_size;
+                            mask >>= 1;
+                        }
+                    }
+                    24..=27 | 36..=39 | 48..=51 => {
+                        let mut m = self.get_address_adv()?;
+                        if aligned && m & ((16 << reg_size) - 1) != 0 { return Err(ExecError::VPUAlignmentViolation); }
+                        let src = &self.vpu.regs[s2 as usize & 31];
+                        for i in 0..if scalar { 1 } else { (16 << reg_size) >> elem_size } {
+                            if mask & 1 != 0 {
+                                self.memory.set_raw(m, elem_size, src.get(i, elem_size))?;
+                            }
+                            else if zeroing {
+                                self.memory.set_raw(m, elem_size, 0)?;
+                            }
+                            m += 1 << elem_size;
+                            mask >>= 1;
+                        }
+                    }
+                    28..=31 | 40..=43 | 52..=55 => {
+                        let src = self.vpu.regs[s2 as usize & 31];
+                        let dest = &mut self.vpu.regs[s1 as usize & 31];
+                        for i in 0..if scalar { 1 } else { (16 << reg_size) >> elem_size } {
+                            if mask & 1 != 0 {
+                                dest.set(i, elem_size, src.get(i, elem_size));
+                            }
+                            else if zeroing {
+                                dest.set(i, elem_size, 0);
+                            }
+                            mask >>= 1;
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => return Err(ExecError::InvalidOpEncoding),
+        }
+        Ok(())
+    }
+
+    // returns (elem size, f)
+    fn get_vpu_binary_op(op: u8) -> Result<(u8, fn(u64, u64) -> Result<u64, ExecError>), ExecError> {
+        Ok(match op {
+            0 => (3, |a, b| Ok((f64::from_bits(a) + f64::from_bits(b)).to_bits())),
+            1 => (2, |a, b| Ok((f32::from_bits(a as u32) + f32::from_bits(b as u32)).to_bits() as u64)),
+            _ => return Err(ExecError::InvalidOpEncoding),
+        })
+    }
+
+    /*
+    [8: op]    [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src1]    [1: mem][2:][5: src2]    ([address src2])
+        vreg size = 0: xmm
+        vreg size = 1: ymm
+        vreg size = 2: zmm
+        vreg size = 3: scalar
+
+        mask = 0: no masking (0xff..ff)
+    */
+    fn exec_vpu_binary_op(&mut self) -> Result<(), ExecError> {
+        let (elem_size, f) = Self::get_vpu_binary_op(self.get_mem_adv_u8()?)?;
+        let s1 = self.get_mem_adv_u8()?;
+        let s2 = self.get_mem_adv_u8()?;
+        let s3 = self.get_mem_adv_u8()?;
+        
+        let zeroing = s2 & 0x80 != 0;
+        let mut mask = { let t = s1 as usize >> 5; if t != 0 { self.vpu.kregs[t] } else { u64::MAX } };
+        let (vreg_size, scalar) = { let v = (s2 >> 5) & 3; (v, v == 3) };
+        let src2 = if s3 & 0x80 == 0 { self.vpu.regs[s3 as usize & 31] } else {
+            let m = self.get_address_adv()?;
+            if !scalar && m & ((16 << vreg_size) - 1) != 0 { return Err(ExecError::VPUAlignmentViolation); }
+            let mut v = ZMMRegister::default();
+            let bytes = if scalar { 1 << elem_size } else { 16 << vreg_size };
+            v.0[..bytes].copy_from_slice(self.memory.get(m, bytes as u64)?);
+            v
+        };
+        let src1 = self.vpu.regs[s2 as usize & 31];
+        let dest = &mut self.vpu.regs[s1 as usize & 31];
+
+        for i in 0..if scalar { 1 } else { (16 << vreg_size) >> elem_size } {
+            if mask & 1 != 0 {
+                dest.set(i, elem_size, f(src1.get(i, elem_size), src2.get(i, elem_size))?);
+            }
+            else if zeroing {
+                dest.set(i, elem_size, 0);
+            }
+            mask >>= 1;
+        }
+
+        Ok(())
     }
 
     fn get_cpu_debug_string(&self) -> String {

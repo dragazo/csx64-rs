@@ -40,6 +40,24 @@ fn test_advance_cursor() {
     assert_eq!(cursor.peek(), None);
 }
 
+fn next_nonwhite_pos(s: &str, pos: usize) -> Option<usize> {
+    s[pos..].find(|c: char| !c.is_whitespace()).map(|p| p + pos)
+}
+#[test]
+fn test_next_nonwhite_pos() {
+    assert_eq!(next_nonwhite_pos("hello    world", 0), Some(0));
+    assert_eq!(next_nonwhite_pos("hello    world", 2), Some(2));
+    assert_eq!(next_nonwhite_pos("hello    world", 4), Some(4));
+    assert_eq!(next_nonwhite_pos("hello    world", 5), Some(9));
+    assert_eq!(next_nonwhite_pos("hello    world", 8), Some(9));
+    assert_eq!(next_nonwhite_pos("hello    world", 9), Some(9));
+    assert_eq!(next_nonwhite_pos("hello    world", 10), Some(10));
+    assert_eq!(next_nonwhite_pos("hello    world", 13), Some(13));
+    assert_eq!(next_nonwhite_pos("hello    world", 14), None);
+    assert_eq!(next_nonwhite_pos("hello    world       ", 14), None);
+    assert_eq!(next_nonwhite_pos("hello    world       ", 16), None);
+}
+
 fn parse_size_str(val: &str, success: usize, failure: usize) -> (Option<Size>, usize) {
     match SIZE_KEYWORDS.get(&Caseless(val)) {
         Some(size) => (Some(*size), success),
@@ -102,7 +120,6 @@ impl AssembleArgs<'_> {
             }
         }
         else {
-            println!("got name: {}", name);
             if !is_valid_symbol_name(name) { return Err(AsmError { kind: AsmErrorKind::InvalidSymbolName, line_num: self.line_num, pos: Some(err_pos), inner_err: None }); }
             Ok((name.into(), Locality::Nonlocal))
         }
@@ -816,7 +833,7 @@ impl AssembleArgs<'_> {
                             _ => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: None, got: ArgumentType::Imm, expected: &[ArgumentType::VPUMaskRegister] }, line_num: self.line_num, pos: Some(raw_start), inner_err: None }),
                         }
                     }
-                    Argument::VPUMaskRegisterInfo(reg) => {
+                    Argument::VPUMaskRegister(reg) => {
                         // id zero is a special encoding for no mask, so not allowed as an opmask
                         if reg.id == 0 { return Err(AsmError { kind: AsmErrorKind::VPUOpmaskWasK0, line_num: self.line_num, pos: Some(soft_err_pos), inner_err: None }); }
 
@@ -849,7 +866,7 @@ impl AssembleArgs<'_> {
         let (token, token_aft) = grab_alnum_token(raw_line, raw_start, raw_stop);
         if let Some(reg) = CPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::CPURegister(*reg), token_aft)); }
         if let Some(reg) = FPU_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::FPURegister(*reg), token_aft)); }
-        if let Some(reg) = VPU_MASK_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::VPUMaskRegisterInfo(*reg), token_aft)); }
+        if let Some(reg) = VPU_MASK_REGISTER_INFO.get(&Caseless(token)) { return Ok((Argument::VPUMaskRegister(*reg), token_aft)); }
         if let Some(seg) = SEGMENTS.get(&Caseless(token)) { return Ok((Argument::Segment(*seg), token_aft)); }
         
         // also try matching vpu register by name, but it has some extra parsing logic
@@ -860,7 +877,11 @@ impl AssembleArgs<'_> {
 
         // next, try address, since it could parse as an expr if given explicit size
         match self.extract_address(raw_line, raw_start, raw_stop) {
-            Ok((addr, aft)) => return Ok((Argument::Address(addr), aft)),
+            Ok((addr, aft)) => {
+                let err_pos = next_nonwhite_pos(raw_line, raw_start).unwrap();
+                let (mask, mask_aft) = self.extract_vpu_mask(err_pos, raw_line, aft, raw_stop)?;
+                return Ok((Argument::Address { addr, mask }, mask_aft))
+            }
             Err(e) => if let AsmErrorKind::BadAddress(_) = e.kind { return Err(e); } // if we know it was an address, fail here
         }
 
@@ -1071,10 +1092,10 @@ impl AssembleArgs<'_> {
         let pseudo_op = (r1.id << 4) | (if r1.high { 1 } else { 0 });
 
         let mismatched_sizes = match (&mut arg2, &arg3) {
-            (Argument::CPURegister(reg), Argument::CPURegister(_)) | (Argument::CPURegister(reg), Argument::Imm(_)) | (Argument::CPURegister(reg), Argument::Address(_)) => {
+            (Argument::CPURegister(reg), Argument::CPURegister(_)) | (Argument::CPURegister(reg), Argument::Imm(_)) | (Argument::CPURegister(reg), Argument::Address { .. }) => {
                 if reg.size != r1.size { Some((reg.size, r1.size)) } else { None }
             }
-            (Argument::Address(addr), Argument::CPURegister(_)) | (Argument::Address(addr), Argument::Imm(_)) => match addr.pointed_size {
+            (Argument::Address { addr, .. }, Argument::CPURegister(_)) | (Argument::Address { addr, .. }, Argument::Imm(_)) => match addr.pointed_size {
                 Some(size) => if size != r1.size { Some((size, r1.size)) } else { None },
                 None => { addr.pointed_size = Some(r1.size); None }, // if no size present, set it to r1 size to propagate to binary handler
             }
@@ -1115,7 +1136,8 @@ impl AssembleArgs<'_> {
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }) | (if src.high { 1 } else { 0 }))?;
                 self.append_byte(src.id)?;
             }
-            (Argument::CPURegister(dest), Argument::Address(src)) => {
+            (Argument::CPURegister(dest), Argument::Address { addr: src, mask }) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 if let Some(src_size) = src.pointed_size {
                     match force_b_rm_size {
                         Some(b_size) => if src_size != b_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: src_size, expected: vec![b_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
@@ -1139,7 +1161,8 @@ impl AssembleArgs<'_> {
                 self.append_byte(1 << 4)?;
                 self.append_val(src.size.unwrap(), src.expr, allowed_type)?;
             }
-            (Argument::Address(dest), Argument::CPURegister(src)) => {
+            (Argument::Address { addr: dest, mask }, Argument::CPURegister(src)) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 let a_size = match force_b_rm_size {
                     Some(b_size) => {
                         if src.size != b_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: src.size, expected: vec![b_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
@@ -1160,7 +1183,8 @@ impl AssembleArgs<'_> {
                 self.append_byte((3 << 4) | src.id)?;
                 self.append_address(dest)?;
             }
-            (Argument::Address(dest), Argument::Imm(mut src)) => {
+            (Argument::Address { addr: dest, mask }, Argument::Imm(mut src)) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 let a_size = match force_b_imm_size {
                     Some(b_size) => {
                         match src.size {
@@ -1215,7 +1239,8 @@ impl AssembleArgs<'_> {
                 self.append_byte((dest.id << 4) | (dest.size.basic_sizecode().unwrap() << 2) | (if dest.high { 2 } else { 0 }) | 0)?;
                 self.append_byte((if src.high { 0x80 } else { 0 }) | src.id)?;
             }
-            (Argument::CPURegister(dest), Argument::Address(src)) => {
+            (Argument::CPURegister(dest), Argument::Address { addr: src, mask }) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 if let Some(size) = src.pointed_size {
                     if dest.size != size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest.size, size), line_num: self.line_num, pos: None, inner_err: None }); }
                 }
@@ -1240,8 +1265,8 @@ impl AssembleArgs<'_> {
         
         match (&args[0], &args[1]) {
             (Argument::CPURegister(_), Argument::CPURegister(_)) => (),
-            (Argument::CPURegister(_), Argument::Address(_)) => (),
-            (Argument::Address(_), Argument::CPURegister(_)) => args.swap(0, 1),
+            (Argument::CPURegister(_), Argument::Address { .. }) => (),
+            (Argument::Address { .. }, Argument::CPURegister(_)) => args.swap(0, 1),
             _ => return Err(AsmError { kind: AsmErrorKind::ArgumentsInvalidTypes { got: vec![args[0].get_type(), args[1].get_type()], expected: supported_types }, line_num: self.line_num, pos: None, inner_err: None }),
         }
         self.process_binary_lvalue_op(args, op, ext_op, allowed_sizes)
@@ -1258,7 +1283,8 @@ impl AssembleArgs<'_> {
                 if !allowed_sizes.contains(&reg.size) { return Err(AsmError { kind: AsmErrorKind::UnsupportedOperandSize { got: reg.size, expected: allowed_sizes }, line_num: self.line_num, pos: None, inner_err: None }); }
                 self.append_byte((reg.id << 4) | (reg.size.basic_sizecode().unwrap() << 2) | (if reg.high { 2 } else { 0 }))?;
             }
-            Argument::Address(addr) => {
+            Argument::Address { addr, mask } => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 let size = match addr.pointed_size {
                     None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     Some(s) => s,
@@ -1293,7 +1319,8 @@ impl AssembleArgs<'_> {
                 self.append_byte((size.basic_sizecode().unwrap() << 2) | 2)?;
                 self.append_val(size, imm.expr, allowed_type)?;
             }
-            Argument::Address(addr) => {
+            Argument::Address { addr, mask } => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 let size = match addr.pointed_size.or(default_size) {
                     None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     Some(s) => s,
@@ -1317,7 +1344,8 @@ impl AssembleArgs<'_> {
 
         match args.into_iter().next().unwrap() {
             Argument::FPURegister(src) => self.append_byte((src.id << 4) | 0)?,
-            Argument::Address(addr) => {
+            Argument::Address { addr, mask } => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                 let size = match addr.pointed_size {
                     None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                     Some(s) => s,
@@ -1350,7 +1378,8 @@ impl AssembleArgs<'_> {
         else if integral {
             if args.len() != 1 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1]), line_num: self.line_num, pos: None, inner_err: None }); }
             match args.into_iter().next().unwrap() {
-                Argument::Address(addr) => {
+                Argument::Address { addr, mask } => {
+                    if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                     let mode = match addr.pointed_size {
                         None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                         Some(size) => match size {
@@ -1392,7 +1421,8 @@ impl AssembleArgs<'_> {
         else {
             match args.len() {
                 1 => match args.into_iter().next().unwrap() {
-                    Argument::Address(addr) => {
+                    Argument::Address { addr, mask } => {
+                        if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
                         let mode = match addr.pointed_size {
                             None => return Err(AsmError { kind: AsmErrorKind::CouldNotDeduceOperandSize, line_num: self.line_num, pos: None, inner_err: None }),
                             Some(size) => match size {
@@ -1427,6 +1457,196 @@ impl AssembleArgs<'_> {
                 }
                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2]), line_num: self.line_num, pos: None, inner_err: None }),
             }
+        }
+
+        Ok(())
+    }
+
+    // breaks down an opmask into its kreg id and zeroing flag - k0 is forbidden
+    fn decompose_opmask(&self, opmask: Option<VPUMaskType>) -> Result<(u8, bool), AsmError> {
+        Ok(match opmask {
+            Some(VPUMaskType::Blend(r)) if r.id != 0 => (r.id, false),
+            Some(VPUMaskType::Zero(r)) if r.id != 0 => (r.id, true),
+            Some(_) => return Err(AsmError { kind: AsmErrorKind::VPUOpmaskWasK0, line_num: self.line_num, pos: None, inner_err: None }),
+            None => (0, false),
+        })
+    }
+
+    pub(crate) fn process_vpu_vec_move(&mut self, args: Vec<Argument>, elem_size: Option<Size>, packed: bool, aligned: bool) -> Result<(), AsmError> {
+        debug_assert!(packed || elem_size.is_some()); // scalar => elem_size
+        debug_assert!(packed || !aligned);            // scalar => !aligned
+        let ext_op_base = (if !packed { 44 } else if aligned { 20 } else { 32 }) + elem_size.unwrap_or(Size::Qword).basic_sizecode().unwrap();
+
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
+        let mut args = args.into_iter();
+        let arg1 = args.next().unwrap();
+        let arg2 = args.next().unwrap();
+
+        let supported_types = slice_slice!(ArgumentType:
+            [VPURegister, Address],
+            [Address, VPURegister],
+            [VPURegister, VPURegister],
+        );
+
+        self.append_byte(OPCode::TRANS as u8)?;
+
+        match (arg1, arg2) {
+            (Argument::VPURegister { reg, mask }, Argument::Address { addr, mask: src_mask }) => {
+                if src_mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                if let Some(size) = addr.pointed_size {
+                    if packed && size != reg.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(reg.size, size), line_num: self.line_num, pos: None, inner_err: None }); }
+                    if !packed && size != elem_size.unwrap() { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: size, expected: vec![elem_size.unwrap()] }, line_num: self.line_num, pos: None, inner_err: None }); }
+                }
+                if elem_size.is_none() && mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnInstructionWithoutElemSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                let (mask_reg, zeroing) = self.decompose_opmask(mask)?;
+
+                self.append_byte(ext_op_base + 0)?;
+                self.append_byte((mask_reg << 5) | reg.id)?;
+                self.append_byte((if zeroing { 0x80 } else { 0 }) | (reg.size.vector_sizecode().unwrap() << 5))?;
+                self.append_address(addr)?;
+            }
+            (Argument::Address { addr, mask }, Argument::VPURegister { reg, mask: src_mask }) => {
+                if src_mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                if let Some(size) = addr.pointed_size {
+                    if packed && size != reg.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(size, reg.size), line_num: self.line_num, pos: None, inner_err: None }); }
+                    if !packed && size != elem_size.unwrap() { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: size, expected: vec![elem_size.unwrap()] }, line_num: self.line_num, pos: None, inner_err: None }); }
+                }
+                if elem_size.is_none() && mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnInstructionWithoutElemSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                let (mask_reg, zeroing) = self.decompose_opmask(mask)?;
+
+                self.append_byte(ext_op_base + 4)?;
+                self.append_byte(mask_reg << 5)?;
+                self.append_byte((if zeroing { 0x80 } else { 0 }) | (reg.size.vector_sizecode().unwrap() << 5) | reg.id)?;
+                self.append_address(addr)?;
+            }
+            (Argument::VPURegister { reg: dest_reg, mask }, Argument::VPURegister { reg: src_reg, mask: src_mask }) => {
+                if src_mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                if dest_reg.size != src_reg.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest_reg.size, src_reg.size), line_num: self.line_num, pos: None, inner_err: None }); }
+                if elem_size.is_none() && mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnInstructionWithoutElemSize, line_num: self.line_num, pos: None, inner_err: None }); }
+                let (mask_reg, zeroing) = self.decompose_opmask(mask)?;
+
+                self.append_byte(ext_op_base + 8)?;
+                self.append_byte((mask_reg << 5) | dest_reg.id)?;
+                self.append_byte((if zeroing { 0x80 } else { 0 }) | (dest_reg.size.vector_sizecode().unwrap() << 5) | src_reg.id)?;
+            }
+            (a, b) => return Err(AsmError { kind: AsmErrorKind::ArgumentsInvalidTypes { got: vec![a.get_type(), b.get_type()], expected: supported_types }, line_num: self.line_num, pos: None, inner_err: None }),
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn process_vpu_binary_op(&mut self, args: Vec<Argument>, op: u8, ext_op: Option<u8>, elem_size: Size, packed: bool) -> Result<(), AsmError> {
+        if args.len() != 2 && args.len() != 3 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2, 3]), line_num: self.line_num, pos: None, inner_err: None }); }
+        
+        let shorthand = args.len() == 2;
+        let mut args = args.into_iter();
+        let (dest, mask_reg, zeroing) = match args.next().unwrap() {
+            Argument::VPURegister { reg, mask } => self.decompose_opmask(mask).map(|r| (reg, r.0, r.1))?,
+            x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: Some(0), got: x.get_type(), expected: &[ArgumentType::VPURegister] }, line_num: self.line_num, pos: None, inner_err: None }),
+        };
+        let src1 = if shorthand { dest } else {
+            match args.next().unwrap() {
+                Argument::VPURegister { reg, mask } => {
+                    if reg.size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest.size, reg.size), line_num: self.line_num, pos: None, inner_err: None }); }
+                    if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                    reg
+                }
+                x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: Some(1), got: x.get_type(), expected: &[ArgumentType::VPURegister] }, line_num: self.line_num, pos: None, inner_err: None }),
+            }
+        };
+        //[8: op]    [3: mask][5: dest]    [1: zeroing][2: vreg size][5: src1]    [1: mem][2:][5: src2]    ([address src2])
+        self.append_byte(op)?;
+        if let Some(ext) = ext_op { self.append_byte(ext)? }
+        
+        self.append_byte((mask_reg << 5) | dest.id)?;
+        self.append_byte((if zeroing { 0x80 } else { 0 }) | (if packed { dest.size.vector_sizecode().unwrap() } else { 3 } << 5) | src1.id)?;
+
+        let last_index = Some(if shorthand { 1 } else { 2 });
+        match args.next().unwrap() {
+            Argument::VPURegister { reg, mask } => {
+                if reg.size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest.size, reg.size), line_num: self.line_num, pos: None, inner_err: None }); }
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                
+                self.append_byte(reg.id)?;
+            }
+            Argument::Address { addr, mask } => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNondestArg, line_num: self.line_num, pos: None, inner_err: None }); }
+                if let Some(size) = addr.pointed_size {
+                    if packed && size != dest.size { return Err(AsmError { kind: AsmErrorKind::OperandsHadDifferentSizes(dest.size, size), line_num: self.line_num, pos: None, inner_err: None }); }
+                    if !packed && size != elem_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: size, expected: vec![elem_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
+                }
+                
+                self.append_byte(0x80)?;
+                self.append_address(addr)?;
+            }
+            x => return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidType { index: last_index, got: x.get_type(), expected: &[ArgumentType::VPURegister, ArgumentType::Address] }, line_num: self.line_num, pos: None, inner_err: None }),
+        };
+
+        Ok(())
+    }
+
+    pub(crate) fn process_kmov(&mut self, args: Vec<Argument>, size: Size) -> Result<(), AsmError> {
+        let reg_size = match size {
+            Size::Byte | Size::Word | Size::Dword => Size::Dword,
+            Size::Qword => Size::Qword,
+            _ => panic!(),
+        };
+
+        if args.len() != 2 { return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[2]), line_num: self.line_num, pos: None, inner_err: None }); }
+        let mut args = args.into_iter();
+        let arg1 = args.next().unwrap();
+        let arg2 = args.next().unwrap();
+
+        let supported_types = slice_slice!(ArgumentType:
+            [VPUMaskRegister, CPURegister],
+            [CPURegister, VPUMaskRegister],
+            [VPUMaskRegister, VPUMaskRegister],
+            [VPUMaskRegister, Address],
+            [Address, VPUMaskRegister],
+        );
+
+        self.append_byte(OPCode::TRANS as u8)?;
+
+        match (arg1, arg2) {
+            (Argument::VPUMaskRegister(dest), Argument::CPURegister(src)) => {
+                if src.size != reg_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: src.size, expected: vec![reg_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
+
+                debug_assert_ne!(src.size, Size::Byte); // we don't support high registers
+                self.append_byte(0 + size.basic_sizecode().unwrap())?;
+                self.append_byte((dest.id << 5) | src.id)?;
+            }
+            (Argument::CPURegister(dest), Argument::VPUMaskRegister(src)) => {
+                if dest.size != reg_size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(0), got: dest.size, expected: vec![reg_size] }, line_num: self.line_num, pos: None, inner_err: None }); }
+
+                debug_assert_ne!(dest.size, Size::Byte); // we don't support high registers
+                self.append_byte(4 + size.basic_sizecode().unwrap())?;
+                self.append_byte((dest.id << 4) | src.id)?;
+            }
+            (Argument::VPUMaskRegister(dest), Argument::VPUMaskRegister(src)) => {
+                self.append_byte(8 + size.basic_sizecode().unwrap())?;
+                self.append_byte((dest.id << 5) | src.id)?;
+            }
+            (Argument::VPUMaskRegister(dest), Argument::Address { addr, mask }) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
+                if let Some(s) = addr.pointed_size {
+                    if s != size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: s, expected: vec![size] }, line_num: self.line_num, pos: None, inner_err: None }); }
+                }
+                
+                self.append_byte(12 + size.basic_sizecode().unwrap())?;
+                self.append_byte(dest.id << 5)?;
+                self.append_address(addr)?;
+            }
+            (Argument::Address { addr, mask }, Argument::VPUMaskRegister(src)) => {
+                if mask.is_some() { return Err(AsmError { kind: AsmErrorKind::VPUMaskOnNonVecInstruction, line_num: self.line_num, pos: None, inner_err: None }); }
+                if let Some(s) = addr.pointed_size {
+                    if s != size { return Err(AsmError { kind: AsmErrorKind::ArgumentInvalidSize { index: Some(0), got: s, expected: vec![size] }, line_num: self.line_num, pos: None, inner_err: None }); }
+                }
+                
+                self.append_byte(16 + size.basic_sizecode().unwrap())?;
+                self.append_byte(src.id)?;
+                self.append_address(addr)?;
+            }
+            (a, b) => return Err(AsmError { kind: AsmErrorKind::ArgumentsInvalidTypes { got: vec![a.get_type(), b.get_type()], expected: supported_types }, line_num: self.line_num, pos: None, inner_err: None }),
         }
 
         Ok(())
@@ -2493,6 +2713,18 @@ fn test_parse_arg() {
         (Argument::VPURegister { reg: VPURegisterInfo { id: 0, size: Size::Xword }, mask: Some(VPUMaskType::Zero(VPUMaskRegisterInfo { id: 3 })) }, 26) => (),
         e => panic!("wrong value: {:?}", e),
     }
+    match c.extract_arg("g [0]{k1} g", 1, 11).unwrap() {
+        (Argument::Address { addr: Address { address_size: Size::Qword, r1: None, r2: None, pointed_size: None, base: None }, mask: Some(VPUMaskType::Blend(VPUMaskRegisterInfo { id: 1 })) }, 9) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g byte ptr [eax + edi]{k3}{z} g", 1, 31).unwrap() {
+        (Argument::Address { addr: Address { address_size: Size::Dword, r1: Some(_), r2: Some(_), pointed_size: Some(Size::Byte), base: None }, mask: Some(VPUMaskType::Zero(VPUMaskRegisterInfo { id: 3 })) }, 29) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
+    match c.extract_arg("g  dword    ptr  [qword rdi + 0x6]  {  k3  }  {  z  }  g", 1, 56).unwrap() {
+        (Argument::Address { addr: Address { address_size: Size::Qword, r1: _, r2: _, pointed_size: Some(Size::Dword), base: Some(_) }, mask: Some(VPUMaskType::Zero(VPUMaskRegisterInfo { id: 3 })) }, 53) => (),
+        e => panic!("wrong value: {:?}", e),
+    }
     match c.extract_arg("g  XmM0{z}  g", 1, 13) {
         Ok(v) => panic!("{:?}", v),
         Err(e) => {
@@ -2534,7 +2766,7 @@ fn test_parse_arg() {
         }
     }
     match c.extract_arg("g bYte PtR [20+rax] g", 1, 21).unwrap() {
-        (Argument::Address(Address { .. }), 19) => (),
+        (Argument::Address { .. }, 19) => (),
         e => panic!("wrong value: {:?}", e),
     }
     match c.extract_arg("g foo + bar g", 1, 13).unwrap() {

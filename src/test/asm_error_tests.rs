@@ -612,3 +612,43 @@ fn test_value_unknown_size() {
         }
     }
 }
+
+#[test]
+fn test_kmov_wrong_size() {
+    match assemble("test.asm", &mut "segment text\nkmovb k1, al".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: Size::Byte, expected } if expected == &[Size::Dword] => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\nkmovb k1, bh".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: Size::Byte, expected } if expected == &[Size::Dword] => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+    match assemble("test.asm", &mut "segment text\nkmovb k1, dword ptr [0]".as_bytes(), Default::default()) {
+        Ok(_) => panic!(),
+        Err(e) => {
+            match e.kind {
+                AsmErrorKind::ArgumentInvalidSize { index: Some(1), got: Size::Dword, expected } if expected == &[Size::Byte] => (),
+                k => panic!("{:?}", k),
+            }
+            assert_eq!(e.line_num, 2);
+            assert_eq!(e.pos, None);
+            assert!(e.inner_err.is_none());
+        }
+    }
+}

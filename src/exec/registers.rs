@@ -137,7 +137,23 @@ macro_rules! zmm_impl {
         pub fn $set(&mut self, index: usize, value: $t) {
             bytemuck::cast_slice_mut(&mut self.0)[index] = value.to_le()
         }
-    }
+    };
+    (signed $get:ident : $set:ident => $i:ident : $u:ident : $raw_get:ident : $raw_set:ident) => {
+        pub fn $get(&self, index: usize) -> $i {
+            self.$raw_get(index) as $i
+        }
+        pub fn $set(&mut self, index: usize, value: $i) {
+            self.$raw_set(index, value as $u)
+        }
+    };
+    (float $get:ident : $set:ident => $t:ident : $raw_get:ident : $raw_set:ident) => {
+        pub fn $get(&self, index: usize) -> $t {
+            $t::from_bits(self.$raw_get(index))
+        }
+        pub fn $set(&mut self, index: usize, value: $t) {
+            self.$raw_set(index, value.to_bits())
+        }
+    };
 }
 impl ZMMRegister {
     pub fn get_u8(&self, index: usize) -> u8 {
@@ -150,6 +166,33 @@ impl ZMMRegister {
     zmm_impl! { get_u16 : set_u16 => u16 }
     zmm_impl! { get_u32 : set_u32 => u32 }
     zmm_impl! { get_u64 : set_u64 => u64 }
+
+    zmm_impl! { signed get_i64 : set_i64 => i64 : u64 : get_u64 : set_u64 }
+    zmm_impl! { signed get_i32 : set_i32 => i32 : u32 : get_u32 : set_u32 }
+    zmm_impl! { signed get_i16 : set_i16 => i16 : u16 : get_u16 : set_u16 }
+    zmm_impl! { signed get_i8 : set_i8 => i8 : u8 : get_u8 : set_u8 }
+
+    zmm_impl! { float get_f64 : set_f64 => f64 : get_u64 : set_u64 }
+    zmm_impl! { float get_f32 : set_f32 => f32 : get_u32 : set_u32 }
+
+    pub(crate) fn get(&self, index: usize, size: u8) -> u64 {
+        match size {
+            0 => self.get_u8(index) as u64,
+            1 => self.get_u16(index) as u64,
+            2 => self.get_u32(index) as u64,
+            3 => self.get_u64(index),
+            _ => panic!(),
+        }
+    }
+    pub(crate) fn set(&mut self, index: usize, size: u8, value: u64) {
+        match size {
+            0 => self.set_u8(index, value as u8),
+            1 => self.set_u16(index, value as u16),
+            2 => self.set_u32(index, value as u32),
+            3 => self.set_u64(index, value),
+            _ => panic!(),
+        }
+    }
 }
 
 #[test]
