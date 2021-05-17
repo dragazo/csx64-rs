@@ -958,8 +958,8 @@ impl Emulator {
         let sizecode = (settings >> 2) & 3;
 
         let mut res = if settings & 0x80 != 0 { self.raw_get_mem_adv(sizecode)? } else { 0 };
-        if settings & 2 != 0 { res = res.wrapping_add(self.cpu.regs[regs as usize >> 4].raw_get(sizecode) << ((settings >> 4) & 3)); }
-        if settings & 1 != 0 { res = res.wrapping_add(self.cpu.regs[regs as usize & 15].raw_get(sizecode)); }
+        if settings & 2 != 0 { res = res.wrapping_add(self.cpu.regs[regs as usize >> 4].get_raw(sizecode) << ((settings >> 4) & 3)); }
+        if settings & 1 != 0 { res = res.wrapping_add(self.cpu.regs[regs as usize & 15].get_raw(sizecode)); }
 
         Ok(truncate(res, sizecode)) // make sure result is same size
     }
@@ -1036,7 +1036,7 @@ impl Emulator {
     fn store_ternary_op_result(&mut self, s1: u8, s2: u8, s3: u8, m: u64, res1: u64, res2: Option<u64>) -> Result<(), ExecError> {
         let sizecode = (s2 >> 2) & 3;
         if let Some(res2) = res2 { self.store_binary_op_result(s2, s3, m, res2)? }
-        if s1 & 1 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s1 as usize >> 4].raw_set(sizecode, res1); }
+        if s1 & 1 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s1 as usize >> 4].set_raw(sizecode, res1); }
         Ok(())
     }
 
@@ -1058,19 +1058,19 @@ impl Emulator {
         let (m, a, b) = match s2 >> 4 {
             0 => {
                 let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
-                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].get_raw(a_sizecode) };
+                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].get_raw(b_sizecode) };
                 (0, a, b)
             }
             1 => {
                 let b_sizecode = force_b_imm_sizecode.unwrap_or(a_sizecode);
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].get_raw(a_sizecode) };
                 let b = self.raw_get_mem_adv(b_sizecode)?;
                 (0, a, b)
             }
             2 => {
                 let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
-                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].raw_get(a_sizecode) };
+                let a = if !get_a { 0 } else if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s1 as usize >> 4].get_raw(a_sizecode) };
                 let m = self.get_address_adv()?;
                 let b = self.raw_get_mem(m, b_sizecode)?;
                 (m, a, b)
@@ -1079,7 +1079,7 @@ impl Emulator {
                 let b_sizecode = force_b_rm_sizecode.unwrap_or(a_sizecode);
                 let m = self.get_address_adv()?;
                 let a = if !get_a { 0 } else { self.raw_get_mem(m, a_sizecode)? };
-                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(b_sizecode) };
+                let b = if s1 & 1 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].get_raw(b_sizecode) };
                 (m, a, b)
             }
             4 => {
@@ -1097,7 +1097,7 @@ impl Emulator {
     fn store_binary_op_result(&mut self, s1: u8, s2: u8, m: u64, res: u64) -> Result<(), ExecError> {
         let sizecode = (s1 >> 2) & 3;
         if s2 <= 0x2f { // modes 0-2 -- this method avoids having to perform the shift
-            if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res as u8); } else { self.cpu.regs[s1 as usize >> 4].raw_set(sizecode, res); }
+            if s1 & 2 != 0 { self.cpu.regs[s1 as usize >> 4].set_x8h(res as u8); } else { self.cpu.regs[s1 as usize >> 4].set_raw(sizecode, res); }
             Ok(())
         }
         else { self.raw_set_mem(m, sizecode, res) } // modes 3-4 -- the corresponding read already validated mode was in the proper range
@@ -1113,10 +1113,10 @@ impl Emulator {
         let s = self.get_mem_adv_u8()?;
         let sizecode = (s >> 2) & 3;
 
-        let a = if s & 2 != 0 { self.cpu.regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s as usize >> 4].raw_get(sizecode) };
+        let a = if s & 2 != 0 { self.cpu.regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s as usize >> 4].get_raw(sizecode) };
         if s & 1 == 0 {
             let s2 = self.get_mem_adv_u8()?;
-            let b = if s2 & 0x80 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].raw_get(sizecode) };
+            let b = if s2 & 0x80 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].get_raw(sizecode) };
             Ok((s, s2 as u64, a, b))
         } else {
             let m = self.get_address_adv()?;
@@ -1126,9 +1126,9 @@ impl Emulator {
     }
     fn store_binary_lvalue_result(&mut self, s: u8, sm2: u64, res1: u64, res2: u64) -> Result<(), ExecError> {
         let sizecode = (s >> 2) & 3;
-        if s & 2 != 0 { self.cpu.regs[s as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s as usize >> 4].raw_set(sizecode, res1); }
+        if s & 2 != 0 { self.cpu.regs[s as usize >> 4].set_x8h(res1 as u8); } else { self.cpu.regs[s as usize >> 4].set_raw(sizecode, res1); }
         if s & 1 == 0 {
-            if sm2 & 0x80 != 0 { self.cpu.regs[sm2 as usize & 15].set_x8h(res2 as u8); } else { self.cpu.regs[sm2 as usize & 15].raw_set(sizecode, res2); }
+            if sm2 & 0x80 != 0 { self.cpu.regs[sm2 as usize & 15].set_x8h(res2 as u8); } else { self.cpu.regs[sm2 as usize & 15].set_raw(sizecode, res2); }
             Ok(())
         } else {
             self.raw_set_mem(sm2, sizecode, res2)
@@ -1147,7 +1147,7 @@ impl Emulator {
 
         let (m, v) = {
             if s & 1 == 0 {
-                let v = if !get { 0 } else if s & 2 != 0 { self.cpu.regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s as usize >> 4].raw_get(sizecode) };
+                let v = if !get { 0 } else if s & 2 != 0 { self.cpu.regs[s as usize >> 4].get_x8h() as u64 } else { self.cpu.regs[s as usize >> 4].get_raw(sizecode) };
                 (0, v)
             } else {
                 let m = self.get_address_adv()?;
@@ -1161,7 +1161,7 @@ impl Emulator {
     fn store_unary_op_result(&mut self, s: u8, m: u64, res: u64) -> Result<(), ExecError> {
         let sizecode = (s >> 2) & 3;
         if s & 1 == 0 {
-            if s & 2 != 0 { self.cpu.regs[s as usize >> 4].set_x8h(res as u8); } else { self.cpu.regs[s as usize >> 4].raw_set(sizecode, res); }
+            if s & 2 != 0 { self.cpu.regs[s as usize >> 4].set_x8h(res as u8); } else { self.cpu.regs[s as usize >> 4].set_raw(sizecode, res); }
             Ok(())
         } else { self.raw_set_mem(m, sizecode, res) }
     }
@@ -1178,7 +1178,7 @@ impl Emulator {
         let sizecode = (s >> 2) & 3;
 
         let v = match s & 3 {
-            0 => self.cpu.regs[s as usize >> 4].raw_get(sizecode),
+            0 => self.cpu.regs[s as usize >> 4].get_raw(sizecode),
             1 => self.cpu.regs[s as usize >> 4].get_x8h() as u64,
             2 => self.raw_get_mem_adv(sizecode)?,
             3 => {
@@ -1341,7 +1341,7 @@ impl Emulator {
     fn exec_lea(&mut self) -> Result<(), ExecError> {
         let s = self.get_mem_adv_u8()?;
         let addr = self.get_address_adv()?;
-        self.cpu.regs[s as usize >> 4].raw_set((s >> 2) & 3, addr);
+        self.cpu.regs[s as usize >> 4].set_raw((s >> 2) & 3, addr);
         Ok(())
     }
 
@@ -1826,8 +1826,13 @@ impl Emulator {
             2 => self.exec_string_cmps(sizecode),
             3 => self.exec_string_repe(sizecode, Self::exec_string_cmps),
             4 => self.exec_string_repne(sizecode, Self::exec_string_cmps),
+            5 => self.exec_string_lods(sizecode),
+            6 => self.exec_string_rep(sizecode, Self::exec_string_lods),
             7 => self.exec_string_stos(sizecode),
             8 => self.exec_string_rep(sizecode, Self::exec_string_stos),
+            9 => self.exec_string_scas(sizecode),
+            10 => self.exec_string_repe(sizecode, Self::exec_string_scas),
+            11 => self.exec_string_repne(sizecode, Self::exec_string_scas),
             _ => Err(ExecError::InvalidOpEncoding),
         }
     }
@@ -1860,18 +1865,34 @@ impl Emulator {
 
         self.string_next_rdi_rsi(rdi, rsi, 1 << sizecode)
     }
+    fn exec_string_scas(&mut self, sizecode: u8) -> Result<(), ExecError> {
+        let rdi = self.cpu.get_rdi();
+        
+        let a = self.cpu.regs[0].get_raw(sizecode);
+        let b = self.memory.get_raw(rdi, sizecode)?;
+        self.cmp_int(a, b, sizecode)?;
+
+        if self.flags.get_df() { self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode)) }
+        else { self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode)) }
+        Ok(())
+    }
+    fn exec_string_lods(&mut self, sizecode: u8) -> Result<(), ExecError> {
+        let rsi = self.cpu.get_rsi();
+        let val = self.memory.get_raw(rsi, sizecode)?;
+        self.cpu.regs[0].set_raw(sizecode, val);
+
+        if self.flags.get_df() { self.cpu.set_rsi(rsi.wrapping_sub(1 << sizecode)) }
+        else { self.cpu.set_rsi(rsi.wrapping_add(1 << sizecode)) }
+        Ok(())
+    }
     fn exec_string_stos(&mut self, sizecode: u8) -> Result<(), ExecError> {
         let rdi = self.cpu.get_rdi();
         let val = self.cpu.get_rax();
 
         self.raw_set_mem(rdi, sizecode, val)?;
 
-        if self.flags.get_df() {
-            self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode));
-        } else {
-            self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode));
-        }
-
+        if self.flags.get_df() { self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode)) }
+        else { self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode)) }
         Ok(())
     }
 

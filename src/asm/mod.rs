@@ -1351,15 +1351,18 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                     match prefix { // then we proceed into the handlers
                         Some((Prefix::REP, prefix_pos)) => match instruction {
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((1 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::LODS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((6 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((8 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPZ, prefix_pos)) => match instruction {
                             Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((3 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::SCAS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((10 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPNZ, prefix_pos)) => match instruction {
                             Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((4 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::SCAS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((11 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::LOCK, prefix_pos)) => match instruction {
@@ -1368,7 +1371,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                         None => match instruction {
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((0 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((2 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::LODS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((5 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((7 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::SCAS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((9 << 2) | size.basic_sizecode().unwrap()))?,
 
                             Instruction::EQU => match &args.label_def {
                                 None => return Err(AsmError { kind: AsmErrorKind::EQUWithoutLabel, line_num: args.line_num, pos: Some(instruction_pos), inner_err: None }),

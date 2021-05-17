@@ -53,7 +53,7 @@ impl CPURegister {
 
     /// Gets the value with the given size, zero extended to 64-bit.
     /// Panics if sizecode is invalid.
-    pub(super) fn raw_get(self, sizecode: u8) -> u64 {
+    pub(super) fn get_raw(self, sizecode: u8) -> u64 {
         match sizecode {
             0 => self.get_x8() as u64,
             1 => self.get_x16() as u64,
@@ -64,7 +64,7 @@ impl CPURegister {
     }
     /// Writes the value with the given size, truncating it if too large.
     /// Panics if sizecode is invalid.
-    pub(super) fn raw_set(&mut self, sizecode: u8, value: u64) {
+    pub(super) fn set_raw(&mut self, sizecode: u8, value: u64) {
         match sizecode {
             0 => self.set_x8(value as u8),
             1 => self.set_x16(value as u16),
@@ -138,20 +138,20 @@ macro_rules! zmm_impl {
             bytemuck::cast_slice_mut(&mut self.0)[index] = value.to_le()
         }
     };
-    (signed $get:ident : $set:ident => $i:ident : $u:ident : $raw_get:ident : $raw_set:ident) => {
+    (signed $get:ident : $set:ident => $i:ident : $u:ident : $get_raw:ident : $set_raw:ident) => {
         pub fn $get(&self, index: usize) -> $i {
-            self.$raw_get(index) as $i
+            self.$get_raw(index) as $i
         }
         pub fn $set(&mut self, index: usize, value: $i) {
-            self.$raw_set(index, value as $u)
+            self.$set_raw(index, value as $u)
         }
     };
-    (float $get:ident : $set:ident => $t:ident : $raw_get:ident : $raw_set:ident) => {
+    (float $get:ident : $set:ident => $t:ident : $get_raw:ident : $set_raw:ident) => {
         pub fn $get(&self, index: usize) -> $t {
-            $t::from_bits(self.$raw_get(index))
+            $t::from_bits(self.$get_raw(index))
         }
         pub fn $set(&mut self, index: usize, value: $t) {
-            self.$raw_set(index, value.to_bits())
+            self.$set_raw(index, value.to_bits())
         }
     };
 }
