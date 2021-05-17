@@ -11,9 +11,9 @@ fn setup_standard_memory_streams(e: &mut Emulator) -> (StdStream, StdStream, Std
     let stdin = Arc::new(Mutex::new(Cursor::new(vec![])));
     let stdout = Arc::new(Mutex::new(Cursor::new(vec![])));
     let stderr = Arc::new(Mutex::new(Cursor::new(vec![])));
-    e.files.handles[0] = Some(Arc::new(Mutex::new(MemoryFile { content: stdin.clone(), readable: true, writable: false, seekable: false, interactive: true })));
-    e.files.handles[1] = Some(Arc::new(Mutex::new(MemoryFile { content: stdout.clone(), readable: false, writable: true, seekable: false, interactive: false })));
-    e.files.handles[2] = Some(Arc::new(Mutex::new(MemoryFile { content: stderr.clone(), readable: false, writable: true, seekable: false, interactive: false })));
+    e.files.handles[0] = Some(Arc::new(Mutex::new(MemoryFile { content: stdin.clone(), readable: true, writable: false, seekable: false, appendonly: false, interactive: true })));
+    e.files.handles[1] = Some(Arc::new(Mutex::new(MemoryFile { content: stdout.clone(), readable: false, writable: true, seekable: false, appendonly: false, interactive: false })));
+    e.files.handles[2] = Some(Arc::new(Mutex::new(MemoryFile { content: stderr.clone(), readable: false, writable: true, seekable: false, appendonly: false, interactive: false })));
     (stdin, stdout, stderr)
 }
 

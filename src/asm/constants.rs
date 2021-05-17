@@ -364,7 +364,7 @@ pub(super) enum Instruction {
     ALIGN, DECLARE(Size), RESERVE(Size),
     LEA, CMP,
     MUL, IMUL,
-    MOVS(Size), STOS(Size),
+    MOVS(Size), CMPS(Size), STOS(Size),
 
     NoArg { op: Option<u8>, ext_op: Option<u8> },
     Unary { op: u8, ext_op: Option<u8>, allowed_sizes: &'static [Size] },
@@ -622,10 +622,21 @@ lazy_static! {
         insert!(m: Caseless("MOVSD") => Instruction::MOVS(Size::Dword));
         insert!(m: Caseless("MOVSQ") => Instruction::MOVS(Size::Qword));
 
+        suggest!(m: Caseless("MOVS") => [ Caseless("CMOVS"), Caseless("MOVSB"), Caseless("MOVSW"), Caseless("MOVSD"), Caseless("MOVSQ") ]);
+
+        insert!(m: Caseless("CMPSB") => Instruction::CMPS(Size::Byte));
+        insert!(m: Caseless("CMPSW") => Instruction::CMPS(Size::Word));
+        insert!(m: Caseless("CMPSD") => Instruction::CMPS(Size::Dword));
+        insert!(m: Caseless("CMPSQ") => Instruction::CMPS(Size::Qword));
+
+        suggest!(m: Caseless("CMPS") => [ Caseless("CMPSB"), Caseless("CMPSW"), Caseless("CMPSD"), Caseless("CMPSQ") ]);
+
         insert!(m: Caseless("STOSB") => Instruction::STOS(Size::Byte));
         insert!(m: Caseless("STOSW") => Instruction::STOS(Size::Word));
         insert!(m: Caseless("STOSD") => Instruction::STOS(Size::Dword));
         insert!(m: Caseless("STOSQ") => Instruction::STOS(Size::Qword));
+
+        suggest!(m: Caseless("STOS") => [ Caseless("STOSB"), Caseless("STOSW"), Caseless("STOSD"), Caseless("STOSQ") ]);
 
         insert!(m: Caseless("FINIT") => Instruction::NoArg { op: Some(OPCode::FINIT as u8), ext_op: None });
 

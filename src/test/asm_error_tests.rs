@@ -652,3 +652,24 @@ fn test_kmov_wrong_size() {
         }
     }
 }
+
+#[test]
+fn test_prefixed_suggestion() {
+    for instruction in &["stos", "cmps", "movs"] {
+        for prefix in &["", "rep", "repe", "repne", "repz", "repnz", "lock"] {
+            println!("prefix: {}", prefix);
+            match assemble("test.asm", &mut format!("segment text\n{} {}", prefix, instruction).as_bytes(), Default::default()) {
+                Ok(_) => panic!(),
+                Err(e) => {
+                    match e.kind {
+                        AsmErrorKind::SuggestInstruction { .. } => (),
+                        k => panic!("{:?}", k),
+                    }
+                    assert_eq!(e.line_num, 2);
+                    assert_eq!(e.pos, None);
+                    assert!(e.inner_err.is_none());
+                }
+            }
+        }
+    }
+}

@@ -248,7 +248,7 @@ macro_rules! impl_string_repeat {
                 $self.cpu.set_rcx(rcx - 1);
                 if !$cond { break }
             }
-        } else if {rcx = $self.cpu.get_rcx(); rcx != 0 } {
+        } else if { rcx = $self.cpu.get_rcx(); rcx != 0 } {
             $func($self, $sizecode)?;
             $self.cpu.set_rcx(rcx - 1);
             if $cond { $self.instruction_pointer -= 2; }
@@ -1415,10 +1415,7 @@ impl Emulator {
         
         self.store_binary_op_result(s1, s2, m, res)
     }
-    fn exec_sub_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
-        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
-        let sizecode = (s1 >> 2) & 3;
-
+    fn cmp_int(&mut self, a: u64, b: u64, sizecode: u8) -> Result<u64, ExecError> {
         let res = a.wrapping_sub(b);
 
         self.update_flags_zsp(res, sizecode);
@@ -1427,6 +1424,12 @@ impl Emulator {
         if (a & 15) < (b & 15) { self.flags.set_af(); } // AF is just like CF but only the low 4-bits
         if sign_bit((a ^ b) & (a ^ res), sizecode) { self.flags.set_of(); } // overflow if sign(a)!=sign(b) and sign(a)!=sign(res)
 
+        Ok(res)
+    }
+    fn exec_sub_helper(&mut self, should_store: bool) -> Result<(), ExecError> {
+        let (s1, s2, m, a, b) = self.read_binary_op(true, None, None)?;
+        let sizecode = (s1 >> 2) & 3;
+        let res = self.cmp_int(a, b, sizecode)?;
         if should_store { self.store_binary_op_result(s1, s2, m, res) } else { Ok(()) }
     }
     fn exec_cmp0(&mut self) -> Result<(), ExecError> {
@@ -1823,10 +1826,23 @@ impl Emulator {
         match s >> 2 {
             0 => self.exec_string_movs(sizecode),
             1 => self.exec_string_rep(sizecode, Self::exec_string_movs),
+            2 => self.exec_string_cmps(sizecode),
+            3 => self.exec_string_repe(sizecode, Self::exec_string_cmps),
+            4 => self.exec_string_repne(sizecode, Self::exec_string_cmps),
             7 => self.exec_string_stos(sizecode),
             8 => self.exec_string_rep(sizecode, Self::exec_string_stos),
             _ => Err(ExecError::InvalidOpEncoding),
         }
+    }
+    fn string_next_rdi_rsi(&mut self, rdi: u64, rsi: u64, step: u64) -> Result<(), ExecError> {
+        if self.flags.get_df() {
+            self.cpu.set_rdi(rdi.wrapping_sub(step));
+            self.cpu.set_rsi(rsi.wrapping_sub(step));
+        } else {
+            self.cpu.set_rdi(rdi.wrapping_add(step));
+            self.cpu.set_rsi(rsi.wrapping_add(step));
+        }
+        Ok(())
     }
     fn exec_string_movs(&mut self, sizecode: u8) -> Result<(), ExecError> {
         let rdi = self.cpu.get_rdi();
@@ -1835,15 +1851,17 @@ impl Emulator {
         let temp = self.raw_get_mem(rsi, sizecode)?;
         self.raw_set_mem(rdi, sizecode, temp)?;
 
-        if self.flags.get_df() {
-            self.cpu.set_rdi(rdi.wrapping_sub(1 << sizecode));
-            self.cpu.set_rsi(rsi.wrapping_sub(1 << sizecode));
-        } else {
-            self.cpu.set_rdi(rdi.wrapping_add(1 << sizecode));
-            self.cpu.set_rsi(rsi.wrapping_add(1 << sizecode));
-        }
+        self.string_next_rdi_rsi(rdi, rsi, 1 << sizecode)
+    }
+    fn exec_string_cmps(&mut self, sizecode: u8) -> Result<(), ExecError> {
+        let rdi = self.cpu.get_rdi();
+        let rsi = self.cpu.get_rsi();
 
-        Ok(())
+        let a = self.raw_get_mem(rsi, sizecode)?;
+        let b = self.raw_get_mem(rdi, sizecode)?;
+        self.cmp_int(a, b, sizecode)?;
+
+        self.string_next_rdi_rsi(rdi, rsi, 1 << sizecode)
     }
     fn exec_string_stos(&mut self, sizecode: u8) -> Result<(), ExecError> {
         let rdi = self.cpu.get_rdi();

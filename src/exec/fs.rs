@@ -39,8 +39,9 @@ pub trait FileHandle {
 
 /// Represents a file that is stored entirely in memory.
 /// 
-/// The data is backed by a `Cursor<Vec<u8>>`, which is stored via `Arc<Mutex<T>>` so that it can be access externally, even across threads.
+/// The data is backed by a `Cursor<Vec<u8>>`, which is stored via `Arc<Mutex<T>>` so that it can be accessed externally, even across threads.
 /// The `readable`, `writable`, and `seekable` fields control client-level file permissions.
+/// If `appendonly` is set to `true`, then the file will seek to the end before each write operation.
 /// 
 /// The `interactive` field should be set to `true` if additional data may be added to `content`, and otherwise should be `false`.
 /// `interactive` should never transition from `false` to `true`.
@@ -50,6 +51,7 @@ pub struct MemoryFile {
     pub readable: bool,
     pub writable: bool,
     pub seekable: bool,
+    pub appendonly: bool,
     pub interactive: bool,
 }
 impl FileHandle for MemoryFile {
@@ -74,7 +76,9 @@ impl FileHandle for MemoryFile {
     }
     fn write_all(&mut self, buf: &[u8]) -> Result<(), FileError> {
         if !self.writable { return Err(FileError::Permissions); }
-        self.content.lock().unwrap().write_all(buf)?;
+        let mut f = self.content.lock().unwrap();
+        if self.appendonly { f.seek(SeekFrom::End(0))?; }
+        f.write_all(buf)?;
         Ok(())
     }
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, FileError> {

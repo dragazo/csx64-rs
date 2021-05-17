@@ -1345,6 +1345,9 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
 
                     args.update_line_pos_in_seg(); // update line position once before each first-order iteration
                     let mut arguments = args.extract_arguments(&line, header_aft)?;
+                    if let Instruction::Suggest { from, to } = instruction { // handle this first in case there's an invalid prefix on a suggestion
+                        return Err(AsmError { kind: AsmErrorKind::SuggestInstruction { from, to }, line_num: args.line_num, pos: None, inner_err: None });
+                    }
                     match prefix { // then we proceed into the handlers
                         Some((Prefix::REP, prefix_pos)) => match instruction {
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((1 << 2) | size.basic_sizecode().unwrap()))?,
@@ -1352,9 +1355,11 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPZ, prefix_pos)) => match instruction {
+                            Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((3 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::REPNZ, prefix_pos)) => match instruction {
+                            Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((4 << 2) | size.basic_sizecode().unwrap()))?,
                             _ => return Err(AsmError { kind: AsmErrorKind::InvalidPrefixForInstruction, line_num: args.line_num, pos: Some(prefix_pos), inner_err: None }),
                         }
                         Some((Prefix::LOCK, prefix_pos)) => match instruction {
@@ -1362,6 +1367,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                         }
                         None => match instruction {
                             Instruction::MOVS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((0 << 2) | size.basic_sizecode().unwrap()))?,
+                            Instruction::CMPS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((2 << 2) | size.basic_sizecode().unwrap()))?,
                             Instruction::STOS(size) => args.process_no_arg_op(arguments, Some(OPCode::STRING as u8), Some((7 << 2) | size.basic_sizecode().unwrap()))?,
 
                             Instruction::EQU => match &args.label_def {
@@ -1578,7 +1584,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::VPUMove { elem_size, packed, aligned } => args.process_vpu_move(arguments, elem_size, packed, aligned)?,
                             Instruction::VPUBinary { op, ext_op, elem_size, packed } => args.process_vpu_binary_op(arguments, op, ext_op, elem_size, packed)?,
 
-                            Instruction::Suggest { from, to } => return Err(AsmError { kind: AsmErrorKind::SuggestInstruction { from, to }, line_num: args.line_num, pos: None, inner_err: None }),
+                            Instruction::Suggest { .. } => unreachable!(),
                         }
                     }
         
