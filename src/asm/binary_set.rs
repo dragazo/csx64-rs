@@ -176,15 +176,18 @@ impl BinarySet {
 
     /// Removes all content from the set.
     /// This is the only non-appendonly operation, and is just meant to support resource reuse.
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.data.clear();
         self.slices.clear();
     }
     /// Gets the number of slices contained in the set.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.slices.len()
     }
     /// Checks if the set is empty.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.slices.is_empty()
     }
@@ -194,16 +197,19 @@ impl BinarySet {
         Iter { data: &self.data, iter: self.slices.iter() }
     }
     /// Gets the slice at the specified index, or None if out of bounds.
+    #[cfg(test)]
     pub fn get(&self, index: usize) -> Option<&[u8]> {
         self.slices.get(index).map(|s| &self.data[s.src][s.start..s.start+s.length])
     }
 
     /// Gets the total number of bytes from distinct slices that were added to the set.
+    #[cfg(test)]
     pub fn bytes(&self) -> usize {
         self.slices.iter().fold(0, |v, s| v + s.length)
     }
     /// Gets the total number of bytes backing the stored slices.
     /// This is never larger than `bytes`.
+    #[cfg(test)]
     pub fn backing_bytes(&self) -> usize {
         self.data.iter().fold(0, |v, s| v + s.len())
     }
@@ -236,13 +242,19 @@ fn test_binary_set_empty_panic() {
 #[test]
 fn test_binary_set() {
     let mut s = BinarySet::new();
+    let checked_add = |s: &mut BinarySet, v: Vec<u8>| {
+        let res = s.add(&v);
+        assert_eq!(s.get(res).unwrap(), &v);
+        res
+    };
+
     assert_eq!(s.len(), 0);
     assert!(s.is_empty());
     assert_eq!(s.iter().count(), 0);
     assert_eq!(s.bytes(), 0);
     assert_eq!(s.backing_bytes(), 0);
 
-    assert_eq!(s.add(vec![1, 2, 3]), 0);
+    assert_eq!(checked_add(&mut s, vec![1, 2, 3]), 0);
     assert_eq!(s.len(), 1);
     assert!(!s.is_empty());
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref()]);
@@ -250,42 +262,42 @@ fn test_binary_set() {
     assert_eq!(s.bytes(), 3);
     assert_eq!(s.backing_bytes(), 3);
 
-    assert_eq!(s.add(vec![2, 3]), 1);
+    assert_eq!(checked_add(&mut s, vec![2, 3]), 1);
     assert_eq!(s.len(), 2);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3].as_ref()]);
     assert_eq!(s.bytes(), 5);
     assert_eq!(s.backing_bytes(), 3);
 
-    assert_eq!(s.add(vec![2, 3]), 1);
+    assert_eq!(checked_add(&mut s, vec![2, 3]), 1);
     assert_eq!(s.len(), 2);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3].as_ref()]);
     assert_eq!(s.bytes(), 5);
     assert_eq!(s.backing_bytes(), 3);
 
-    assert_eq!(s.add(vec![1, 2, 3]), 0);
+    assert_eq!(checked_add(&mut s, vec![1, 2, 3]), 0);
     assert_eq!(s.len(), 2);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3].as_ref()]);
     assert_eq!(s.bytes(), 5);
     assert_eq!(s.backing_bytes(), 3);
 
-    assert_eq!(s.add(vec![2, 3, 4, 5]), 2);
+    assert_eq!(checked_add(&mut s, vec![2, 3, 4, 5]), 2);
     assert_eq!(s.len(), 3);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3].as_ref(), [2, 3, 4, 5].as_ref()]);
     assert_eq!(s.bytes(), 9);
     assert_eq!(s.backing_bytes(), 7);
 
-    assert_eq!(s.add(vec![2, 3, 4, 5]), 2);
+    assert_eq!(checked_add(&mut s, vec![2, 3, 4, 5]), 2);
     assert_eq!(s.len(), 3);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3].as_ref(), [2, 3, 4, 5].as_ref()]);
     assert_eq!(s.bytes(), 9);
     assert_eq!(s.backing_bytes(), 7);
 
-    assert_eq!(s.add(vec![1, 2, 3, 4]), 3);
+    assert_eq!(checked_add(&mut s, vec![1, 2, 3, 4]), 3);
     assert_eq!(s.len(), 4);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref(), [1, 2, 3, 4].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3, 4].as_ref(), [2, 3, 4, 5].as_ref()]);
@@ -294,7 +306,7 @@ fn test_binary_set() {
 
     {
         let mut s = s.clone();
-        assert_eq!(s.add(vec![255, 69, 1, 2, 3, 4, 5, 0, 0, 10, 20]), 4);
+        assert_eq!(checked_add(&mut s, vec![255, 69, 1, 2, 3, 4, 5, 0, 0, 10, 20]), 4);
         assert_eq!(s.len(), 5);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref(), [1, 2, 3, 4].as_ref(),
             [255, 69, 1, 2, 3, 4, 5, 0, 0, 10, 20].as_ref()]);
@@ -304,7 +316,7 @@ fn test_binary_set() {
     }
     {
         let mut s = s.clone();
-        assert_eq!(s.add(vec![2, 3, 4, 5, 0, 0, 10, 20]), 4);
+        assert_eq!(checked_add(&mut s, vec![2, 3, 4, 5, 0, 0, 10, 20]), 4);
         assert_eq!(s.len(), 5);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref(), [1, 2, 3, 4].as_ref(),
             [2, 3, 4, 5, 0, 0, 10, 20].as_ref()]);
@@ -314,7 +326,7 @@ fn test_binary_set() {
     }
     {
         let mut s = s.clone();
-        assert_eq!(s.add(vec![255, 69, 1, 2, 3, 4]), 4);
+        assert_eq!(checked_add(&mut s, vec![255, 69, 1, 2, 3, 4]), 4);
         assert_eq!(s.len(), 5);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[1, 2, 3].as_ref(), [2, 3].as_ref(), [2, 3, 4, 5].as_ref(), [1, 2, 3, 4].as_ref(),
             [255, 69, 1, 2, 3, 4].as_ref()]);
@@ -330,7 +342,7 @@ fn test_binary_set() {
     assert_eq!(s.bytes(), 0);
     assert_eq!(s.backing_bytes(), 0);
 
-    assert_eq!(s.add(vec![6, 6, 6]), 0);
+    assert_eq!(checked_add(&mut s, vec![6, 6, 6]), 0);
     assert_eq!(s.len(), 1);
     assert!(!s.is_empty());
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[6, 6, 6].as_ref()]);
@@ -338,28 +350,28 @@ fn test_binary_set() {
     assert_eq!(s.bytes(), 3);
     assert_eq!(s.backing_bytes(), 3);
 
-    assert_eq!(s.add(vec![2, 3, 4]), 1);
+    assert_eq!(checked_add(&mut s, vec![2, 3, 4]), 1);
     assert_eq!(s.len(), 2);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
     assert_eq!(s.data, &[[6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
     assert_eq!(s.bytes(), 6);
     assert_eq!(s.backing_bytes(), 6);
 
-    assert_eq!(s.add(vec![2, 3]), 2);
+    assert_eq!(checked_add(&mut s, vec![2, 3]), 2);
     assert_eq!(s.len(), 3);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[6, 6, 6].as_ref(), [2, 3, 4].as_ref(), [2, 3].as_ref()]);
     assert_eq!(s.data, &[[6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
     assert_eq!(s.bytes(), 8);
     assert_eq!(s.backing_bytes(), 6);
 
-    assert_eq!(s.add(vec![1, 2, 3, 6, 6, 6]), 3);
+    assert_eq!(checked_add(&mut s, vec![1, 2, 3, 6, 6, 6]), 3);
     assert_eq!(s.len(), 4);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[6, 6, 6].as_ref(), [2, 3, 4].as_ref(), [2, 3].as_ref(), [1, 2, 3, 6, 6, 6].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3, 6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
     assert_eq!(s.bytes(), 14);
     assert_eq!(s.backing_bytes(), 9);
 
-    assert_eq!(s.add(vec![2, 3]), 2);
+    assert_eq!(checked_add(&mut s, vec![2, 3]), 2);
     assert_eq!(s.len(), 4);
     assert_eq!(s.iter().collect::<Vec<_>>(), vec![[6, 6, 6].as_ref(), [2, 3, 4].as_ref(), [2, 3].as_ref(), [1, 2, 3, 6, 6, 6].as_ref()]);
     assert_eq!(s.data, &[[1, 2, 3, 6, 6, 6].as_ref(), [2, 3, 4].as_ref()]);
@@ -368,21 +380,21 @@ fn test_binary_set() {
 
     {
         let mut s = BinarySet::new();
-        assert_eq!(s.add(vec![0]), 0);
-        assert_eq!(s.add(vec![1]), 1);
+        assert_eq!(checked_add(&mut s, vec![0]), 0);
+        assert_eq!(checked_add(&mut s, vec![1]), 1);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref()]);
         assert_eq!(s.data, vec![[0].as_ref(), [1].as_ref()]);
-        assert_eq!(s.add(vec![0, 1]), 2);
+        assert_eq!(checked_add(&mut s, vec![0, 1]), 2);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref(), [0, 1].as_ref()]);
         assert_eq!(s.data, vec![[0, 1].as_ref()]);
     }
     {
         let mut s = BinarySet::new();
-        assert_eq!(s.add(vec![0]), 0);
-        assert_eq!(s.add(vec![1]), 1);
+        assert_eq!(checked_add(&mut s, vec![0]), 0);
+        assert_eq!(checked_add(&mut s, vec![1]), 1);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref()]);
         assert_eq!(s.data, vec![[0].as_ref(), [1].as_ref()]);
-        assert_eq!(s.add(vec![1, 0]), 2);
+        assert_eq!(checked_add(&mut s, vec![1, 0]), 2);
         assert_eq!(s.iter().collect::<Vec<_>>(), vec![[0].as_ref(), [1].as_ref(), [1, 0].as_ref()]);
         assert_eq!(s.data, vec![[1, 0].as_ref()]);
     }

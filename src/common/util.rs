@@ -14,9 +14,11 @@ impl<'a, T> Punctuated<'a, T> {
     pub(crate) fn or(vals: &'a [T]) -> Self {
         Self { vals, sep: ", ", sep_special: "or " }
     }
+    #[cfg(test)]
     pub(crate) fn and(vals: &'a [T]) -> Self {
         Self { vals, sep: ", ", sep_special: "and " }
     }
+    #[cfg(test)]
     pub(crate) fn join(vals: &'a [T], sep: &'static str) -> Self {
         Self { vals, sep, sep_special: "" }
     }

@@ -939,9 +939,6 @@ impl Emulator {
 
     impl_mem_adv_primitive! {
         [ get_mem_adv_u8  :  u8 => get_u8 ],
-        [ get_mem_adv_u16 : u16 => get_u16 ],
-        [ get_mem_adv_u32 : u32 => get_u32 ],
-        [ get_mem_adv_u64 : u64 => get_u64 ],
     }
 
     /// Simultaneously advances and reads a value at the current instruction pointer position.
