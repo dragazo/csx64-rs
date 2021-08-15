@@ -108,7 +108,7 @@ fn test_mov_basic() {
     mov r11b, dh
     hlt
     mov eax, 0
-    mov ebx, 0xfe630756
+    mov edi, 0xfe630756
     syscall
     times 256 nop
     ");
@@ -236,7 +236,7 @@ fn test_mov() {
     mov edi, [dest1]
     mov esi, [dest2]
     mov eax, 0
-    mov ebx, 54
+    mov edi, 54
     syscall
     times 50 nop
 
@@ -424,7 +424,7 @@ fn test_sub_cmp() {
     sub ax, 0
     hlt
     mov eax, 0
-    mov ebx, -1
+    mov edi, -1
     syscall
     ");
     let mut e = Emulator::new();
@@ -656,7 +656,7 @@ fn test_lea() {
     lea rdi, [word    -423    ]
     hlt
     mov eax, 0
-    mov ebx, 0
+    mov edi, 0
     syscall
     ");
     let mut e = Emulator::new();
@@ -936,7 +936,7 @@ fn test_call_ret_loop() {
     hlt
 
     mov eax, 0
-    mov ebx, 0
+    mov edi, 0
     syscall
 
     sum:
@@ -1304,7 +1304,7 @@ fn test_mul_2() {
     mul r9, 632
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
@@ -1347,7 +1347,7 @@ fn test_mul_3() {
     mul r10, r9, 632
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
@@ -1394,7 +1394,7 @@ fn test_mulx() {
     mulx rcx, rcx, 632
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
@@ -1499,7 +1499,7 @@ fn test_imul_2() {
     imul r9, 632
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
@@ -1542,7 +1542,7 @@ fn test_imul_3() {
     imul r10, r9, 632
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
@@ -1903,7 +1903,7 @@ fn test_shl() {
     shl bx, 31
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment rodata
@@ -2024,7 +2024,7 @@ fn test_shr() {
     shr eax, 0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2134,7 +2134,7 @@ fn test_sar() {
     sar rax, 0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment rodata
@@ -2239,7 +2239,7 @@ fn test_shlx() {
     shlx eax, eax, 0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment rodata
@@ -2357,7 +2357,7 @@ fn test_shrx() {
     shrx eax, eax, 0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2466,7 +2466,7 @@ fn test_sarx() {
     sarx rax, rax, 0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment rodata
@@ -2546,7 +2546,7 @@ fn test_rol() {
     rol al, 1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2593,7 +2593,7 @@ fn test_ror() {
     ror rax, 1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2673,7 +2673,7 @@ fn test_rcl() {
     rcl rbx, 1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2768,7 +2768,7 @@ fn test_rcr() {
     rcr rax, 1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
     ");
     let mut e = Emulator::new();
@@ -2831,7 +2831,7 @@ fn test_setcc() {
     mov bh, [val]
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -2870,7 +2870,7 @@ fn test_bt() {
     call check2
 
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     check1:
@@ -2942,7 +2942,7 @@ fn test_btc() {
     call check2
 
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     check1:
@@ -3038,7 +3038,7 @@ fn test_bts() {
     call check2
 
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     check1:
@@ -3129,7 +3129,7 @@ fn test_btr() {
     call check2
 
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     check1:
@@ -3252,7 +3252,7 @@ fn test_movs() {
     rep movsb
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -3389,7 +3389,7 @@ fn test_cmps() {
     repe cmpsb
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -3492,7 +3492,7 @@ fn test_scas() {
     repe scasb
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -3568,7 +3568,7 @@ fn test_lods() {
     rep lodsw
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -3660,7 +3660,7 @@ fn test_stos() {
     rep stosw
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -3777,7 +3777,7 @@ fn test_extern_string() {
     mov rcx, modified2
     hlt
     mov eax, sys_exit
-    mov ebx, 56
+    mov edi, 56
     syscall
 
     extra: equ "more content"
@@ -3834,7 +3834,7 @@ fn test_asm_encodings() {
         mov rbx, val2
         hlt
         mov eax, sys_exit
-        mov ebx, 23
+        mov edi, 23
         syscall
 
         segment rodata
@@ -3876,7 +3876,7 @@ fn test_fld_finit() {
     fild qword ptr [$dq((1 << 63) - 1)]
     hlt
     mov eax, sys_exit
-    mov ebx, 42
+    mov edi, 42
     syscall
 
     segment rodata
@@ -3963,7 +3963,7 @@ fn test_fadd() {
     fadd st1, st0
     hlt
     mov eax, sys_exit
-    mov ebx, -33
+    mov edi, -33
     syscall
     "#);
     let mut e = Emulator::new();
@@ -4011,7 +4011,7 @@ fn test_fsub() {
     fsub st1, st0
     hlt
     mov eax, sys_exit
-    mov ebx, -33
+    mov edi, -33
     syscall
     "#);
     let mut e = Emulator::new();
@@ -4059,7 +4059,7 @@ fn test_fsubr() {
     fsubr st1, st0
     hlt
     mov eax, sys_exit
-    mov ebx, -33
+    mov edi, -33
     syscall
     "#);
     let mut e = Emulator::new();
@@ -4113,7 +4113,7 @@ fn test_kmov() {
     kmovq rdi, k1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment bss
@@ -4177,7 +4177,7 @@ fn test_movdqau() {
     vmovss xmm0, xmm1
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data
@@ -4283,7 +4283,7 @@ fn test_vec_addf() {
     vaddsd zmm0{k4}{z}, zmm0
     hlt
     mov eax, sys_exit
-    xor ebx, ebx
+    xor edi, edi
     syscall
 
     segment data

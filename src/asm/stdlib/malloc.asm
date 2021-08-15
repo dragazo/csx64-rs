@@ -101,9 +101,13 @@ malloc:
     
     .begin_add:
     ; get program break
+    mov r9, rdi
+    mov rbx, r11
     mov eax, sys_brk
-    xor ebx, ebx
+    xor edi, edi
     syscall
+    mov r11, rbx
+    mov rdi, r9
     
     ; if we have room, create a new block on the end and take that
     lea r10, [r8 + 16 + rdi]
@@ -121,14 +125,14 @@ malloc:
     
     .nospace:
     ; otherwise we have no space - allocate more to make new break (r10) valid
-    mov rcx, rdi
+    mov rbx, r11
     mov rdi, r10
     mov rsi, __malloc_step
     call _align
-    mov rbx, rax
+    mov rdi, rax
     mov eax, sys_brk
     syscall
-    mov rdi, rcx
+    mov r11, rbx
 
     ; if we got a zero return, we're good
     cmp rax, 0
@@ -190,9 +194,13 @@ realloc:
     jmp .new_array ; otherwise we need a new array
 
     .inplace_tail:
+    mov r8, r11
+    mov rdx, rdi
     mov eax, sys_brk
-    xor ebx, ebx
+    xor rdi, rdi
     syscall             ; current break point in rax
+    mov rdi, rdx
+    mov r11, r8
     lea r8, [rdi + rsi] ; break point needed in r8 (this is why we aligned size earlier)
     
     ; if we have enough room, just move __malloc_end
@@ -212,9 +220,11 @@ realloc:
     mov rdi, r8
     mov rsi, __malloc_step
     call _align
-    mov rbx, rax
+    mov rdi, rax
     mov eax, sys_brk
+    mov rdx, r11
     syscall
+    mov r11, rdx
     mov rdi, r10
     
     ; if it succeeded, we're done

@@ -777,14 +777,18 @@ impl Emulator {
                         OPCode::HLT => return (cycle + 1, StopReason::ForfeitTimeslot), // +1 because this cycle succeeded
                         OPCode::SYSCALL => match Syscall::from_u64(self.cpu.get_rax()) {
                             None => return (cycle, error_state!(self => ExecError::UnrecognizedSyscall)),
-                            Some(proc) => match proc {
-                                Syscall::Exit => return (cycle + 1, terminated_state!(self => self.cpu.get_ebx() as i32)), // +1 because this cycle succeeded
-                                
-                                Syscall::Read => self.exec_sys_read(),
-                                Syscall::Write => self.exec_sys_write(),
-                                Syscall::Seek => unimplemented!(),
+                            Some(proc) => {
+                                self.cpu.set_rcx(self.instruction_pointer as u64);
+                                self.cpu.set_r11(self.flags.0);
+                                match proc {
+                                    Syscall::Exit => return (cycle + 1, terminated_state!(self => self.cpu.get_edi() as i32)), // +1 because this cycle succeeded
+                                    
+                                    Syscall::Read => self.exec_sys_read(),
+                                    Syscall::Write => self.exec_sys_write(),
+                                    Syscall::Seek => unimplemented!(),
 
-                                Syscall::Break => self.exec_sys_brk(),
+                                    Syscall::Break => self.exec_sys_brk(),
+                                }
                             }
                         }
 
@@ -967,14 +971,14 @@ impl Emulator {
     // -------------------------------------------------------------------------------------
     
     fn exec_sys_read(&mut self) -> Result<(), ExecError> {
-        let fd = self.cpu.get_rbx();
+        let fd = self.cpu.get_rdi();
         if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
         let fd = fd as usize;
         if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
 
         let count = match &self.files.handles[fd] {
             None => return Err(ExecError::FileDescriptorNotOpen),
-            Some(handle) => match handle.lock().unwrap().read(self.memory.get_mut(self.cpu.get_rcx(), self.cpu.get_rdx())?) {
+            Some(handle) => match handle.lock().unwrap().read(self.memory.get_mut(self.cpu.get_rsi(), self.cpu.get_rdx())?) {
                 Ok(n) => n as u64,
                 Err(FileError::Permissions) => return Err(ExecError::FilePermissions),
                 Err(FileError::IOError(_)) => u64::MAX, // failure simply returns -1 to client
@@ -984,14 +988,14 @@ impl Emulator {
         Ok(())
     }
     fn exec_sys_write(&mut self) -> Result<(), ExecError> {
-        let fd = self.cpu.get_rbx();
+        let fd = self.cpu.get_rdi();
         if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
         let fd = fd as usize;
         if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
 
         let count = match &self.files.handles[fd] {
             None => return Err(ExecError::FileDescriptorNotOpen),
-            Some(handle) => match handle.lock().unwrap().write_all(self.memory.get(self.cpu.get_rcx(), self.cpu.get_rdx())?) {
+            Some(handle) => match handle.lock().unwrap().write_all(self.memory.get(self.cpu.get_rsi(), self.cpu.get_rdx())?) {
                 Ok(()) => self.cpu.get_rdx(),
                 Err(FileError::Permissions) => return Err(ExecError::FilePermissions),
                 Err(FileError::IOError(_)) => u64::MAX, // io failure simply returns -1 to client
@@ -1002,7 +1006,7 @@ impl Emulator {
     }
 
     fn exec_sys_brk(&mut self) -> Result<(), ExecError> {
-        let pos = self.cpu.get_rbx();
+        let pos = self.cpu.get_rdi();
         if pos == 0 {
             self.cpu.set_rax(self.memory.len() as u64);
             return Ok(());

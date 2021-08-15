@@ -48,7 +48,7 @@ exit:
 
     .done:
     mov eax, sys_exit
-    mov ebx, r15d
+    mov edi, r15d
     syscall
 
 ; void abort(void);
@@ -56,7 +56,7 @@ exit:
 ; it is recommended to use exit() instead where possible, as abort performs no cleanup.
 abort:
     mov eax, sys_exit
-    mov ebx, -1
+    mov edi, -1
     syscall
 
 segment bss

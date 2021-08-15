@@ -22,13 +22,13 @@ fn test_write() {
     let exe = asm_unwrap_link_unwrap!(r#"
     segment text
     mov eax, sys_write
-    mov ebx, 1 ; stdout
-    mov rcx, $db("hello world\n\0hello")
+    mov edi, 1 ; stdout
+    mov rsi, $db("hello world\n\0hello")
     mov edx, 18
     syscall
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     "#);
     let mut e = Emulator::new();
@@ -49,18 +49,18 @@ fn test_read() {
     let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, sys_read
-    mov ebx, 0 ; stdin
-    mov rcx, buf
+    mov edi, 0 ; stdin
+    mov rsi, buf
     mov edx, buf.len
     syscall
     hlt
     mov rdx, rax
     mov eax, sys_write
-    mov ebx, 1 ; stdout
+    mov edi, 1 ; stdout
     syscall
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
 
     segment bss
@@ -90,43 +90,43 @@ fn test_brk() {
     let exe = asm_unwrap_link_unwrap!(r"
     segment text
     mov eax, sys_brk
-    mov ebx, 0
+    mov edi, 0
     syscall
     hlt
     mov eax, sys_brk
-    mov ebx, 1
+    mov edi, 1
     syscall
     hlt
     mov eax, sys_brk
-    lea rbx, [rbp - 1]
+    lea rdi, [rbp - 1]
     syscall
     hlt
     mov eax, sys_brk
-    mov rbx, !0
+    mov rdi, !0
     syscall
     hlt
     mov eax, sys_brk
-    mov rbx, rbp
+    mov rdi, rbp
     syscall
     hlt
     mov eax, sys_brk
-    lea rbx, [rbp + 107]
+    lea rdi, [rbp + 107]
     syscall
     hlt
     mov eax, sys_brk
-    xor ebx, ebx
+    xor rdi, rdi
     syscall
     hlt
     mov eax, sys_brk
-    lea rbx, [rbp + 66]
+    lea rdi, [rbp + 66]
     syscall
     hlt
     mov eax, sys_brk
-    lea rbx, [rbp - 1]
+    lea rdi, [rbp - 1]
     syscall
     hlt
     xor rax, rax
-    xor rbx, rbx
+    xor rdi, rdi
     syscall
     ");
     let mut e = Emulator::new();
