@@ -382,17 +382,17 @@ impl AssembleArgs<'_> {
                                 (OP::Condition, cond, Expr::from((OP::Pair, left, right))).into()
                             }
 
-                            "$bin8" => chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?,
-                            "$bin16" => chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?,
-                            "$bin32" => chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?,
-                            "$bin64" => chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?,
-                            "$bin80" => chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?,
+                            "$eb" => chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?,
+                            "$ew" => chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?,
+                            "$ed" => chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?,
+                            "$eq" => chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?,
+                            "$et" => chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?,
                             
-                            "$rdb" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?)),
-                            "$rdw" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?)),
-                            "$rdd" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?)),
-                            "$rdq" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?)),
-                            "$rdt" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?)),
+                            "$db" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin8, self.line_num, term_start)?)),
+                            "$dw" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin16, self.line_num, term_start)?)),
+                            "$dd" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin32, self.line_num, term_start)?)),
+                            "$dq" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin64, self.line_num, term_start)?)),
+                            "$dt" => Expr::from((OP::Intern, chain_encode(args, OP::EncodeBin80, self.line_num, term_start)?)),
 
                             _ => match UNARY_FUNCTION_OPERATOR_TO_OP.get(func).copied() {
                                 Some(op) => {

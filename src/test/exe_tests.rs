@@ -3772,8 +3772,8 @@ fn test_extern_string() {
     extern msg, modified2
     segment text
     mov rdi, $len(msg + " -- " + extra)
-    mov rsi, $rdb("mukduk " + extra + " the second time")
-    mov rdx, $rdb("here's some song lyrics: '", msg, "'\n... did you like them??")
+    mov rsi, $db("mukduk " + extra + " the second time")
+    mov rdx, $db("here's some song lyrics: '", msg, "'\n... did you like them??")
     mov rcx, modified2
     hlt
     mov eax, sys_exit
@@ -3781,14 +3781,14 @@ fn test_extern_string() {
     syscall
 
     extra: equ "more content"
-    modified1: equ $bin8("merp: '", msg, ' ', msg, "' /merp")
+    modified1: equ $eb("merp: '", msg, ' ', msg, "' /merp")
     "#,
     // second file
     r#"
     global msg, modified2
     extern modified1
     msg: equ "hello from the otter slide!"
-    modified2: equ $rdb('i' + " changed it: '" + modified1 + '\'')
+    modified2: equ $db('i' + " changed it: '" + modified1 + '\'')
     "#);
     let mut e = Emulator::new();
     e.init(&exe, &Default::default());
@@ -3807,11 +3807,11 @@ fn test_extern_string() {
 fn test_asm_encodings() {
     // for this one, it suffices that it merely succeeds in assembling
     asm_unwrap_link_unwrap!(r#"
-        static_assert $len($bin32(0.0)) == 4
-        static_assert $len($bin32(0.123)) == 4
-        static_assert $len($bin32(23.4)) == 4
-        static_assert $len($bin64(-23.4)) == 8
-        static_assert $len($bin80(23.434 + 1.23)) == 10
+        static_assert $len($ed(0.0)) == 4
+        static_assert $len($ed(0.123)) == 4
+        static_assert $len($ed(23.4)) == 4
+        static_assert $len($eq(-23.4)) == 8
+        static_assert $len($et(23.434 + 1.23)) == 10
 
         static_assert 0 == 0
         static_assert 0 == 0_
@@ -3819,14 +3819,14 @@ fn test_asm_encodings() {
         static_assert 0 == 0___
         static_assert 0 == 0____
 
-        static_assert $len($bin8(0)) == 1
-        static_assert $len($bin8(0__)) == 1
-        static_assert $len($bin8(255)) == 1
-        static_assert $len($bin16(-2354)) == 2
-        static_assert $len($bin32(12)) == 4
-        static_assert $len($bin64(-1)) == 8
+        static_assert $len($eb(0)) == 1
+        static_assert $len($eb(0__)) == 1
+        static_assert $len($eb(255)) == 1
+        static_assert $len($ew(-2354)) == 2
+        static_assert $len($ed(12)) == 4
+        static_assert $len($eq(-1)) == 8
 
-        static_assert $bin8('한') == "\xed\x95\x9c"
+        static_assert $eb('한') == "\xed\x95\x9c"
         "#);
     let exe = asm_unwrap_link_unwrap!(r#"
         segment text
@@ -3865,15 +3865,15 @@ fn test_fld_finit() {
     finit
     hlt
     another: equ 3459456.390485394698475698475693479845769834509459685967905438693479074356073490670576
-    fld dword ptr [$rdd(another)]
-    fld qword ptr [$rdq(another)]
-    fld tword ptr [$rdt(another)]
+    fld dword ptr [$dd(another)]
+    fld qword ptr [$dq(another)]
+    fld tword ptr [$dt(another)]
     hlt
     finit
     hlt
-    fild word ptr [$rdw(567)]
-    fild dword ptr [$rdd(-3453)]
-    fild qword ptr [$rdq((1 << 63) - 1)]
+    fild word ptr [$dw(567)]
+    fild dword ptr [$dd(-3453)]
+    fild qword ptr [$dq((1 << 63) - 1)]
     hlt
     mov eax, sys_exit
     mov ebx, 42
@@ -3953,13 +3953,13 @@ fn test_fld_finit() {
 fn test_fadd() {
     let exe = asm_unwrap_link_unwrap!(r#"
     segment text
-    fld tword ptr [$rdt(4.2343)]
-    fld tword ptr [$rdt(-3.14159)]
+    fld tword ptr [$dt(4.2343)]
+    fld tword ptr [$dt(-3.14159)]
     faddp
     hlt
     fadd st0, st0
     hlt
-    fld dword ptr [$rdd(67.0)]
+    fld dword ptr [$dd(67.0)]
     fadd st1, st0
     hlt
     mov eax, sys_exit
@@ -4001,13 +4001,13 @@ fn test_fadd() {
 fn test_fsub() {
     let exe = asm_unwrap_link_unwrap!(r#"
     segment text
-    fld tword ptr [$rdt(4.2343)]
-    fld tword ptr [$rdt(-3.14159)]
+    fld tword ptr [$dt(4.2343)]
+    fld tword ptr [$dt(-3.14159)]
     fsubp
     hlt
     fsub st0, st0
     hlt
-    fld dword ptr [$rdd(67.0)]
+    fld dword ptr [$dd(67.0)]
     fsub st1, st0
     hlt
     mov eax, sys_exit
@@ -4049,13 +4049,13 @@ fn test_fsub() {
 fn test_fsubr() {
     let exe = asm_unwrap_link_unwrap!(r#"
     segment text
-    fld tword ptr [$rdt(4.2343)]
-    fld tword ptr [$rdt(-3.14159)]
+    fld tword ptr [$dt(4.2343)]
+    fld tword ptr [$dt(-3.14159)]
     fsubrp
     hlt
     fsubr st0, st0
     hlt
-    fld dword ptr [$rdd(67.0)]
+    fld dword ptr [$dd(67.0)]
     fsubr st1, st0
     hlt
     mov eax, sys_exit

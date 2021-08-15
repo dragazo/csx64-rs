@@ -1856,7 +1856,9 @@ lazy_static! {
                 vec![$(assemble_physical_file!($name)),+]
             }
         }
-        assemble_physical_file!([ "start.asm", "malloc.asm", "exit.asm", "ctype.asm", "arglist.asm" ])
+        assemble_physical_file!([
+            "start.asm", "malloc.asm", "exit.asm", "ctype.asm", "arglist.asm", "string.asm",
+        ])
     };
 }
 /// Gets a copy of the C-style standard library [`ObjectFile`]s for use in CSX64 asm programs.

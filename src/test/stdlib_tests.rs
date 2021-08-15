@@ -1470,3 +1470,50 @@ fn test_abort() {
 
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(-1));
 }
+
+#[test]
+fn test_memcpy() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern malloc, memcpy
+    segment text
+    main:
+    
+    mov rdi, 8192
+    call malloc
+    mov r15, rax
+    hlt
+
+    cld
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 20]
+    mov edx, 10
+    call memcpy
+    hlt
+
+    std
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 5
+    call memcpy
+    hlt
+
+    mov eax, 621
+    ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let m = e.cpu.get_rax();
+    e.memory.set(m, "hello world this is going to be a long message".as_bytes()).unwrap();
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello wgoing to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(621));
+}
