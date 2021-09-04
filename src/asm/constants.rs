@@ -756,6 +756,7 @@ lazy_static! {
         insert!(s: Caseless("TRUE"));
         insert!(s: Caseless("FALSE"));
         insert!(s: Caseless("NULL"));
+        insert!(s: Caseless("EOF"));
 
         insert!(s: Caseless("PTR"));
 

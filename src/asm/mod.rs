@@ -1857,7 +1857,7 @@ lazy_static! {
             }
         }
         assemble_physical_file!([
-            "start.asm", "malloc.asm", "exit.asm", "ctype.asm", "arglist.asm", "string.asm",
+            "start.asm", "malloc.asm", "exit.asm", "ctype.asm", "arglist.asm", "string.asm", "stdio.asm",
         ])
     };
 }

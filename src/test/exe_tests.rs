@@ -1,7 +1,6 @@
 use rug::Float;
 
 use super::*;
-use crate::exec::*;
 use crate::exec::registers::Flags;
 
 const ZSPACO: u64 = mask!(Flags: MASK_ZF | MASK_SF | MASK_PF | MASK_AF | MASK_CF | MASK_OF);

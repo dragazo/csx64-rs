@@ -1,7 +1,6 @@
 //! Tools for giving the emulator access to files.
 
 use std::io::{Error, ErrorKind, Cursor, SeekFrom, Read, Write, Seek};
-use std::sync::{Arc, Mutex};
 
 /// The types of errors for client-level file operations.
 #[derive(Debug)]
@@ -39,7 +38,7 @@ pub trait FileHandle {
 
 /// Represents a file that is stored entirely in memory.
 /// 
-/// The data is backed by a `Cursor<Vec<u8>>`, which is stored via `Arc<Mutex<T>>` so that it can be accessed externally, even across threads.
+/// The data is backed by a `Cursor<Vec<u8>>`, which implements all of the necessary stream functions.
 /// The `readable`, `writable`, and `seekable` fields control client-level file permissions.
 /// If `appendonly` is set to `true`, then the file will seek to the end before each write operation.
 /// 
@@ -47,7 +46,7 @@ pub trait FileHandle {
 /// `interactive` should never transition from `false` to `true`.
 /// If an interactive file later becomes non-interactive (e.g. forced EOF), then `interactive` should transition from `true` to `false`.
 pub struct MemoryFile {
-    pub content: Arc<Mutex<Cursor<Vec<u8>>>>,
+    pub content: Cursor<Vec<u8>>,
     pub readable: bool,
     pub writable: bool,
     pub seekable: bool,
@@ -59,10 +58,9 @@ impl FileHandle for MemoryFile {
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, FileError> {
         if !self.readable { return Err(FileError::Permissions); }
-        let mut h = self.content.lock().unwrap();
         let mut written = 0;
         loop {
-            match h.read(&mut buf[written..]) {
+            match self.content.read(&mut buf[written..]) {
                 Ok(count) => {
                     written += count;
                     if written >= buf.len() || count == 0 { return Ok(written); } // stop when we fill buf or if we got nothing
@@ -76,13 +74,12 @@ impl FileHandle for MemoryFile {
     }
     fn write_all(&mut self, buf: &[u8]) -> Result<(), FileError> {
         if !self.writable { return Err(FileError::Permissions); }
-        let mut f = self.content.lock().unwrap();
-        if self.appendonly { f.seek(SeekFrom::End(0))?; }
-        f.write_all(buf)?;
+        if self.appendonly { self.content.seek(SeekFrom::End(0))?; }
+        self.content.write_all(buf)?;
         Ok(())
     }
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, FileError> {
         if !self.seekable { return Err(FileError::Permissions); }
-        Ok(self.content.lock().unwrap().seek(pos)?)
+        Ok(self.content.seek(pos)?)
     }
 }

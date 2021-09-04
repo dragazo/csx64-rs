@@ -2,7 +2,6 @@ use std::iter;
 use rand::prelude::*;
 
 use super::*;
-use crate::exec::*;
 
 #[test]
 fn test_no_main() {

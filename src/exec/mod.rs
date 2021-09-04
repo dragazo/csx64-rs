@@ -974,7 +974,7 @@ impl Emulator {
         let fd = self.cpu.get_rdi();
         if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
         let fd = fd as usize;
-        if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
+        if fd >= self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
 
         let count = match &self.files.handles[fd] {
             None => return Err(ExecError::FileDescriptorNotOpen),
@@ -991,8 +991,7 @@ impl Emulator {
         let fd = self.cpu.get_rdi();
         if fd > usize::MAX as u64 { return Err(ExecError::FileDescriptorOutOfBounds); }
         let fd = fd as usize;
-        if fd > self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
-
+        if fd >= self.files.handles.len() { return Err(ExecError::FileDescriptorOutOfBounds); }
         let count = match &self.files.handles[fd] {
             None => return Err(ExecError::FileDescriptorNotOpen),
             Some(handle) => match handle.lock().unwrap().write_all(self.memory.get(self.cpu.get_rsi(), self.cpu.get_rdx())?) {

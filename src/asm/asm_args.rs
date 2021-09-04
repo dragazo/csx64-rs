@@ -464,6 +464,7 @@ impl AssembleArgs<'_> {
                     if Caseless(term) == Caseless("TRUE") { true.into() }
                     else if Caseless(term) == Caseless("FALSE") { false.into() }
                     else if Caseless(term) == Caseless("NULL") { Value::Integer(Integer::new()).into() }
+                    else if Caseless(term) == Caseless("EOF") { Value::Integer((-1).into()).into() }
                     else { // if none of above, must be an identifier
                         let (mutated, _) = self.mutate_name(term, term_start)?;
                         ExprData::Ident(mutated).into()
