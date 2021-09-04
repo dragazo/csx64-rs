@@ -6,10 +6,10 @@
 ;       
 
 global memcpy
-; global memmove
+global memmove
 ; global strcpy
 ; global strncpy
-; global strlen
+global strlen
 
 ; global strcat
 ; global strncat
@@ -26,7 +26,7 @@ global memcpy
 ; global strstr
 ; global strpbrk
 
-; global memset
+global memset
 ; global strerror
 
 ; ----------------------
@@ -45,48 +45,48 @@ memcpy:
     
     ret
 
-; ; void *memmove(void *dest, const void *src, sizt_t num);
-; memmove:
-;     mov rax, rdi ; copy dest into rax (for return value)
-;     mov rcx, rdx ; move num into rcx
+; void *memmove(void *dest, const void *src, sizt_t num);
+memmove:
+    mov rax, rdi ; copy dest into rax (for return value)
+    mov rcx, rdx ; move num into rcx
     
-;     ; pick a copy direction
-;     cmp rdi, rsi
-;     ja .backwards
+    ; pick a copy direction
+    cmp rdi, rsi
+    ja .backwards
     
-;     ; -- forward copy -- ;
+    ; -- forward copy -- ;
     
-;     cld
-;     rep movsb
-;     ret
+    cld
+    rep movsb
+    ret
     
-;     ; -- backward copy -- ;
-;     .backwards:
+    ; -- backward copy -- ;
+    .backwards:
     
-;     ; modify dest/src to point to the last element in the copy range
-;     lea rdi, [rdi + rcx - 1]
-;     lea rsi, [rsi + rcx - 1]
+    ; modify dest/src to point to the last element in the copy range
+    lea rdi, [rdi + rcx - 1]
+    lea rsi, [rsi + rcx - 1]
     
-;     std
-;     rep movsb
-;     ret
+    std
+    rep movsb
+    ret
 
-; ; size_t strlen(const char *str);
-; strlen:
-;     ; store str in r8 for safekeeping
-;     mov r8, rdi
+; size_t strlen(const char *str);
+strlen:
+    ; store str in r8 for safekeeping
+    mov r8, rdi
     
-;     ; skip all nonzero bytes
-;     cld
-;     xor rax, rax
-;     mov rcx, -1
-;     repne scasb
-;     ; rdi is now 1 past the first zero byte
+    ; skip all nonzero bytes
+    cld
+    xor rax, rax
+    mov rcx, -1
+    repne scasb
+    ; rdi is now 1 past the first zero byte
     
-;     ; return length of string
-;     lea rax, [rdi - 1]
-;     sub rax, r8
-;     ret
+    ; return length of string
+    lea rax, [rdi - 1]
+    sub rax, r8
+    ret
 
 ; ; char *strcpy(char *dest, const char *src);
 ; strcpy:
@@ -499,19 +499,19 @@ memcpy:
 ;     .ret_null: xor rax, rax
 ;     .ret: ret
     
-; ; void *memset(void *ptr, int value, size_t num);
-; memset:
-;     mov r8, rdi ; copy ptr to r8 for safekeeping
+; void *memset(void *ptr, int value, size_t num);
+memset:
+    mov r8, rdi ; copy ptr to r8 for safekeeping
     
-;     ; fill in the values
-;     cld
-;     mov rax, rsi
-;     mov rcx, rdx
-;     rep stosb
+    ; fill in the values
+    cld
+    mov rax, rsi
+    mov rcx, rdx
+    rep stosb
     
-;     ; return ptr
-;     mov rax, r8
-;     ret
+    ; return ptr
+    mov rax, r8
+    ret
     
 ; ; const char *strerror(int errnum);
 ; strerror:

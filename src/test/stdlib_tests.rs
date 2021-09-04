@@ -1498,6 +1498,20 @@ fn test_memcpy() {
     call memcpy
     hlt
 
+    std
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 0
+    call memcpy
+    hlt
+
+    cld
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 5
+    call memcpy
+    hlt
+
     mov eax, 621
     ret
     ");
@@ -1515,5 +1529,237 @@ fn test_memcpy() {
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
     assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
 
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
     assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(621));
+}
+
+#[test]
+fn test_memmove() {
+    let exe = asm_unwrap_link_unwrap!(std r"
+    global main
+    extern malloc, memmove
+    segment text
+    main:
+    
+    mov rdi, 8192
+    call malloc
+    mov r15, rax
+    hlt
+
+    cld
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 20]
+    mov edx, 10
+    call memmove
+    hlt
+
+    std
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 5
+    call memmove
+    hlt
+
+    std
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 0
+    call memmove
+    hlt
+
+    cld
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 0]
+    mov edx, 5
+    call memmove
+    hlt
+
+    cld
+    lea rdi, [r15 + 12]
+    lea rsi, [r15 + 2]
+    mov edx, 20
+    call memmove
+    hlt
+
+    std
+    lea rdi, [r15 + 17]
+    lea rsi, [r15 + 15]
+    mov edx, 12
+    call memmove
+    hlt
+
+    cld
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 10]
+    mov edx, 7
+    call memmove
+    hlt
+
+    std
+    lea rdi, [r15 + 7]
+    lea rsi, [r15 + 10]
+    mov edx, 7
+    call memmove
+    hlt
+
+    mov eax, 621
+    ret
+    ");
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let m = e.cpu.get_rax();
+    e.memory.set(m, "hello world this is going to be a long message".as_bytes()).unwrap();
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello wgoing to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whello to bis going to be a long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whellollo whello to bis goa long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello whellollo w whello to b goa long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello wlollo wo w whello to b goa long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(m, 46).unwrap(), "hello wlo wo wo w whello to b goa long message".as_bytes());
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(621));
+}
+
+#[test]
+fn test_strlen() {
+    let exe = asm_unwrap_link_unwrap!(std r#"
+    global main
+    extern strlen
+    segment text
+    main:
+    
+    std
+    mov rdi, $db("hello world\0")
+    call strlen
+    hlt
+
+    std
+    mov rdi, $db("\0")
+    call strlen
+    hlt
+
+    cld
+    mov rdi, $db("hello world!\0extra")
+    call strlen
+    hlt
+
+    cld
+    mov rdi, $db("\0")
+    call strlen
+    hlt
+
+    mov eax, -621
+    ret
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 11);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 12);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.cpu.get_rax(), 0);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(-621));
+}
+
+#[test]
+fn test_memset() {
+    let exe = asm_unwrap_link_unwrap!(std r#"
+    global main
+    extern memset
+    segment text
+    main:
+    
+    mov rax, arr
+    hlt
+
+    cld
+    lea rdi, [arr]
+    mov esi, 7
+    mov edx, 4
+    call memset
+    hlt
+
+    std
+    lea rdi, [arr + 12]
+    mov esi, 6
+    mov edx, 10
+    call memset
+    hlt
+
+    cld
+    lea rdi, [arr + 6]
+    mov esi, 11
+    mov edx, 0
+    call memset
+    hlt
+
+    std
+    lea rdi, [arr + 6]
+    mov esi, 11
+    mov edx, 0
+    call memset
+    hlt
+
+    mov eax, -621
+    ret
+
+    segment data
+    arr: db 1, 4, 3, 2, 6, 5, 8, 7, 9, 8, 0, 5, 3, 6, 5, 6, 98, 6, 3, 5, 76, 3, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5
+    "#);
+    let mut e = Emulator::new();
+    e.init(&exe, &Default::default());
+    assert_eq!(e.get_state(), State::Running);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    let arr = e.cpu.get_rax();
+    let len = 32;
+    assert_eq!(e.memory.get(arr, len).unwrap(), &[1, 4, 3, 2, 6, 5, 8, 7, 9, 8, 0, 5, 3, 6, 5, 6, 98, 6, 3, 5, 76, 3, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(arr, len).unwrap(), &[7, 7, 7, 7, 6, 5, 8, 7, 9, 8, 0, 5, 3, 6, 5, 6, 98, 6, 3, 5, 76, 3, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(arr, len).unwrap(), &[7, 7, 7, 7, 6, 5, 8, 7, 9, 8, 0, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(arr, len).unwrap(), &[7, 7, 7, 7, 6, 5, 8, 7, 9, 8, 0, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::ForfeitTimeslot);
+    assert_eq!(e.memory.get(arr, len).unwrap(), &[7, 7, 7, 7, 6, 5, 8, 7, 9, 8, 0, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 4, 8, 7, 8, 12, 43, 23, 54, 2, 5]);
+
+    assert_eq!(e.execute_cycles(u64::MAX).1, StopReason::Terminated(-621));
 }
