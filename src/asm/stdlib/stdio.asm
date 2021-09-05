@@ -12,7 +12,7 @@ global stdin, stdout, stderr
 ; --------------------------------------
 
 global fputc, putc, putchar
-; global fputs, puts
+global fputs, puts
 ; global fwrite
 
 ; global scanf, vscanf
@@ -94,31 +94,40 @@ putc:
     static_assert EOF == -1 ; we're using this fact to avoid a mov
     ret
 
-; ; int fputs(const char *str, FILE *stream)
-; fputs:
-;     ; save the arguments
-;     push rdi
-;     push rsi
+; int fputs(const char *str, FILE *stream)
+fputs:
+    ; get the string length
+    push rdi
+    push rsi
+    call strlen
     
-;     ; get the string length
-;     call strlen
+    ; write the string
+    pop rdi
+    pop rsi
+    mov edi, dword ptr [edi + FILE.fd]
+    mov rdx, rax
+    mov eax, sys_write
+    syscall
     
-;     ; write the string
-;     mov rdx, rax
-;     mov eax, sys_write
-;     pop rbx
-;     mov ebx, dword ptr [rbx + FILE.fd]
-;     pop rcx
-    
-;     syscall
-    
-;     ret ; return the number of characters written (returned from native call)
-; ; int puts(const char *str)
-; puts:
-;     mov rsi, stdout
-;     call fputs
-;     mov edi, `\n`
-;     jmp putchar ; puts() also adds a new line char after string - c stdlib is weird
+    ret ; return the number of characters written (returned from native call)
+; int puts(const char *str)
+puts:
+    mov rsi, stdout
+    call fputs
+    cmp eax, EOF
+    je .ret
+
+    .ok:
+    push eax
+    mov edi, '\n'
+    call putchar ; puts() also adds a new line char after string - c stdlib is weird
+    pop eax
+
+    mov ebx, eax ; add one char to #written if putchar succeeded
+    inc ebx
+    cmovnz eax, ebx
+
+    .ret: ret
     
 ; ; size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
 ; fwrite:
