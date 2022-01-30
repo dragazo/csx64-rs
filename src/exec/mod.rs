@@ -797,6 +797,7 @@ impl Emulator {
                         OPCode::CMOVcc => self.exec_cmovcc(),
                         OPCode::SETcc => self.exec_setcc(),
                         OPCode::XCHG => self.exec_xchg(),
+                        OPCode::MOVEXT => self.exec_mov_extend(),
                         OPCode::REGOP => self.exec_regop(),
 
                         OPCode::AND => self.exec_and_helper(true),
@@ -1899,6 +1900,44 @@ impl Emulator {
         Ok(())
     }
 
+    /*
+    [1: signed][1: sh][1: mem][2:][3: mode]    [4: dest][4: src]
+    mode = 0: ext =  8 -> 16
+    mode = 1: ext =  8 -> 32
+    mode = 2: ext =  8 -> 64
+    mode = 3: ext = 16 -> 32
+    mode = 4: ext = 16 -> 64
+    mode = 5: ext = 32 -> 64
+    mem = 0:              dest <- ext(src)
+    mem = 1: [address]    dest <- ext(M[address])
+    */
+    fn exec_mov_extend(&mut self) -> Result<(), ExecError> {
+        let s1 = self.get_mem_adv_u8()?;
+        let s2 = self.get_mem_adv_u8()?;
+        
+        let (src_sizecode, dest_sizecode) = match s1 & 7 {
+            0 => (0, 1),
+            1 => (0, 2),
+            2 => (0, 3),
+            3 => (1, 2),
+            4 => (1, 3),
+            5 => (2, 3),
+            _ => return Err(ExecError::InvalidOpEncoding),
+        };
+
+        let src = if s1 & 0x20 == 0 {
+            if s1 & 0x40 != 0 { self.cpu.regs[s2 as usize & 15].get_x8h() as u64 } else { self.cpu.regs[s2 as usize & 15].get_raw(src_sizecode) }
+        } else {
+            let m = self.get_address_adv()?;
+            self.memory.get_raw(m, src_sizecode)?
+        };
+        
+        debug_assert_eq!(src, truncate(src, src_sizecode));
+        let res = if s1 & 0x80 == 0 { src } else { sign_extend(src, src_sizecode) };
+        self.cpu.regs[s2 as usize >> 4].set_raw(dest_sizecode, res);
+        Ok(())
+    }
+
     fn exec_finit(&mut self) -> Result<(), ExecError> {
         self.fpu.reset();
         Ok(())
@@ -1972,6 +2011,11 @@ impl Emulator {
 
         op = 32-43: same as 20-31 except unaligned
         op = 44-55: same as 20-31 except (unaligned) scalar
+
+        op = 56: vmovX -- vreg <-  reg [2: size][1:][5: vreg]    [1: rh][3:][4: reg]
+        op = 57: vmovX -- reg  <- vreg [2: size][1:][5: vreg]    [1: rh][3:][4: reg]
+        op = 58: vmovX -- vreg <-  mem [2: size][1:][5: vreg]    [address]
+        op = 59: vmovX -- mem  <- vreg [2: size][1:][5: vreg]    [address]
     */
     fn exec_trans(&mut self) -> Result<(), ExecError> {
         match self.get_mem_adv_u8()? {
@@ -2046,6 +2090,37 @@ impl Emulator {
                             mask >>= 1;
                         }
                     }
+                    _ => unreachable!(),
+                }
+            }
+            v @ 56..=57 => {
+                let s1 = self.get_mem_adv_u8()?;
+                let s2 = self.get_mem_adv_u8()?;
+                let elem_size = s1 >> 6;
+                let vreg = &mut self.vpu.regs[s1 as usize & 31];
+                let reg = &mut self.cpu.regs[s2 as usize & 15];
+                match v {
+                    56 => {
+                        let src = if s2 & 0x80 != 0 { reg.get_x8h() as u64 } else { reg.get_raw(elem_size) };
+                        vreg.set(0, elem_size, src);
+                    }
+                    57 => {
+                        let src = vreg.get(0, elem_size);
+                        if s2 & 0x80 != 0 { reg.set_x8h(src as u8) } else { reg.set_raw(elem_size, src) }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            // op = 58: vmovX -- vreg <-  mem [2: size][1:][5: vreg]    [address]
+            // op = 59: vmovX -- mem  <- vreg [2: size][1:][5: vreg]    [address]
+            v @ 58..=59 => {
+                let s = self.get_mem_adv_u8()?;
+                let m = self.get_address_adv()?;
+                let elem_size = s >> 6;
+                let vreg = &mut self.vpu.regs[s as usize & 31];
+                match v {
+                    58 => vreg.set(0, elem_size, self.memory.get_raw(m, elem_size)?),
+                    59 => self.memory.set_raw(m, elem_size, vreg.get(0, elem_size))?,
                     _ => unreachable!(),
                 }
             }

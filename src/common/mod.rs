@@ -22,7 +22,7 @@ pub(crate) enum OPCode
     SYSCALL,
 
     LEA,
-    MOV, CMOVcc, SETcc, XCHG,
+    MOV, CMOVcc, SETcc, XCHG, MOVEXT,
     REGOP,
 
     AND, OR, XOR, TEST, BITWISE,

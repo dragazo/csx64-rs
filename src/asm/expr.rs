@@ -512,6 +512,9 @@ pub(crate) enum IllegalReason {
     DivideByZero,
     PointerUnderflow,
     PointerOverflow,
+    CharacterUnderflow,
+    CharacterOverflow,
+    InvalidUnicodeChar,
     IntegerTooLarge,
     TruncatedSignificantBits,
 }
@@ -525,6 +528,9 @@ impl fmt::Display for IllegalReason {
             IllegalReason::DivideByZero => write!(f, "integer division by zero"),
             IllegalReason::PointerUnderflow => write!(f, "pointer value underflow"),
             IllegalReason::PointerOverflow => write!(f, "pointer value overflow"),
+            IllegalReason::CharacterUnderflow => write!(f, "character value underflow (unicode"),
+            IllegalReason::CharacterOverflow => write!(f, "character value overflow (unicode)"),
+            IllegalReason::InvalidUnicodeChar => write!(f, "character value was not a valid unicode code point"),
             IllegalReason::IntegerTooLarge => write!(f, "integer value too large to represent"),
             IllegalReason::TruncatedSignificantBits => write!(f, "writing integer to output truncated significant bits"),
         }
@@ -788,6 +794,22 @@ impl Expr {
                         Ok(g((*raw_left.take().unwrap()).into_eval_evaluated(symbols).into_owned()))
                     }
 
+                    fn int_to_pointer(res: Integer) -> Result<Option<Value>, EvalError> {
+                        match res.to_u64() {
+                            None => Err(if res.cmp0() == Ordering::Less { IllegalReason::PointerOverflow } else { IllegalReason::PointerUnderflow }.into()),
+                            Some(v) => Ok(Some(Value::Pointer(v))),
+                        }
+                    }
+                    fn int_to_char(res: Integer) -> Result<Option<Value>, EvalError> {
+                        match res.to_u32() {
+                            None => Err(if res.cmp0() == Ordering::Less { IllegalReason::CharacterUnderflow } else { IllegalReason::CharacterOverflow }.into()),
+                            Some(v) => match char::from_u32(v) {
+                                Some(ch) => Ok(Some(Value::Character(ch))),
+                                None => Err(IllegalReason::InvalidUnicodeChar.into()),
+                            }
+                        }
+                    }
+
                     match op {
                         OP::Mul => {
                             binary_op(left, right, symbols, visited, |a, b| match (a, b) {
@@ -824,16 +846,17 @@ impl Expr {
                         },
                         OP::Add => {
                             fn handle_pointer_add(ptr: u64, int: &Integer) -> Result<Option<Value>, EvalError> {
-                                let res = Integer::from(ptr) + int;
-                                match res.to_u64() {
-                                    None => Err(if res.cmp0() == Ordering::Less { IllegalReason::PointerUnderflow } else { IllegalReason::PointerOverflow }.into()),
-                                    Some(v) => Ok(Some(Value::Pointer(v))),
-                                }
+                                int_to_pointer(Integer::from(ptr) + int)
+                            }
+                            fn handle_char_add(ch: char, int: &Integer) -> Result<Option<Value>, EvalError> {
+                                int_to_char(Integer::from(ch as u32) + int)
                             }
 
                             binary_op(left, right, symbols, visited, |a, b| match (a, b) {
                                 (Value::Pointer(a), Value::Integer(b)) => handle_pointer_add(*a, b),
                                 (Value::Integer(a), Value::Pointer(b)) => handle_pointer_add(*b, a),
+                                (Value::Character(a), Value::Integer(b)) => handle_char_add(*a, b),
+                                (Value::Integer(a), Value::Character(b)) => handle_char_add(*b, a),
                                 (Value::Integer(_), Value::Integer(_)) => Ok(None),
                                 (Value::Float(_), Value::Float(_)) => Ok(None),
                                 (Value::Binary(_), Value::Binary(_)) => Ok(None),
@@ -858,16 +881,10 @@ impl Expr {
                             })?
                         },
                         OP::Sub => {
-                            fn handle_pointer_sub(ptr: u64, int: &Integer) -> Result<Option<Value>, EvalError> {
-                                let res = Integer::from(ptr) - int;
-                                match res.to_u64() {
-                                    None => Err(if res.cmp0() == Ordering::Less { IllegalReason::PointerOverflow } else { IllegalReason::PointerUnderflow }.into()),
-                                    Some(v) => Ok(Some(Value::Pointer(v))),
-                                }
-                            }
-
                             binary_op(left, right, symbols, visited, |a, b| match (a, b) {
-                                (Value::Pointer(a), Value::Integer(b)) => handle_pointer_sub(*a, b),
+                                (Value::Pointer(a), Value::Integer(b)) => int_to_pointer(Integer::from(*a) - b),
+                                (Value::Character(a), Value::Integer(b)) => int_to_char(Integer::from(*a as u32) - b),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some(Value::Integer(Integer::from(*a as u32) - Integer::from(*b as u32)))),
                                 (Value::Integer(_), Value::Integer(_)) => Ok(None),
                                 (Value::Float(_), Value::Float(_)) => Ok(None),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
@@ -917,6 +934,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a < b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a < b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a < b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a < b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },
@@ -926,6 +944,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a <= b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a <= b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a <= b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a <= b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },
@@ -935,6 +954,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a > b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a > b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a > b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a > b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },
@@ -944,6 +964,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a >= b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a >= b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a >= b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a >= b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },
@@ -954,6 +975,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a == b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a == b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a == b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a == b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },
@@ -964,6 +986,7 @@ impl Expr {
                                 (Value::Integer(a), Value::Integer(b)) => Ok(Some((a != b).into())),
                                 (Value::Float(a), Value::Float(b)) => Ok(Some((a != b).into())),
                                 (Value::Binary(a), Value::Binary(b)) => Ok(Some((a != b).into())),
+                                (Value::Character(a), Value::Character(b)) => Ok(Some((a != b).into())),
                                 (a, b) => Err(IllegalReason::IncompatibleTypes(*op, a.get_type(), b.get_type()).into()),
                             }, |_, _| unreachable!())?
                         },

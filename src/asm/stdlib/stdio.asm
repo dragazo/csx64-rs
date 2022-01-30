@@ -7,13 +7,13 @@ global stdin, stdout, stderr
 
 ; --------------------------------------
 
-; global remove, rename
-
-; --------------------------------------
-
 global fputc, putc, putchar
 global fputs, puts
 ; global fwrite
+
+; global ungetc, fgetc, getchar, fpeek
+
+; --------------------------------------
 
 ; global scanf, vscanf
 ; global fscanf, vfscanf
@@ -25,11 +25,11 @@ global fputs, puts
 
 ; --------------------------------------
 
-; global ungetc, fgetc, getchar, fpeek
+; global fopen, fflush, fclose
 
 ; --------------------------------------
 
-; global fopen, fflush, fclose
+; global remove, rename
 
 ; --------------------------------------
 
@@ -619,191 +619,191 @@ __vprintf_fmt_pack: equ 0
 ; WARNING: nonstandard calling convention.
 ; reads all the relevant formatting info for the current item (after reading the % char).
 ; returns zero on success.
-; __vprintf_read_prefix:
-;     xor ecx, ecx ; clear ecx (will hold flags)
+__vprintf_read_prefix:
+    xor ecx, ecx ; clear ecx (will hold flags)
     
-;     .unord_flag_loop:
-;         mov al, byte ptr [r12]
+    .unord_flag_loop:
+        mov al, byte ptr [r12]
         
-;         cmp al, '+'
-;         je .plus
-;         cmp al, '-'
-;         je .minus
-;         cmp al, '0'
-;         je .zero
-;         cmp al, '#'
-;         je .hash
+        cmp al, '+'
+        je .plus
+        cmp al, '-'
+        je .minus
+        cmp al, '0'
+        je .zero
+        cmp al, '#'
+        je .hash
         
-;         jmp .unord_flag_loop_done ; if it was none of those, we're done
+        jmp .unord_flag_loop_done ; if it was none of those, we're done
         
-;         .plus:
-;             test ecx, __vprintf_fmt.plus ; test if this flag was already set (if so, invalid fmt)
-;             jnz .invalid
-;             or ecx, __vprintf_fmt.plus
-;             jmp .unord_flag_aft
-;         .minus:
-;             test ecx, __vprintf_fmt.minus ; test if this flag was already set (if so, invalid fmt)
-;             jnz .invalid
-;             or ecx, __vprintf_fmt.minus
-;             jmp .unord_flag_aft
-;         .zero:
-;             test ecx, __vprintf_fmt.zero ; test if this flag was already set (if so, invalid fmt)
-;             jnz .invalid
-;             or ecx, __vprintf_fmt.zero
-;             jmp .unord_flag_aft
-;         .hash:
-;             test ecx, __vprintf_fmt.hash ; test if this flag was already set (if so, invalid fmt)
-;             jnz .invalid
-;             or ecx, __vprintf_fmt.hash
+        .plus:
+            test ecx, __vprintf_fmt.plus ; test if this flag was already set (if so, invalid fmt)
+            jnz .invalid
+            or ecx, __vprintf_fmt.plus
+            jmp .unord_flag_aft
+        .minus:
+            test ecx, __vprintf_fmt.minus ; test if this flag was already set (if so, invalid fmt)
+            jnz .invalid
+            or ecx, __vprintf_fmt.minus
+            jmp .unord_flag_aft
+        .zero:
+            test ecx, __vprintf_fmt.zero ; test if this flag was already set (if so, invalid fmt)
+            jnz .invalid
+            or ecx, __vprintf_fmt.zero
+            jmp .unord_flag_aft
+        .hash:
+            test ecx, __vprintf_fmt.hash ; test if this flag was already set (if so, invalid fmt)
+            jnz .invalid
+            or ecx, __vprintf_fmt.hash
             
-;     .unord_flag_aft:
-;         inc r12 ; on to next char
-;         jmp .unord_flag_loop
-;     .unord_flag_loop_done:
+    .unord_flag_aft:
+        inc r12 ; on to next char
+        jmp .unord_flag_loop
+    .unord_flag_loop_done:
     
-;     xor eax, eax ; clear eax (will hold width)
-;     mov bl, byte ptr [r12] ; read the next char
-;     cmp bl, '*'
-;     je .param_width ; if char is * then width is specified via param
-;     sub bl, '0'
-;     cmp bl, 10
-;     jae .no_width ; if it's not a digit then there's no width specified
+    xor eax, eax ; clear eax (will hold width)
+    mov bl, byte ptr [r12] ; read the next char
+    cmp bl, '*'
+    je .param_width ; if char is * then width is specified via param
+    sub bl, '0'
+    cmp bl, 10
+    jae .no_width ; if it's not a digit then there's no width specified
     
-;     or ecx, __vprintf_fmt.width ; mark that a width was specified
-;     inc r12    ; increment up to the next char
-;     mov al, bl ; move the 0-9 first digit into the width register
-;     .width_parsing:
-;         movzx ebx, byte ptr [r12] ; read the next character from format string
-;         sub bl, '0'
-;         cmp bl, 10
-;         jae .width_parsing_done ; if it's not a digit, we're done parsing width
+    or ecx, __vprintf_fmt.width ; mark that a width was specified
+    inc r12    ; increment up to the next char
+    mov al, bl ; move the 0-9 first digit into the width register
+    .width_parsing:
+        movzx ebx, byte ptr [r12] ; read the next character from format string
+        sub bl, '0'
+        cmp bl, 10
+        jae .width_parsing_done ; if it's not a digit, we're done parsing width
         
-;         imul eax, 10 ; incorporate the next digit into the width value
-;         add eax, ebx
-;         inc r12
-;         jmp .width_parsing
-;     .width_parsing_done:
-;     jmp .no_width ; resume logic after width parsing
+        imul eax, 10 ; incorporate the next digit into the width value
+        add eax, ebx
+        inc r12
+        jmp .width_parsing
+    .width_parsing_done:
+    jmp .no_width ; resume logic after width parsing
     
-;     .param_width:
-;     inc r12 ; increment up to the next char
-;     or ecx, __vprintf_fmt.width ; mark that a width was specified
-;     mov r11, rdi     ; save rdi in r11 for the main __vprintf func
-;     mov rdi, r10     ; load the arglist pointer
-;     call arglist_i   ; get a 32-bit integer arg from the pack and use it as width
-;     mov rdi, r11
-;     cmp eax, 0
-;     movl eax, 0 ; if prec is negative, set it to zero
+    .param_width:
+    inc r12 ; increment up to the next char
+    or ecx, __vprintf_fmt.width ; mark that a width was specified
+    mov r11, rdi     ; save rdi in r11 for the main __vprintf func
+    mov rdi, r10     ; load the arglist pointer
+    call arglist_i   ; get a 32-bit integer arg from the pack and use it as width
+    mov rdi, r11
+    cmp eax, 0
+    cmovl eax, 0 ; if prec is negative, set it to zero
     
-;     .no_width:
-;     mov dword ptr [rsi + __vprintf_fmt_pack.width], eax ; store the width in the format pack
+    .no_width:
+    mov dword ptr [rsi + __vprintf_fmt_pack.width], eax ; store the width in the format pack
     
-;     xor eax, eax ; clear eax (will hold precision)
-;     cmp byte ptr [r12], '.'
-;     jne .no_prec ; if next char is not a . then there's no precision
+    xor eax, eax ; clear eax (will hold precision)
+    cmp byte ptr [r12], '.'
+    jne .no_prec ; if next char is not a . then there's no precision
     
-;     or ecx, __vprintf_fmt.prec ; mark that a precision was specified
-;     inc r12 ; skip the .
+    or ecx, __vprintf_fmt.prec ; mark that a precision was specified
+    inc r12 ; skip the .
     
-;     mov bl, byte ptr [r12] ; read the first character of precision field from format string
-;     cmp bl, '*'
-;     je .param_prec ; if it's a * then we use a param precision value
-;     sub bl, '0'
-;     cmp bl, 10
-;     jae .invalid ; if it's not a digit then this format string is invalid
+    mov bl, byte ptr [r12] ; read the first character of precision field from format string
+    cmp bl, '*'
+    je .param_prec ; if it's a * then we use a param precision value
+    sub bl, '0'
+    cmp bl, 10
+    jae .invalid ; if it's not a digit then this format string is invalid
     
-;     inc r12    ; increment up to the next char
-;     mov al, bl ; move the 0-9 first digit into the width register
-;     .prec_parsing:
-;         movzx ebx, byte ptr [r12] ; read the next character from format string
-;         sub bl, '0'
-;         cmp bl, 10
-;         jae .prec_parsing_done ; if it's not a digit, we're done parsing precision
+    inc r12    ; increment up to the next char
+    mov al, bl ; move the 0-9 first digit into the width register
+    .prec_parsing:
+        movzx ebx, byte ptr [r12] ; read the next character from format string
+        sub bl, '0'
+        cmp bl, 10
+        jae .prec_parsing_done ; if it's not a digit, we're done parsing precision
         
-;         imul eax, 10 ; incorporate the next digit into the precision value
-;         add eax, ebx
-;         inc r12
-;         jmp .prec_parsing
-;     .prec_parsing_done:
-;     jmp .no_prec ; resume logic after prec parsing
+        imul eax, 10 ; incorporate the next digit into the precision value
+        add eax, ebx
+        inc r12
+        jmp .prec_parsing
+    .prec_parsing_done:
+    jmp .no_prec ; resume logic after prec parsing
     
-;     .param_prec:
-;     inc r12 ; bump up to the next character
-;     mov r11, rdi     ; save rdi in r11 for the main __vprintf func
-;     mov rdi, r10     ; load the arglist pointer
-;     call arglist_i   ; get a 32-bit integer arg from the pack and use it as precision
-;     mov rdi, r11
-;     cmp eax, 0
-;     movl eax, 0 ; if prec is negative, set it to zero
+    .param_prec:
+    inc r12 ; bump up to the next character
+    mov r11, rdi     ; save rdi in r11 for the main __vprintf func
+    mov rdi, r10     ; load the arglist pointer
+    call arglist_i   ; get a 32-bit integer arg from the pack and use it as precision
+    mov rdi, r11
+    cmp eax, 0
+    cmovl eax, 0 ; if prec is negative, set it to zero
     
-;     .no_prec:
-;     mov dword ptr [rsi + __vprintf_fmt_pack.prec], eax ; store the precision in the format pack
+    .no_prec:
+    mov dword ptr [rsi + __vprintf_fmt_pack.prec], eax ; store the precision in the format pack
     
-;     mov bl, byte ptr [r12] ; read the next char of the format string
-;     cmp bl, 'h'
-;     je .half_seq ; if it's an h we're in h or hh case (short/char)
-;     cmp bl, 'l'
-;     je .long_seq ; if it's an l we're in l or ll case (long/long long)
-;     cmp bl, 'j'
-;     je .j_scale ; if it's a j we're in intmax case
-;     cmp bl, 'z'
-;     je .z_scale ; if it's a z we're in size_t case
-;     cmp bl, 't'
-;     je .t_scale ; if it's a t we're in ptrdiff_t case
-;     cmp bl, 'L'
-;     je .L_scale ; if it's an L we're in long double case
+    mov bl, byte ptr [r12] ; read the next char of the format string
+    cmp bl, 'h'
+    je .half_seq ; if it's an h we're in h or hh case (short/char)
+    cmp bl, 'l'
+    je .long_seq ; if it's an l we're in l or ll case (long/long long)
+    cmp bl, 'j'
+    je .j_scale ; if it's a j we're in intmax case
+    cmp bl, 'z'
+    je .z_scale ; if it's a z we're in size_t case
+    cmp bl, 't'
+    je .t_scale ; if it's a t we're in ptrdiff_t case
+    cmp bl, 'L'
+    je .L_scale ; if it's an L we're in long double case
     
-;     mov eax, __vprintf_scale.default ; otherwise use the default option and continue (no chars to extract)
-;     jmp .scale_done
+    mov eax, __vprintf_scale.default ; otherwise use the default option and continue (no chars to extract)
+    jmp .scale_done
     
-;     .L_scale:
-;     mov eax, __vprintf_scale.L
-;     inc r12 ; move to next char in format string
-;     jmp .scale_done
+    .L_scale:
+    mov eax, __vprintf_scale.L
+    inc r12 ; move to next char in format string
+    jmp .scale_done
     
-;     .t_scale:
-;     mov eax, __vprintf_scale.t
-;     inc r12 ; move to next char in format string
-;     jmp .scale_done
+    .t_scale:
+    mov eax, __vprintf_scale.t
+    inc r12 ; move to next char in format string
+    jmp .scale_done
     
-;     .z_scale:
-;     mov eax, __vprintf_scale.z
-;     inc r12 ; move to next char in format string
-;     jmp .scale_done
+    .z_scale:
+    mov eax, __vprintf_scale.z
+    inc r12 ; move to next char in format string
+    jmp .scale_done
     
-;     .j_scale:
-;     mov eax, __vprintf_scale.j
-;     inc r12 ; move to next char in format string
-;     jmp .scale_done
+    .j_scale:
+    mov eax, __vprintf_scale.j
+    inc r12 ; move to next char in format string
+    jmp .scale_done
     
-;     .half_seq:
-;     mov eax, __vprintf_scale.h
-;     inc r12 ; move to next char in format string
-;     cmp byte ptr [r12], 'h'
-;     jne .scale_done ; if it's not another h we're done with scale
-;     mov eax, __vprintf_scale.hh
-;     inc r12 ; consume the second h as well
-;     jmp .scale_done
+    .half_seq:
+    mov eax, __vprintf_scale.h
+    inc r12 ; move to next char in format string
+    cmp byte ptr [r12], 'h'
+    jne .scale_done ; if it's not another h we're done with scale
+    mov eax, __vprintf_scale.hh
+    inc r12 ; consume the second h as well
+    jmp .scale_done
     
-;     .long_seq:
-;     mov eax, __vprintf_scale.l
-;     inc r12 ; move to next char in format string
-;     cmp byte ptr [r12], 'l'
-;     jne .scale_done ; if it's not another l we're done with scale
-;     mov eax, __vprintf_scale.ll
-;     inc r12 ; consume the second l as well
+    .long_seq:
+    mov eax, __vprintf_scale.l
+    inc r12 ; move to next char in format string
+    cmp byte ptr [r12], 'l'
+    jne .scale_done ; if it's not another l we're done with scale
+    mov eax, __vprintf_scale.ll
+    inc r12 ; consume the second l as well
     
-;     .scale_done:
-;     mov dword ptr [rsi + __vprintf_fmt_pack.scale], eax ; store scale info to format pack
+    .scale_done:
+    mov dword ptr [rsi + __vprintf_fmt_pack.scale], eax ; store scale info to format pack
     
-;     mov dword ptr [rsi + __vprintf_fmt_pack.fmt], ecx ; and finally, store the format flags to the format pack as well
+    mov dword ptr [rsi + __vprintf_fmt_pack.fmt], ecx ; and finally, store the format flags to the format pack as well
     
-;     xor eax, eax ; return 0
-;     ret ; finally done - pack fully parsed and r12 now points to the mode character
+    xor eax, eax ; return 0
+    ret ; finally done - pack fully parsed and r12 now points to the mode character
     
-;     .invalid: ; this happens if the format string was invalid (failed to parse)
-;     mov eax, 1
-;     ret ; return nonzero to indicate failure
+    .invalid: ; this happens if the format string was invalid (failed to parse)
+    mov eax, 1
+    ret ; return nonzero to indicate failure
 
 ; the following formatting functions implicitly take a sprinter function in r15.
 ; the sprinter function takes the form u64(*)(const char*), printing the string and returning # chars written.
@@ -813,272 +813,272 @@ __vprintf_fmt_pack: equ 0
 ; u64 __printf_u64_raw(u64 val, __vprintf_fmt_pack *fmt, bool neg : bl, u64 radix : rcx, char alpha_base : bh)
 ; WARNING: nonstandard calling convention
 ; prints the (unsigned) value and returns the number of characters written to the stream
-; __printf_u64_raw:
-;     mov r10d, dword ptr [rsi + __vprintf_fmt_pack.width]
-;     mov r11d, dword ptr [rsi + __vprintf_fmt_pack.prec]
-;     cmp r11d, r10d
-;     movg r10d, r11d ; put larger of width/precision in r10d
-;     and r10d, ~7 ; round down to a multiple of 8
-;     add r10d, 32 ; add some more to still be a multiple of 8 but also have extra space for '-' and base prefixes
+__printf_u64_raw:
+    mov r10d, dword ptr [rsi + __vprintf_fmt_pack.width]
+    mov r11d, dword ptr [rsi + __vprintf_fmt_pack.prec]
+    cmp r11d, r10d
+    cmovg r10d, r11d ; put larger of width/precision in r10d
+    and r10d, !7 ; round down to a multiple of 8
+    add r10d, 32 ; add some more to still be a multiple of 8 but also have extra space for '-' and base prefixes
     
-;     mov rax, rsp
-;     sub rsp, r10 ; allocate that many bytes on the stack
-;     push rax     ; save original value of rsp on the stack for restore point later
+    mov rax, rsp
+    sub rsp, r10 ; allocate that many bytes on the stack
+    push rax     ; save original value of rsp on the stack for restore point later
     
-;     lea r8, [rsp+8 + r10 - 1] ; r8 points to the start of the string
-;     mov byte ptr [r8], 0      ; place a null terminator at end of string
+    lea r8, [rsp+8 + r10 - 1] ; r8 points to the start of the string
+    mov byte ptr [r8], 0      ; place a null terminator at end of string
     
-;     mov rax, rdi ; put the value in rax for division
-;     .loop_top:
-;         xor rdx, rdx ; zero high bits for division
-;         div rcx ; divide by radix - quot kept in rax, remainder (next digit) stored in rdx
+    mov rax, rdi ; put the value in rax for division
+    .loop_top:
+        xor rdx, rdx ; zero high bits for division
+        div rcx ; divide by radix - quot kept in rax, remainder (next digit) stored in rdx
         
-;         sub dl, 10         ; subtract/compare to 10
-;         jae .alpha_char    ; if it was 10 or higher, convert to alpha using alpha_base
-;         add dl, 10 + '0'   ; otherwise add back the 10 and convert to a digit
-;         jmp .char_finished ; and now this char is properly formatted
-;         .alpha_char:
-;         add dl, bh         ; if it's alpha, add alpha_base (bh)
-;         .char_finished:
+        sub dl, 10         ; subtract/compare to 10
+        jae .alpha_char    ; if it was 10 or higher, convert to alpha using alpha_base
+        add dl, '0' + 10   ; otherwise add back the 10 and convert to a digit
+        jmp .char_finished ; and now this char is properly formatted
+        .alpha_char:
+        add dl, bh         ; if it's alpha, add alpha_base (bh)
+        .char_finished:
         
-;         dec r8                ; make room for another character
-;         mov byte ptr [r8], dl ; place the ascii char into the string
+        dec r8                ; make room for another character
+        mov byte ptr [r8], dl ; place the ascii char into the string
         
-;         cmp rax, 0
-;         jnz .loop_top ; if quotient was nonzero repeat
+        cmp rax, 0
+        jnz .loop_top ; if quotient was nonzero repeat
     
-;     ; cl holds the radix (used below for showbase logic)
-;     mov ch, 0 ; ch will hold the sign character (0 for none)
-;     cmp bl, 0 ; test the neg flag parameter
-;     movnz ch, '-'
-;     jnz .no_sign ; if (-) flag was true, we use '-' char
-;     cmp al, 10
-;     jne .no_sign ; otherwise, if not in decimal mode we don't print '+' sign regardless of if + flag was specified
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.plus ; check if plus flag is set in format pack
-;     movnz ch, '+'
-;     .no_sign:
+    ; cl holds the radix (used below for showbase logic)
+    mov ch, 0 ; ch will hold the sign character (0 for none)
+    cmp bl, 0 ; test the neg flag parameter
+    cmovnz ch, '-'
+    jnz .no_sign ; if (-) flag was true, we use '-' char
+    cmp al, 10
+    jne .no_sign ; otherwise, if not in decimal mode we don't print '+' sign regardless of if + flag was specified
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.plus ; check if plus flag is set in format pack
+    cmovnz ch, '+'
+    .no_sign:
     
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.prec
-;     jnz .done_prec_fetch ; if a precedence was explicitly specified, use that (already in r11)
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.zero
-;     jz .prec_done ; otherwise if the zero flag was not specified, we can just entirely skip the prec logic
-;     mov r11d, dword ptr [rsi + __vprintf_fmt_pack.width] ; otherwise use width
-;     cmp ch, 0
-;     setnz rdx
-;     sub r11, rdx ; subtract 1 if there's going to be a sign character
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.hash
-;     jz .done_prec_fetch ; if showbase is disabled, we're done with prec computation
-;         cmp cl, 16
-;         je .prec_hex ; if in hex mode
-;         cmp cl, 8
-;         sete rdx
-;         sub r11, rdx ; otherwise, if in octal mode, take off 1 char for 0 prefix
-;         jmp .done_prec_fetch
-;         .prec_hex:
-;         sub r11, 2 ; take off 2 chars from precision for the 0x prefix
-;     .done_prec_fetch:
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.prec
+    jnz .done_prec_fetch ; if a precedence was explicitly specified, use that (already in r11)
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.zero
+    jz .prec_done ; otherwise if the zero flag was not specified, we can just entirely skip the prec logic
+    mov r11d, dword ptr [rsi + __vprintf_fmt_pack.width] ; otherwise use width
+    cmp ch, 0
+    setnz rdx
+    sub r11, rdx ; subtract 1 if there's going to be a sign character
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.hash
+    jz .done_prec_fetch ; if showbase is disabled, we're done with prec computation
+        cmp cl, 16
+        je .prec_hex ; if in hex mode
+        cmp cl, 8
+        sete rdx
+        sub r11, rdx ; otherwise, if in octal mode, take off 1 char for 0 prefix
+        jmp .done_prec_fetch
+        .prec_hex:
+        sub r11, 2 ; take off 2 chars from precision for the 0x prefix
+    .done_prec_fetch:
     
-;     lea r9, [rsp+8 + r10 - 1] ; load the address of the terminator
-;     sub r9, r11               ; subtract precision - this is address to which we should get with digits
-;     jmp .prec_test
-;     .prec_top:
-;         dec r8                 ; make room for another char
-;         mov byte ptr [r8], '0' ; place a zero in the string
-;     .prec_test:
-;         cmp r8, r9
-;         ja .prec_top
-;     .prec_done:
+    lea r9, [rsp+8 + r10 - 1] ; load the address of the terminator
+    sub r9, r11               ; subtract precision - this is address to which we should get with digits
+    jmp .prec_test
+    .prec_top:
+        dec r8                 ; make room for another char
+        mov byte ptr [r8], '0' ; place a zero in the string
+    .prec_test:
+        cmp r8, r9
+        ja .prec_top
+    .prec_done:
     
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.hash ; check if the hash flag was specified in the format string
-;     jz .noshowbase ; if it wasn't specified, skip showbase logic
-;     cmp cl, 16
-;     je .showbase_hex   ; if base was 16, print hex prefix
-;     cmp cl, 8
-;     je .showbase_octal ; if base was 8, print octal prefix
-;     jmp .noshowbase    ; otherwise no prefix
-;     .showbase_octal:
-;         dec r8
-;         mov byte ptr [r8], '0' ; append '0' to string
-;         jmp .noshowbase
-;     .showbase_hex:
-;         dec r8
-;         mov byte ptr [r8], bh
-;         add byte ptr [r8], 'x'-'a' ; append 'x' to string (based on alpha base to support uppercase)
-;         dec r8
-;         mov byte ptr [r8], '0' ; append '0' to string
-;     .noshowbase:
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.hash ; check if the hash flag was specified in the format string
+    jz .noshowbase ; if it wasn't specified, skip showbase logic
+    cmp cl, 16
+    je .showbase_hex   ; if base was 16, print hex prefix
+    cmp cl, 8
+    je .showbase_octal ; if base was 8, print octal prefix
+    jmp .noshowbase    ; otherwise no prefix
+    .showbase_octal:
+        dec r8
+        mov byte ptr [r8], '0' ; append '0' to string
+        jmp .noshowbase
+    .showbase_hex:
+        dec r8
+        mov byte ptr [r8], bh
+        add byte ptr [r8], 'x'-'a' ; append 'x' to string (based on alpha base to support uppercase)
+        dec r8
+        mov byte ptr [r8], '0' ; append '0' to string
+    .noshowbase:
     
-;     cmp ch, 0
-;     jz .no_sign_print
-;     dec r8                ; make room for another character
-;     mov byte ptr [r8], ch ; add the sign character to the string
-;     .no_sign_print:
+    cmp ch, 0
+    jz .no_sign_print
+    dec r8                ; make room for another character
+    mov byte ptr [r8], ch ; add the sign character to the string
+    .no_sign_print:
     
-;     mov r11d, dword ptr [rsi + __vprintf_fmt_pack.width]
-;     lea r9, [rsp+8 + r10 - 1] ; load the address of the terminator
-;     sub r9, r8                ; subtract string start - this is current length of string
-;     mov rbx, r11
-;     sub rbx, r9 ; rbx holds width - current len i.e. the number of spaces to add
+    mov r11d, dword ptr [rsi + __vprintf_fmt_pack.width]
+    lea r9, [rsp+8 + r10 - 1] ; load the address of the terminator
+    sub r9, r8                ; subtract string start - this is current length of string
+    mov rbx, r11
+    sub rbx, r9 ; rbx holds width - current len i.e. the number of spaces to add
     
-;     mov rdi, r8 ; put string start in rdi (after padding logic, it needs to be there)
-;     cmp r9, r11
-;     jae .done ; if we've already passed the width requirement, we're done
-;     test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.minus
-;     jz .right_justify
+    mov rdi, r8 ; put string start in rdi (after padding logic, it needs to be there)
+    cmp r9, r11
+    jae .done ; if we've already passed the width requirement, we're done
+    test dword ptr [rsi + __vprintf_fmt_pack.fmt], __vprintf_fmt.minus
+    jz .right_justify
     
-;     mov rcx, r9 ; put current length of string in rcx
-;     mov rsi, r8 ; source is start of string
-;     mov rdi, r8
-;     sub rdi, rbx ; dest is start of string - number of spaces to add
-;     mov r10, rdi ; save dest in r10 for later (see below)
+    mov rcx, r9 ; put current length of string in rcx
+    mov rsi, r8 ; source is start of string
+    mov rdi, r8
+    sub rdi, rbx ; dest is start of string - number of spaces to add
+    mov r10, rdi ; save dest in r10 for later (see below)
     
-;     cld       ; clear direction flag so we can do a forward copy
-;     rep movsb ; copy the string to the left
+    cld       ; clear direction flag so we can do a forward copy
+    rep movsb ; copy the string to the left
     
-;     mov rcx, rbx ; set the number of spaces to insert
-;     mov al, ' '  ; set the fill character
+    mov rcx, rbx ; set the number of spaces to insert
+    mov al, ' '  ; set the fill character
     
-;     rep stosb ; insert that many spaces to the right of the string
+    rep stosb ; insert that many spaces to the right of the string
     
-;     mov rdi, r10 ; load the the start of string (see above)
-;     jmp .done    ; and now we're done padding
+    mov rdi, r10 ; load the the start of string (see above)
+    jmp .done    ; and now we're done padding
     
-;     .right_justify:
-;     mov rcx, rbx ; set number of chars to insert
-;     mov al, ' '  ; set padding char
-;     mov rdi, r8
-;     dec rdi      ; dest is 1 before start of string
-;     std          ; set direction flag so we perform the insertion right-to-left
-;     rep stosb    ; insert the padding chars
-;     inc rdi      ; since count was nonzero, rdi is now 1 before start of string - bump up to first char
+    .right_justify:
+    mov rcx, rbx ; set number of chars to insert
+    mov al, ' '  ; set padding char
+    mov rdi, r8
+    dec rdi      ; dest is 1 before start of string
+    std          ; set direction flag so we perform the insertion right-to-left
+    rep stosb    ; insert the padding chars
+    inc rdi      ; since count was nonzero, rdi is now 1 before start of string - bump up to first char
     
-;     .done:
-;     call r15 ; print the string using the sprinter function in r15
+    .done:
+    call r15 ; print the string using the sprinter function in r15
 
-;     pop rsp ; clean up the stack space we allocated for the string
-;     ret ; return result from sprinter (number of characters written)
+    pop rsp ; clean up the stack space we allocated for the string
+    ret ; return result from sprinter (number of characters written)
 
 ; ------------------------------------------------------------------------------
     
 ; u64 __printf_u64_decimal(u64 val, __vprintf_fmt_pack *fmt)
-; __printf_u64_decimal:
-;     mov bl, 0            ; mark that this is not negative
-;     mov rcx, 10          ; set to decimal mode (no need to set alpha char in this case)
-;     jmp __printf_u64_raw ; then invoke the raw handler
-; ; u64 __printf_u32_decimal(u32 val, __vprintf_fmt_pack *fmt)
-; __printf_u32_decimal:
-;     mov edi, edi             ; zero extend arg to 64-bit
-;     jmp __printf_u64_decimal ; then just refer to the 64-bit version
-; ; u64 __printf_u16_decimal(u16 val, __vprintf_fmt_pack *fmt)
-; __printf_u16_decimal:
-;     movzx edi, di            ; zero extend arg to 64-bit
-;     jmp __printf_u64_decimal ; then just refer to the 64-bit version
-; ; u64 __printf_u8_decimal(u8 val, __vprintf_fmt_pack *fmt)
-; __printf_u8_decimal:
-;     movzx edi, dil           ; zero extend arg to 64-bit
-;     jmp __printf_u64_decimal ; then just refer to the 64-bit version
+__printf_u64_decimal:
+    mov bl, 0            ; mark that this is not negative
+    mov rcx, 10          ; set to decimal mode (no need to set alpha char in this case)
+    jmp __printf_u64_raw ; then invoke the raw handler
+; u64 __printf_u32_decimal(u32 val, __vprintf_fmt_pack *fmt)
+__printf_u32_decimal:
+    mov edi, edi             ; zero extend arg to 64-bit
+    jmp __printf_u64_decimal ; then just refer to the 64-bit version
+; u64 __printf_u16_decimal(u16 val, __vprintf_fmt_pack *fmt)
+__printf_u16_decimal:
+    movzx edi, di            ; zero extend arg to 64-bit
+    jmp __printf_u64_decimal ; then just refer to the 64-bit version
+; u64 __printf_u8_decimal(u8 val, __vprintf_fmt_pack *fmt)
+__printf_u8_decimal:
+    movzx edi, dil           ; zero extend arg to 64-bit
+    jmp __printf_u64_decimal ; then just refer to the 64-bit version
 
 ; ------------------------------------------------------------------------------
 
 ; u64 __printf_i64_decimal(i64 val, __vprintf_fmt_pack *fmt)
-; __printf_i64_decimal:
-;     mov rax, rdi
-;     neg rax              ; pre-compute the negative of val in rax
-;     cmp rdi, 0
-;     setl bl              ; set negative flag in bl
-;     movl rdi, rax        ; conditionally copy the negative value (now positive) back into rdi
-;     mov rcx, 10          ; set to decimal mode (no need to set alpha char in this case)
-;     jmp __printf_u64_raw ; then invoke the raw handler
-; ; u64 __printf_i32_decimal(i32 val, __vprintf_fmt_pack *fmt)
-; __printf_i32_decimal:
-;     movsx rdi, edi           ; sign extend arg to 64-bit
-;     jmp __printf_i64_decimal ; then just refer to the 64-bit version
-; ; u64 __printf_i16_decimal(i16 val, __vprintf_fmt_pack *fmt)
-; __printf_i16_decimal:
-;     movsx rdi, di            ; sign extend arg to 64-bit
-;     jmp __printf_i64_decimal ; then just refer to the 64-bit version
-; ; u64 __printf_i8_decimal(i8 val, __vprintf_fmt_pack *fmt)
-; __printf_i8_decimal:
-;     movsx rdi, dil           ; sign extend arg to 64-bit
-;     jmp __printf_i64_decimal ; then just refer to the 64-bit version
+__printf_i64_decimal:
+    mov rax, rdi
+    neg rax              ; pre-compute the negative of val in rax
+    cmp rdi, 0
+    setl bl              ; set negative flag in bl
+    cmovl rdi, rax       ; conditionally copy the negative value (now positive) back into rdi
+    mov rcx, 10          ; set to decimal mode (no need to set alpha char in this case)
+    jmp __printf_u64_raw ; then invoke the raw handler
+; u64 __printf_i32_decimal(i32 val, __vprintf_fmt_pack *fmt)
+__printf_i32_decimal:
+    movsx rdi, edi           ; sign extend arg to 64-bit
+    jmp __printf_i64_decimal ; then just refer to the 64-bit version
+; u64 __printf_i16_decimal(i16 val, __vprintf_fmt_pack *fmt)
+__printf_i16_decimal:
+    movsx rdi, di            ; sign extend arg to 64-bit
+    jmp __printf_i64_decimal ; then just refer to the 64-bit version
+; u64 __printf_i8_decimal(i8 val, __vprintf_fmt_pack *fmt)
+__printf_i8_decimal:
+    movsx rdi, dil           ; sign extend arg to 64-bit
+    jmp __printf_i64_decimal ; then just refer to the 64-bit version
 
 ; ------------------------------------------------------------------------------
 
 ; u64 __printf_u64_hex(u64 val, __vprintf_fmt_pack *fmt)
-; __printf_u64_hex:
-;     mov bl, 0            ; mark that this is not negative
-;     mov rcx, 16          ; set to hexadecimal mode
-;     mov bh, 'a'          ; set lowercase 'a' as base alpha char
-;     jmp __printf_u64_raw ; then invoke the raw handler
-; ; u64 __printf_u32_hex(u32 val, __vprintf_fmt_pack *fmt)
-; __printf_u32_hex:
-;     mov edi, edi         ; zero extend arg to 64-bit
-;     jmp __printf_u64_hex ; then just refer to the 64-bit version
-; ; u64 __printf_u16_hex(u16 val, __vprintf_fmt_pack *fmt)
-; __printf_u16_hex:
-;     movzx rdi, di        ; zero extend arg to 64-bit
-;     jmp __printf_u64_hex ; then just refer to the 64-bit version
-; ; u64 __printf_u8_hex(u8 val, __vprintf_fmt_pack *fmt)
-; __printf_u8_hex:
-;     movzx rdi, dil       ; zero extend arg to 64-bit
-;     jmp __printf_u64_hex ; then just refer to the 64-bit version
+__printf_u64_hex:
+    mov bl, 0            ; mark that this is not negative
+    mov rcx, 16          ; set to hexadecimal mode
+    mov bh, 'a'          ; set lowercase 'a' as base alpha char
+    jmp __printf_u64_raw ; then invoke the raw handler
+; u64 __printf_u32_hex(u32 val, __vprintf_fmt_pack *fmt)
+__printf_u32_hex:
+    mov edi, edi         ; zero extend arg to 64-bit
+    jmp __printf_u64_hex ; then just refer to the 64-bit version
+; u64 __printf_u16_hex(u16 val, __vprintf_fmt_pack *fmt)
+__printf_u16_hex:
+    movzx rdi, di        ; zero extend arg to 64-bit
+    jmp __printf_u64_hex ; then just refer to the 64-bit version
+; u64 __printf_u8_hex(u8 val, __vprintf_fmt_pack *fmt)
+__printf_u8_hex:
+    movzx rdi, dil       ; zero extend arg to 64-bit
+    jmp __printf_u64_hex ; then just refer to the 64-bit version
 
 ; ------------------------------------------------------------------------------
 
 ; u64 __printf_u64_HEX(u64 val, __vprintf_fmt_pack *fmt)
-; __printf_u64_HEX:
-;     mov bl, 0            ; mark that this is not negative
-;     mov rcx, 16          ; set to hexadecimal mode
-;     mov bh, 'A'          ; set uppercase 'A' as base alpha char
-;     jmp __printf_u64_raw ; then invoke the raw handler
-; ; u64 __printf_u32_HEX(u32 val, __vprintf_fmt_pack *fmt)
-; __printf_u32_HEX:
-;     mov edi, edi         ; zero extend arg to 64-bit
-;     jmp __printf_u64_HEX ; then just refer to the 64-bit version
-; ; u64 __printf_u16_HEX(u16 val, __vprintf_fmt_pack *fmt)
-; __printf_u16_HEX:
-;     movzx rdi, di        ; zero extend arg to 64-bit
-;     jmp __printf_u64_HEX ; then just refer to the 64-bit version
-; ; u64 __printf_u8_HEX(u8 val, __vprintf_fmt_pack *fmt)
-; __printf_u8_HEX:
-;     movzx rdi, dil       ; zero extend arg to 64-bit
-;     jmp __printf_u64_HEX ; then just refer to the 64-bit version
+__printf_u64_HEX:
+    mov bl, 0            ; mark that this is not negative
+    mov rcx, 16          ; set to hexadecimal mode
+    mov bh, 'A'          ; set uppercase 'A' as base alpha char
+    jmp __printf_u64_raw ; then invoke the raw handler
+; u64 __printf_u32_HEX(u32 val, __vprintf_fmt_pack *fmt)
+__printf_u32_HEX:
+    mov edi, edi         ; zero extend arg to 64-bit
+    jmp __printf_u64_HEX ; then just refer to the 64-bit version
+; u64 __printf_u16_HEX(u16 val, __vprintf_fmt_pack *fmt)
+__printf_u16_HEX:
+    movzx rdi, di        ; zero extend arg to 64-bit
+    jmp __printf_u64_HEX ; then just refer to the 64-bit version
+; u64 __printf_u8_HEX(u8 val, __vprintf_fmt_pack *fmt)
+__printf_u8_HEX:
+    movzx rdi, dil       ; zero extend arg to 64-bit
+    jmp __printf_u64_HEX ; then just refer to the 64-bit version
 
 ; ------------------------------------------------------------------------------
 
 ; u64 __printf_u64_octal(u64 val, __vprintf_fmt_pack *fmt)
-; __printf_u64_octal:
-;     mov bl, 0            ; mark that this is not negative
-;     mov rcx, 8           ; set to octal mode (no need to set alpha char in this case)
-;     jmp __printf_u64_raw ; then invoke the raw handler
-; ; u64 __printf_u32_octal(u32 val, __vprintf_fmt_pack *fmt)
-; __printf_u32_octal:
-;     mov edi, edi           ; zero extend arg to 64-bit
-;     jmp __printf_u64_octal ; then just refer to the 64-bit version
-; ; u64 __printf_u16_octal(u16 val, __vprintf_fmt_pack *fmt)
-; __printf_u16_octal:
-;     movzx rdi, di          ; zero extend arg to 64-bit
-;     jmp __printf_u64_octal ; then just refer to the 64-bit version
-; ; u64 __printf_u8_octal(u8 val, __vprintf_fmt_pack *fmt)
-; __printf_u8_octal:
-;     movzx rdi, dil         ; zero extend arg to 64-bit
-;     jmp __printf_u64_octal ; then just refer to the 64-bit version
+__printf_u64_octal:
+    mov bl, 0            ; mark that this is not negative
+    mov rcx, 8           ; set to octal mode (no need to set alpha char in this case)
+    jmp __printf_u64_raw ; then invoke the raw handler
+; u64 __printf_u32_octal(u32 val, __vprintf_fmt_pack *fmt)
+__printf_u32_octal:
+    mov edi, edi           ; zero extend arg to 64-bit
+    jmp __printf_u64_octal ; then just refer to the 64-bit version
+; u64 __printf_u16_octal(u16 val, __vprintf_fmt_pack *fmt)
+__printf_u16_octal:
+    movzx rdi, di          ; zero extend arg to 64-bit
+    jmp __printf_u64_octal ; then just refer to the 64-bit version
+; u64 __printf_u8_octal(u8 val, __vprintf_fmt_pack *fmt)
+__printf_u8_octal:
+    movzx rdi, dil         ; zero extend arg to 64-bit
+    jmp __printf_u64_octal ; then just refer to the 64-bit version
 
 ; ------------------------------------------------------------------------------
 
 ; u64 __printf_floating_fixed_raw(f64 val, __vprintf_fmt_pack *fmt : rsi)
 ; __printf_floating_fixed_raw:
-;     movsd xmm1, xmm0 ; copy value into xmm1 for later
-;     movq rax, xmm0
+;     vmovsd xmm1, xmm0 ; copy value into xmm1 for later
+;     vmovq rax, xmm0
 ;     and rax, 0x7fffffffffffffff
-;     movq xmm0, rax ; and convert the value to positive equivalent
+;     vmovq xmm0, rax ; and convert the value to positive equivalent
 
 ;     mov r10d, dword ptr [rsi + __vprintf_fmt_pack.width]
 ;     mov r11d, dword ptr [rsi + __vprintf_fmt_pack.prec]
 ;     add r11d, 400
 ;     cmp r11d, r10d
-;     movg r10d, r11d ; put larger of width / prec+400 in r10d
-;     and r10d, ~7 ; round down to a multiple of 8
+;     cmovg r10d, r11d ; put larger of width / prec+400 in r10d
+;     and r10d, !7 ; round down to a multiple of 8
 ;     add r10d, 32 ; add some more to still be a multiple of 8 but also have a bit extra
     
 ;     mov rax, rsp
@@ -1110,8 +1110,8 @@ __vprintf_fmt_pack: equ 0
 ;     jnc .typical
     
 ;     ; if we get here st0 is either nan, inf, or empty (impossible)
-;     movnp r8, $str("nan")
-;     movp r8, $str("inf")
+;     cmovnp r8, $str("nan")
+;     cmovp r8, $str("inf")
 ;     jmp .print
     
 ;     .typical:
@@ -1626,10 +1626,10 @@ __vprintf_fmt_pack: equ 0
 ;     mov rax, r15
 ;     pop r15
 ;     ret
-    
+
 ; --------------------------------------
 
-; int ungetc(int character, FILE *stream)
+; ; int ungetc(int character, FILE *stream)
 ; ungetc:
 ;     mov dword ptr [rsi + FILE.ungetc_ch], edi ; discard old ungetc_ch if present
 ;     mov eax, edi ; return the character
@@ -1646,8 +1646,8 @@ __vprintf_fmt_pack: equ 0
 
 ;     ; otherwise read a character from the stream (native buffers for us)
 ;     mov eax, sys_read
-;     mov ebx, dword ptr [rdi + FILE.fd]
-;     lea rcx, byte ptr [rsp - 1] ; place the read character on the stack (red zone)
+;     mov edi, dword ptr [rdi + FILE.fd]
+;     lea esi, byte ptr [rsp - 1] ; place the read character on the stack (red zone)
 ;     mov edx, 1
 ;     syscall
     

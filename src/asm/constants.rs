@@ -365,6 +365,7 @@ pub(super) enum Instruction {
     LEA, CMP,
     MUL, IMUL,
     MOVS(Size), CMPS(Size), SCAS(Size), LODS(Size), STOS(Size),
+    MOVEXT { signed: bool },
 
     NoArg { op: Option<u8>, ext_op: Option<u8> },
     Unary { op: u8, ext_op: Option<u8>, allowed_sizes: &'static [Size] },
@@ -377,7 +378,7 @@ pub(super) enum Instruction {
     FPUValue { op: u8, ext_op: Option<u8>, int: bool },
 
     VPUKMove { size: Size },
-    VPUMove { elem_size: Option<Size>, packed: bool, aligned: bool },
+    VPUMove { elem_size: Option<Size>, packed: bool, aligned: bool, cpu_transfer: bool },
     VPUBinary { op: u8, ext_op: Option<u8>, elem_size: Size, packed: bool },
     
     Suggest { from: Caseless<'static>, to: &'static [Caseless<'static>] },
@@ -476,6 +477,9 @@ lazy_static! {
         alias!(m: Caseless("CMOVNLE") => Caseless("CMOVG"));
         alias!(m: Caseless("CMOVNL") => Caseless("CMOVGE"));
         
+        insert!(m: Caseless("MOVZX") => Instruction::MOVEXT { signed: false });
+        insert!(m: Caseless("MOVSX") => Instruction::MOVEXT { signed: true });
+
         insert!(m: Caseless("LEA") => Instruction::LEA);
         insert!(m: Caseless("XCHG") => Instruction::BinaryLvalueUnord { op: OPCode::XCHG as u8, ext_op: None, allowed_sizes: STANDARD_SIZES });
 
@@ -674,11 +678,11 @@ lazy_static! {
         insert!(m: Caseless("KMOVD") => Instruction::VPUKMove { size: Size::Dword });
         insert!(m: Caseless("KMOVQ") => Instruction::VPUKMove { size: Size::Qword });
 
-        insert!(m: Caseless("VMOVDQA") => Instruction::VPUMove { elem_size: None, packed: true, aligned: true });
-        insert!(m: Caseless("VMOVDQA64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: true });
-        insert!(m: Caseless("VMOVDQA32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: true });
-        insert!(m: Caseless("VMOVDQA16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: true });
-        insert!(m: Caseless("VMOVDQA8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: true });
+        insert!(m: Caseless("VMOVDQA") => Instruction::VPUMove { elem_size: None, packed: true, aligned: true, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQA64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: true, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQA32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: true, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQA16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: true, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQA8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: true, cpu_transfer: false });
 
         suggest!(m: Caseless("MOVDQA") => [ Caseless("VMOVDQA") ]);
         suggest!(m: Caseless("MOVDQA64") => [ Caseless("VMOVDQA64") ]);
@@ -686,11 +690,11 @@ lazy_static! {
         suggest!(m: Caseless("MOVDQA16") => [ Caseless("VMOVDQA16") ]);
         suggest!(m: Caseless("MOVDQA8") => [ Caseless("VMOVDQA8") ]);
 
-        insert!(m: Caseless("VMOVDQU") => Instruction::VPUMove { elem_size: None, packed: true, aligned: false });
-        insert!(m: Caseless("VMOVDQU64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: false });
-        insert!(m: Caseless("VMOVDQU32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: false });
-        insert!(m: Caseless("VMOVDQU16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: false });
-        insert!(m: Caseless("VMOVDQU8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: false });
+        insert!(m: Caseless("VMOVDQU") => Instruction::VPUMove { elem_size: None, packed: true, aligned: false, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQU64") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: true, aligned: false, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQU32") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: true, aligned: false, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQU16") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: true, aligned: false, cpu_transfer: false });
+        insert!(m: Caseless("VMOVDQU8") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: true, aligned: false, cpu_transfer: false });
 
         suggest!(m: Caseless("MOVDQU") => [ Caseless("VMOVDQU") ]);
         suggest!(m: Caseless("MOVDQU64") => [ Caseless("VMOVDQU64") ]);
@@ -698,10 +702,10 @@ lazy_static! {
         suggest!(m: Caseless("MOVDQU16") => [ Caseless("VMOVDQU16") ]);
         suggest!(m: Caseless("MOVDQU8") => [ Caseless("VMOVDQU8") ]);
 
-        insert!(m: Caseless("VMOVQ") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: false, aligned: false });
-        insert!(m: Caseless("VMOVD") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: false, aligned: false });
-        insert!(m: Caseless("VMOVW") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: false, aligned: false });
-        insert!(m: Caseless("VMOVB") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: false, aligned: false });
+        insert!(m: Caseless("VMOVQ") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: false, aligned: false, cpu_transfer: true });
+        insert!(m: Caseless("VMOVD") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: false, aligned: false, cpu_transfer: true });
+        insert!(m: Caseless("VMOVW") => Instruction::VPUMove { elem_size: Some(Size::Word), packed: false, aligned: false, cpu_transfer: true });
+        insert!(m: Caseless("VMOVB") => Instruction::VPUMove { elem_size: Some(Size::Byte), packed: false, aligned: false, cpu_transfer: true });
 
         suggest!(m: Caseless("MOVQ") => [ Caseless("VMOVQ") ]);
         suggest!(m: Caseless("MOVD") => [ Caseless("VMOVD") ]);
@@ -714,8 +718,8 @@ lazy_static! {
         alias!(m: Caseless("VMOVUPD") => Caseless("VMOVDQU64"));
         alias!(m: Caseless("VMOVUPS") => Caseless("VMOVDQU32"));
 
-        alias!(m: Caseless("VMOVSD") => Caseless("VMOVQ"));
-        alias!(m: Caseless("VMOVSS") => Caseless("VMOVD"));
+        insert!(m: Caseless("VMOVSD") => Instruction::VPUMove { elem_size: Some(Size::Qword), packed: false, aligned: false, cpu_transfer: false });
+        insert!(m: Caseless("VMOVSS") => Instruction::VPUMove { elem_size: Some(Size::Dword), packed: false, aligned: false, cpu_transfer: false });
 
         insert!(m: Caseless("VADDSD") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(0), elem_size: Size::Qword, packed: false });
         insert!(m: Caseless("VADDPD") => Instruction::VPUBinary { op: OPCode::VPUBinary as u8, ext_op: Some(0), elem_size: Size::Qword, packed: true });

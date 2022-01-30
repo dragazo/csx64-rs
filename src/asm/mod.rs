@@ -102,6 +102,7 @@ pub(crate) enum AsmErrorKind {
     ArgumentInvalidType { index: Option<usize>, got: ArgumentType, expected: &'static [ArgumentType] },
     ArgumentsInvalidTypes { got: Vec<ArgumentType>, expected: &'static [&'static [ArgumentType]] },
     ArgumentInvalidSize { index: Option<usize>, got: Size, expected: Vec<Size> },
+    ArgumentsInvalidSizes { got: Vec<Size>, expected: &'static [&'static [Size]] },
     SizeSpecNotAllowed { index: Option<usize> },
 
     /// Failed to evaluate a critical expression for the given reason.
@@ -246,6 +247,9 @@ impl fmt::Display for AsmError {
             AsmErrorKind::ArgumentInvalidSize { index, got, expected } => match index {
                 Some(index) => write!(f, "argument {} invalid size {} - expected {}", index + 1, got, Punctuated::or(expected)),
                 None => write!(f, "argument invalid size {} - expected {}", got, Punctuated::or(expected)),
+            }
+            AsmErrorKind::ArgumentsInvalidSizes { got, expected } => {
+                write!(f, "arguments {:?} invalid sizes - expected {:?}", got, Punctuated::or(expected))
             }
             AsmErrorKind::SizeSpecNotAllowed { index } => match index {
                 Some(index) => write!(f, "size specifier on argument {} not allowed", index + 1),
@@ -1574,6 +1578,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                                 3 => args.process_ternary_op(arguments, OPCode::MULDIV as u8, Some(6), HoleType::Integer, STANDARD_SIZES, None, None)?,
                                 _ => return Err(AsmError { kind: AsmErrorKind::ArgsExpectedCount(&[1, 2, 3]), line_num: args.line_num, pos: None, inner_err: None }),
                             }
+                            Instruction::MOVEXT { signed } => args.process_mov_ext_op(arguments, OPCode::MOVEXT as u8, None, signed)?,
 
                             Instruction::NoArg { op, ext_op } => args.process_no_arg_op(arguments, op, ext_op)?,
                             Instruction::Unary { op, ext_op, allowed_sizes } => args.process_unary_op(arguments, op, ext_op, allowed_sizes)?,
@@ -1586,7 +1591,7 @@ pub fn assemble(asm_name: &str, asm: &mut dyn BufRead, predefines: Predefines) -
                             Instruction::FPUValue { op, ext_op, int } => args.process_fpu_value_op(arguments, op, ext_op, int)?,
                             
                             Instruction::VPUKMove { size } => args.process_kmov(arguments, size)?,
-                            Instruction::VPUMove { elem_size, packed, aligned } => args.process_vpu_move(arguments, elem_size, packed, aligned)?,
+                            Instruction::VPUMove { elem_size, packed, aligned, cpu_transfer } => args.process_vpu_move(arguments, elem_size, packed, aligned, cpu_transfer)?,
                             Instruction::VPUBinary { op, ext_op, elem_size, packed } => args.process_vpu_binary_op(arguments, op, ext_op, elem_size, packed)?,
 
                             Instruction::Suggest { .. } => unreachable!(),
@@ -1847,7 +1852,10 @@ lazy_static! {
     static ref STDLIB: Vec<(&'static str, Vec<u8>)> = {
         macro_rules! assemble_physical_file {
             ($name:literal) => {{
-                let obj = assemble($name, &mut include_str!(concat!("../asm/stdlib/", $name)).as_bytes(), Default::default()).unwrap();
+                let obj = match assemble($name, &mut include_str!(concat!("../asm/stdlib/", $name)).as_bytes(), Default::default()) {
+                    Ok(x) => x,
+                    Err(e) => panic!("failed to assemble stdlib: {}\n{}", $name, e),
+                };
                 let mut bin = vec![];
                 obj.bin_write(&mut bin).unwrap();
                 ($name, bin)
