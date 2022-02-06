@@ -22,7 +22,7 @@ impl From<Error> for FileError {
 /// All features of files that are exposed to client programs.
 /// 
 /// `is_readable` and `is_writable` inform the emulator what file permissions should be 
-pub trait FileHandle {
+pub trait FileHandle: Send {
     /// A special flag used in the event that `read` returns zero (see `read`).
     fn is_interactive(&self) -> bool;
 

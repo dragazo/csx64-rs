@@ -1,4 +1,5 @@
 use crate::common::serialization::*;
+use crate::common::*;
 use crate::asm::*;
 use crate::exec::*;
 use crate::exec::fs::*;
@@ -10,6 +11,13 @@ fn serialize_deserialize<T>(thing: &T) -> T where T: BinaryRead + BinaryWrite {
     let mut f = vec![];
     thing.bin_write(&mut f).unwrap();
     T::bin_read(&mut f.as_slice()).unwrap()
+}
+
+macro_rules! assert_impl {
+    ($t:ty : $r:tt $(+ $rr:tt)*) => {{
+        fn f<T: $r $(+ $rr)*>(){}
+        f::<$t>()
+    }}
 }
 
 macro_rules! asm_unwrap_link {
@@ -47,3 +55,10 @@ mod exe_tests;
 mod exe_syscall_tests;
 mod stdlib_tests;
 mod stdio_tests;
+
+#[test]
+fn test_send_sync() {
+    assert_impl!(ObjectFile: Send + 'static);
+    assert_impl!(Executable: Send + 'static);
+    assert_impl!(Emulator: Send + 'static);
+}
