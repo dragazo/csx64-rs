@@ -228,9 +228,10 @@ macro_rules! impl_field {
         pub const fn $get(self) -> $to {
             ((self.0 >> $shift) & $mask) as $to
         }
-        pub fn $assign(&mut self, val: $to) {
-            assert_eq!(val, val & $mask);
+        pub fn $assign(&mut self, val: $to) -> Result<(), $to> {
+            if val != val & $mask { return Err(val) }
             self.0 = (self.0 & !($mask << $shift)) | ((val as $from) << $shift);
+            Ok(())
         }
     }
 }
