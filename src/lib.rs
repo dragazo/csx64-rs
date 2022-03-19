@@ -48,6 +48,7 @@
 
 #[macro_use] extern crate num_derive;
 #[macro_use] extern crate lazy_static;
+#[macro_use] extern crate lalrpop_util;
 
 macro_rules! mask {
     ($src:ident : $($mask:ident)|+) => {
@@ -56,9 +57,10 @@ macro_rules! mask {
     () => { 0 };
 }
 
-pub mod exec;
-pub mod asm;
 pub mod common;
+pub mod compiler;
+pub mod asm;
+pub mod exec;
 
 #[cfg(test)]
 mod test;

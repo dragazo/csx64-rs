@@ -12,6 +12,9 @@ An Intel-style x64 assembler and executor.
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[build-dependencies]
+lalrpop = "0.19.7"
+
 [dependencies]
 lazy_static = "1.4.0"
 bytemuck = "1.4.1"
@@ -21,3 +24,4 @@ num-traits = "0.2.14"
 num-derive = "0.3.3"
 rand = { version = "0.8.0", features = ["getrandom"] }
 rand_xorshift = "0.3.0"
+lalrpop-util = "0.19.7"

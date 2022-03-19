@@ -575,7 +575,7 @@ impl FPU {
             return Err(());
         }
         self.set_physical(physical, val); // this updates the tag
-        self.status.assign_top(physical);
+        self.status.assign_top(physical).unwrap();
         Ok(())
     }
     /// Pops a value off the fpu stack.
@@ -587,7 +587,7 @@ impl FPU {
             return Err(());
         }
         self.tag.set_physical(physical, TagValue::Empty);
-        self.status.assign_top((physical + 1) & 7);
+        self.status.assign_top((physical + 1) & 7).unwrap();
         Ok(())
     }
 }
