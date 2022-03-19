@@ -1,0 +1,112 @@
+use super::*;
+use lalrpop_util::ParseError;
+
+grammar;
+
+extern {
+    type Error = AstError;
+}
+
+match {
+    r"//[^\r\n]*" => {},
+    r"\s+" => {},
+} else { _ }
+
+Punctuated<T, S>: Vec<T> = {
+    <mut v:(<T> S)*> <e:T?> => {
+        if let Some(e) = e { v.push(e) }
+        v
+    },
+};
+
+pub Program = Item*;
+
+Item: Item<'input> = {
+    Function => Item::Function(<>),
+};
+
+Function: Function<'input> = <ret:Type> <name:Ident> "(" <params:Punctuated<Param, ",">> ")" "{" <body:Stmt*> "}" => Function { ret, name, params, body };
+Param: Param<'input> = <ty:Type> <name:Ident> => Param { ty, name };
+
+Type: Type<'input> = {
+    "void" => Type::Void,
+    "u8" => Type::Integer(IntType::U8),
+    "u16" => Type::Integer(IntType::U16),
+    "u32" => Type::Integer(IntType::U32),
+    "u64" => Type::Integer(IntType::U64),
+    "u128" => Type::Integer(IntType::U128),
+    "usize" => Type::Integer(IntType::Usize),
+    "i8" => Type::Integer(IntType::I8),
+    "i16" => Type::Integer(IntType::I16),
+    "i32" => Type::Integer(IntType::I32),
+    "i64" => Type::Integer(IntType::I64),
+    "i128" => Type::Integer(IntType::I128),
+    "isize" => Type::Integer(IntType::Isize),
+    "f32" => Type::Float(FloatType::F32),
+    "f64" => Type::Float(FloatType::F64),
+    "f80" => Type::Float(FloatType::F80),
+    "*" <target:Type> => Type::Pointer { target: Box::new(target), is_const: false },
+    "*" "const" <target:Type> => Type::Pointer { target: Box::new(target), is_const: true },
+    Ident => Type::UserDefined { name: <> },
+}
+
+Stmt: Stmt<'input> = {
+    <ty:Type> <name:Ident> "=" <value:Expr> ";" => Stmt::VarDecl { ty, name, value },
+};
+
+Expr: Expr = {
+    Value => Expr::Value(<>),
+}
+
+Ident: Ident<'input> = <l:@L> <id:r"[_a-zA-Z][_a-zA-Z0-9]*"> <r:@R> => Ident { id, raw_span: Span(l, r) };
+
+Value: Value = {
+    Integer => Value::Integer(<>),
+    Float => Value::Float(<>),
+};
+
+Bool: Bool = {
+    <l:@L> "true" <r:@R> => Bool { value: true, raw_span: Span(l, r) },
+    <l:@L> "false" <r:@R> => Bool { value: false, raw_span: Span(l, r) },
+};
+
+Integer: Integer = {
+    <l:@L> <raw:r"0[0-9]+"> <r:@R> =>? Err(ParseError::User { error: AstError::CStyleOctal { span: Span(l, r) } }),
+    <l:@L> <raw:r"([1-9][0-9_]*[0-9]|[0-9]|0b[01_]*[01]|0o[0-7_]*[0-7]|0x[0-9a-fA-F_]*[0-9a-fA-F])([ui](8|16|32|64|128|size))?"> <r:@R> => {
+        let (base, raw) = match raw.get(..2) {
+            Some("0b") => (2, &raw[2..]),
+            Some("0o") => (8, &raw[2..]),
+            Some("0x") => (16, &raw[2..]),
+            _ => (10, raw),
+        };
+        let raw = &raw[raw.find(|c: char| c != '_').unwrap_or(0)..];
+        let (ty, raw) = match raw {
+            x if x.ends_with("u8") => (Some(IntType::U8), &x[..x.len() - 2]),
+            x if x.ends_with("u16") => (Some(IntType::U16), &x[..x.len() - 3]),
+            x if x.ends_with("u32") => (Some(IntType::U32), &x[..x.len() - 3]),
+            x if x.ends_with("u64") => (Some(IntType::U64), &x[..x.len() - 3]),
+            x if x.ends_with("u128") => (Some(IntType::U128), &x[..x.len() - 4]),
+            x if x.ends_with("usize") => (Some(IntType::Usize), &x[..x.len() - 5]),
+            x if x.ends_with("i8") => (Some(IntType::I8), &x[..x.len() - 2]),
+            x if x.ends_with("i16") => (Some(IntType::I16), &x[..x.len() - 3]),
+            x if x.ends_with("i32") => (Some(IntType::I32), &x[..x.len() - 3]),
+            x if x.ends_with("i64") => (Some(IntType::I64), &x[..x.len() - 3]),
+            x if x.ends_with("i128") => (Some(IntType::I128), &x[..x.len() - 4]),
+            x if x.ends_with("isize") => (Some(IntType::Isize), &x[..x.len() - 5]),
+            x => (None, x),
+        };
+        Integer { value: RugInt::from_str_radix(raw, base).unwrap(), ty, raw_span: Span(l, r) }
+    },
+};
+
+Float: Float = {
+    <l:@L> <raw:r"[0-9]+\.[0-9]+([eE][+-]?\d+)?(f32|f64|f80)?"> <r:@R> => {
+        let (ty, raw) = match raw {
+            x if x.ends_with("f32") => (Some(FloatType::F32), &x[..x.len() - 3]),
+            x if x.ends_with("f64") => (Some(FloatType::F64), &x[..x.len() - 3]),
+            x if x.ends_with("f80") => (Some(FloatType::F80), &x[..x.len() - 3]),
+            x => (None, x),
+        };
+        Float { value: RugFloat::with_val(CTIME_FLOAT_BITS, RugFloat::parse(raw).unwrap()), ty, raw_span: Span(l, r) }
+    },
+};

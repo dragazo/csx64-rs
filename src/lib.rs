@@ -58,7 +58,7 @@ macro_rules! mask {
 }
 
 pub mod common;
-pub mod compiler;
+pub mod crust;
 pub mod asm;
 pub mod exec;
 
