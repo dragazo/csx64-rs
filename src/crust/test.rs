@@ -5,7 +5,7 @@ use super::ast::*;
 fn test_crust() {
     let res = ProgramParser::new().parse(r#"
 void foo() {
-    usize val = 12;
+    usize val = 12.5 + 5 * 2 - 5;
 }
     "#).unwrap();
     assert_eq!(res.len(), 1);
@@ -22,7 +22,25 @@ void foo() {
             assert!(matches!(ty, Type::Integer(IntType::Usize)));
             assert_eq!(name.id, "val");
             match value {
-                Expr::Value(Value::Integer(v)) => assert_eq!(v.value, 12),
+                Expr::Sub { left, right } => {
+                    match &**left {
+                        Expr::Add { left, right } => {
+                            match &**left {
+                                Expr::Value(Value::Float(v)) => assert_eq!(v.value, 12.5),
+                                x => panic!("{:?}", x),
+                            }
+                            match &**right {
+                                Expr::Mul { .. } => (),
+                                x => panic!("{:?}", x),
+                            }
+                        }
+                        x => panic!("{:?}", x),
+                    }
+                    match &**right {
+                        Expr::Value(Value::Integer(v)) => assert_eq!(v.value, 5),
+                        x => panic!("{:?}", x),
+                    }
+                }
                 x => panic!("{:?}", x),
             }
         }

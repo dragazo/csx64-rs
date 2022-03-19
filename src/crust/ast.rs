@@ -51,12 +51,43 @@ pub struct Param<'a> {
 
 #[derive(Debug)]
 pub enum Stmt<'a> {
-    VarDecl { ty: Type<'a>, name: Ident<'a>, value: Expr },
+    VarDecl { ty: Type<'a>, name: Ident<'a>, value: Expr<'a> },
 }
 
 #[derive(Debug)]
-pub enum Expr {
+pub enum Expr<'a> {
     Value(Value),
+    Ident(Ident<'a>),
+
+    Neg { value: Box<Expr<'a>> },
+    Not { value: Box<Expr<'a>> },
+
+    Add { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Sub { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    Mul { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Div { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Mod { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    Shl { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Shr { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    Less { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    LessEq { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Great { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    GreatEq { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    Equ { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    Neq { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    BitAnd { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    BitXor { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    BitOr { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    LogAnd { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+    LogOr { left: Box<Expr<'a>>, right: Box<Expr<'a>> },
+
+    Condition { cond: Box<Expr<'a>>, then: Box<Expr<'a>>, otherwise: Box<Expr<'a>> },
 }
 
 #[derive(Debug)]

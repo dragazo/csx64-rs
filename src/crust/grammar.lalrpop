@@ -54,9 +54,57 @@ Stmt: Stmt<'input> = {
     <ty:Type> <name:Ident> "=" <value:Expr> ";" => Stmt::VarDecl { ty, name, value },
 };
 
-Expr: Expr = {
+Expr: Expr<'input> = {
+    #[precedence(level="0")]
     Value => Expr::Value(<>),
-}
+    Ident => Expr::Ident(<>),
+
+    #[precedence(level="1")]
+    "+" <Expr> => <>,
+    "-" <Expr> => Expr::Neg { value: Box::new(<>) },
+    "!" <Expr> => Expr::Not { value: Box::new(<>) },
+
+    #[precedence(level="2")] #[assoc(side="left")]
+    <left:Expr> "*" <right:Expr> => Expr::Mul { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> "/" <right:Expr> => Expr::Div { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> "%" <right:Expr> => Expr::Mod { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="3")] #[assoc(side="left")]
+    <left:Expr> "+" <right:Expr> => Expr::Add { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> "-" <right:Expr> => Expr::Sub { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="4")] #[assoc(side="left")]
+    <left:Expr> "<<" <right:Expr> => Expr::Shl { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> ">>" <right:Expr> => Expr::Shr { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="5")] #[assoc(side="left")]
+    <left:Expr> "<" <right:Expr> => Expr::Less { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> "<=" <right:Expr> => Expr::LessEq { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> ">" <right:Expr> => Expr::Great { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> ">=" <right:Expr> => Expr::GreatEq { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="6")] #[assoc(side="left")]
+    <left:Expr> "==" <right:Expr> => Expr::Equ { left: Box::new(left), right: Box::new(right) },
+    <left:Expr> "!=" <right:Expr> => Expr::Neq { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="7")] #[assoc(side="left")]
+    <left:Expr> "&" <right:Expr> => Expr::BitAnd { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="8")] #[assoc(side="left")]
+    <left:Expr> "^" <right:Expr> => Expr::BitXor { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="9")] #[assoc(side="left")]
+    <left:Expr> "|" <right:Expr> => Expr::BitOr { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="10")] #[assoc(side="left")]
+    <left:Expr> "&&" <right:Expr> => Expr::LogAnd { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="11")] #[assoc(side="left")]
+    <left:Expr> "||" <right:Expr> => Expr::LogOr { left: Box::new(left), right: Box::new(right) },
+
+    #[precedence(level="12")] #[assoc(side="right")]
+    <cond:Expr> "?" <then:Expr> ":" <otherwise:Expr> => Expr::Condition { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) },
+};
 
 Ident: Ident<'input> = <l:@L> <id:r"[_a-zA-Z][_a-zA-Z0-9]*"> <r:@R> => Ident { id, raw_span: Span(l, r) };
 
