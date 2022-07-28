@@ -21,3 +21,4 @@ num-traits = "0.2.14"
 num-derive = "0.3.3"
 rand = { version = "0.8.0", features = ["getrandom"] }
 rand_xorshift = "0.3.0"
+bin-pool = "0.1.0"

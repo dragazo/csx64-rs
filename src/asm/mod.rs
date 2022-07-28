@@ -6,8 +6,8 @@ use std::{fmt, mem, iter};
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use num_traits::FromPrimitive;
+use bin_pool::BinPool;
 
-use binary_set::BinarySet;
 use expr::*;
 use constants::*;
 use asm_args::*;
@@ -38,7 +38,6 @@ macro_rules! display_from_name {
     }
 }
 
-mod binary_set;
 pub mod expr;
 mod caseless;
 mod constants;
@@ -1741,8 +1740,8 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     }
 
     // merge all the binaries together - these are stored in expressions throughout the symbol table and the various segment holes
-    let mut binaries = BinarySet::new();
-    fn resolve_binaries(src: &str, line_num: usize, expr: &mut ExprData, binaries: &mut BinarySet, symbols: &SymbolTable<MergedSymbolTag>) -> Result<(), LinkError> {
+    let mut binaries = BinPool::new();
+    fn resolve_binaries(src: &str, line_num: usize, expr: &mut ExprData, binaries: &mut BinPool, symbols: &SymbolTable<MergedSymbolTag>) -> Result<(), LinkError> {
         match expr {
             ExprData::Value(_) => (),
             ExprData::Ident(_) => (),
@@ -1786,7 +1785,7 @@ pub fn link(mut objs: Vec<(String, ObjectFile)>, entry_point: Option<(&str, &str
     }
 
     // after merging, but before alignment, we need to allocate all the provisioned binary constants we just handled
-    let (backing_bin, slice_bin) = binaries.decompose();
+    let (backing_bin, slice_bin) = binaries.into_backing();
     let mut rodata_backing_bin_offsets: Vec<usize> = Vec::with_capacity(backing_bin.len());
     for backing in backing_bin.iter() {
         rodata_backing_bin_offsets.push(rodata.len()); // keep track of insertion point
